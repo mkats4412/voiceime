@@ -1,0 +1,40 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# Xcode & Swift Package Manager
+/.build
+/Packages
+xcuserdata/
+DerivedData/
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcworkspace/contents.xcworkspacedata
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+.swiftpm/configuration/registries.json
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+
+# Build outputs & executables
+/build/
+/bin/
+main
+*.o
+*.app
+*.dSYM/
+
+# Credentials & secrets
+.netrc
+*.key
+*.cer
+*.crt
+*.p12
+*.pem
+*.mobileprovision
