@@ -1,4 +1,4 @@
-// swift-tools-version: 6.3
+// swift-tools-version: 5.9
 import PackageDescription
 
 let package = Package(
@@ -14,7 +14,6 @@ let package = Package(
             name: "VoiceIMETests",
             dependencies: ["VoiceIME"]
         ),
-    ],
-    swiftLanguageVersions: [.v6]
+    ]
 )
 

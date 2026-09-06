@@ -180,7 +180,7 @@ public struct ShortcutSettingsTab: View {
 
                             Picker("", selection: $settings.apiMode) {
                                 Text("文字起こし (通常入力)").tag(SpeechAPIMode.transcriptions)
-                                Text("英語翻訳 (日本語音声を英文で入力)").tag(SpeechAPIMode.translations)
+                                Text("英語翻訳 (日本語音声→英文入力)").tag(SpeechAPIMode.translations)
                             }
                             .pickerStyle(.segmented)
                             .labelsHidden()

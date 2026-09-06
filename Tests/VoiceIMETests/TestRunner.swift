@@ -124,6 +124,16 @@ struct TestRunner {
         assert(fullEndpointURL?.absoluteString == "https://api.groq.com/openai/v1/chat/completions",
                "Full endpoint URL mismatch: \(String(describing: fullEndpointURL))")
 
-        print("  -> LLMService URL Construction passed!")
+        // 4. sanitizeLLMOutput のテスト（前置きラベルや引用符の除去）
+        let out1 = llm.sanitizeLLMOutput("整形後：こんにちは、明日の天気はどうですか？", fallback: "元の文")
+        assert(out1 == "こんにちは、明日の天気はどうですか？", "Prefix removal failed: \(out1)")
+
+        let out2 = llm.sanitizeLLMOutput("「テストの文章です。」", fallback: "元の文")
+        assert(out2 == "テストの文章です。", "Bracket removal failed: \(out2)")
+
+        let out3 = llm.sanitizeLLMOutput("   \n\n  ", fallback: "フォールバック")
+        assert(out3 == "フォールバック", "Empty fallback failed: \(out3)")
+
+        print("  -> LLMService URL Construction and Sanitization passed!")
     }
 }

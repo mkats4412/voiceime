@@ -54,50 +54,88 @@ public struct MenuBarView: View {
                 .padding(.horizontal, 4)
             }
 
-            // 言語クイック切り替え (文字起こしモード時)
-            if settings.apiMode == .transcriptions {
+            // 言語クイック切り替え
+            HStack(spacing: 6) {
+                Text("言語:")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+
+                Button("自動") {
+                    settings.language = ""
+                    settings.apiMode = .transcriptions
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: (settings.apiMode == .transcriptions && settings.language.isEmpty) ? .bold : .regular))
+                .foregroundColor((settings.apiMode == .transcriptions && settings.language.isEmpty) ? .accentColor : .primary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill((settings.apiMode == .transcriptions && settings.language.isEmpty) ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
+                )
+
+                Button("日本語") {
+                    settings.language = "ja"
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: settings.language == "ja" ? .bold : .regular))
+                .foregroundColor(settings.language == "ja" ? .accentColor : .primary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(settings.language == "ja" ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
+                )
+
+                Button("英語") {
+                    settings.language = "en"
+                    settings.apiMode = .transcriptions
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: (settings.apiMode == .transcriptions && settings.language == "en") ? .bold : .regular))
+                .foregroundColor((settings.apiMode == .transcriptions && settings.language == "en") ? .accentColor : .primary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill((settings.apiMode == .transcriptions && settings.language == "en") ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
+                )
+
+                Spacer()
+            }
+            .padding(.horizontal, 4)
+
+            // 入力モード切替（日本語選択時に通常入力と英文翻訳を選択可能）
+            if settings.language == "ja" {
                 HStack(spacing: 6) {
-                    Text("言語:")
+                    Text("モード:")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
 
-                    Button("自動") {
-                        settings.language = ""
+                    Button("通常") {
+                        settings.apiMode = .transcriptions
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: settings.language.isEmpty ? .bold : .regular))
-                    .foregroundColor(settings.language.isEmpty ? .accentColor : .primary)
+                    .font(.system(size: 11, weight: settings.apiMode == .transcriptions ? .bold : .regular))
+                    .foregroundColor(settings.apiMode == .transcriptions ? .accentColor : .primary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(
                         RoundedRectangle(cornerRadius: 4)
-                            .fill(settings.language.isEmpty ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
+                            .fill(settings.apiMode == .transcriptions ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
                     )
 
-                    Button("日本語") {
-                        settings.language = "ja"
+                    Button("英文翻訳") {
+                        settings.apiMode = .translations
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: settings.language == "ja" ? .bold : .regular))
-                    .foregroundColor(settings.language == "ja" ? .accentColor : .primary)
+                    .font(.system(size: 11, weight: settings.apiMode == .translations ? .bold : .regular))
+                    .foregroundColor(settings.apiMode == .translations ? .accentColor : .primary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(
                         RoundedRectangle(cornerRadius: 4)
-                            .fill(settings.language == "ja" ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
-                    )
-
-                    Button("英語") {
-                        settings.language = "en"
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: settings.language == "en" ? .bold : .regular))
-                    .foregroundColor(settings.language == "en" ? .accentColor : .primary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(settings.language == "en" ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
+                            .fill(settings.apiMode == .translations ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
                     )
 
                     Spacer()
