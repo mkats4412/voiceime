@@ -11,6 +11,18 @@ public struct DictionarySettingsTab: View {
     @State private var newReplacement: String = ""
     @State private var newIsRegex: Bool = false
     @State private var testInput: String = "人気のアニソンを聴きます。郵便番号1000001改行よろしくお願いいたします。"
+    // フォーカス状態の管理（フォーカス時にプレースホルダーを非表示にするため）
+    private enum FocusField: Hashable {
+        case newWord
+        case newPattern
+        case newReplacement
+        case rulePattern(UUID)
+        case ruleReplacement(UUID)
+        case testInput
+    }
+
+    @FocusState private var focusedField: FocusField?
+
     private let dictionary = DictionaryService.shared
 
     public init() {}
@@ -56,7 +68,8 @@ public struct DictionarySettingsTab: View {
 
                     // 単語追加フォーム
                     HStack(spacing: 8) {
-                        TextField("単語を入力 (例: VoiceIME, Kubernetes, 齋藤)...", text: $newWordInput)
+                        TextField(focusedField == .newWord ? "" : "単語を入力 (例: VoiceIME, Kubernetes, 齋藤)...", text: $newWordInput)
+                            .focused($focusedField, equals: .newWord)
                             .textFieldStyle(.roundedBorder)
                             .onSubmit {
                                 addWord()
@@ -165,14 +178,16 @@ public struct DictionarySettingsTab: View {
 
                     // 置換ルール追加フォーム
                     HStack(spacing: 8) {
-                        TextField("置換前 (例: アニソン)", text: $newPattern)
+                        TextField(focusedField == .newPattern ? "" : "置換前 (例: アニソン)", text: $newPattern)
+                            .focused($focusedField, equals: .newPattern)
                             .textFieldStyle(.roundedBorder)
 
                         Image(systemName: "arrow.right")
                             .foregroundColor(.secondary)
                             .font(.caption)
 
-                        TextField("置換後 (例: アニメソング, \\nで改行)", text: $newReplacement)
+                        TextField(focusedField == .newReplacement ? "" : "置換後 (例: アニメソング, \\nで改行)", text: $newReplacement)
+                            .focused($focusedField, equals: .newReplacement)
                             .textFieldStyle(.roundedBorder)
 
                         Toggle("正規表現", isOn: $newIsRegex)
@@ -201,7 +216,8 @@ public struct DictionarySettingsTab: View {
                                             .labelsHidden()
                                             .help("有効/無効の切り替え")
 
-                                        TextField("置換前", text: $rule.pattern)
+                                        TextField(focusedField == .rulePattern(rule.id) ? "" : "置換前", text: $rule.pattern)
+                                            .focused($focusedField, equals: .rulePattern(rule.id))
                                             .textFieldStyle(.roundedBorder)
                                             .frame(maxWidth: 150)
 
@@ -209,7 +225,8 @@ public struct DictionarySettingsTab: View {
                                             .foregroundColor(.secondary)
                                             .font(.caption)
 
-                                        TextField("置換後 (\\nで改行)", text: $rule.replacement)
+                                        TextField(focusedField == .ruleReplacement(rule.id) ? "" : "置換後 (\\nで改行)", text: $rule.replacement)
+                                            .focused($focusedField, equals: .ruleReplacement(rule.id))
                                             .textFieldStyle(.roundedBorder)
                                             .frame(maxWidth: 160)
 
@@ -249,7 +266,8 @@ public struct DictionarySettingsTab: View {
                             .font(.subheadline)
                             .fontWeight(.medium)
 
-                        TextField("テスト入力テキスト", text: $testInput)
+                        TextField(focusedField == .testInput ? "" : "テスト入力テキスト", text: $testInput)
+                            .focused($focusedField, equals: .testInput)
                             .textFieldStyle(.roundedBorder)
 
                         HStack(alignment: .top, spacing: 6) {
