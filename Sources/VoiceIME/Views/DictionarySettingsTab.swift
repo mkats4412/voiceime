@@ -262,11 +262,11 @@ public struct DictionarySettingsTab: View {
 
                     // リアルタイム置換テスト
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("リアルタイム置換プレビュー:")
+                        Text("リアルタイム置換プレビュー (キーボード入力):")
                             .font(.subheadline)
                             .fontWeight(.medium)
 
-                        TextField(focusedField == .testInput ? "" : "テスト入力テキスト", text: $testInput)
+                        TextField(focusedField == .testInput ? "" : "キーボードで入力してテスト...", text: $testInput)
                             .focused($focusedField, equals: .testInput)
                             .textFieldStyle(.roundedBorder)
 

@@ -22,7 +22,7 @@ Mac 上で動作し、ユーザーの音声を録音・文字起こしして、�
 | 項目 | 内容 |
 |------|------|
 | **OS** | macOS 13以降 |
-| **アーキテクチャ** | Apple Silicon推奨（Intelはビルド時 `-target` 変更） |
+| **アーキテクチャ** | Apple Silicon（M1〜M4）/ Intel Mac（自動判定） |
 | **Xcode** | Swift 6.3以上（`xcode-select --install`） |
 | **ネットワーク** | Groq/OpenAI APIのため常時接続 |
 | **APIキー** | Groq または OpenAI のいずれか1つ |
@@ -68,7 +68,7 @@ cd voiceime
 ./scripts/build_app.sh          # 初回のみ ./scripts/create_certificate.sh で権限固定可
 open ./build/VoiceIME.app       # /Applications へは --install 付与
 ```
-* Intel Macは `scripts/build_app.sh:26` の `-target` を `x86_64` に変更。
+* Apple Silicon（M1〜M4）および Intel Mac の両方に自動対応（実行環境のCPUアーキテクチャを自動検出してネイティブコンパイルします）。
 
 #### 単体テストの実行
 ```bash

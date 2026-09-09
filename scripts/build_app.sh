@@ -19,11 +19,12 @@ echo "=== Building ${APP_NAME}.app ==="
 rm -rf "${APP_BUNDLE}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 
-# Swift ソースコードのコンパイル
-echo "-> Compiling Swift sources..."
+# アーキテクチャの自動判定 (Apple Silicon: arm64, Intel Mac: x86_64)
+ARCH="$(uname -m)"
+echo "-> Compiling Swift sources for ${ARCH} (macOS 13.0+)..."
 swiftc \
     -O \
-    -target arm64-apple-macosx13.0 \
+    -target "${ARCH}-apple-macosx13.0" \
     -parse-as-library \
     Sources/VoiceIME/Models/*.swift \
     Sources/VoiceIME/Services/*.swift \
@@ -67,20 +68,14 @@ echo "Application created at: ${APP_BUNDLE}"
 echo "-> 署名検証:"
 codesign -d -r- "${APP_BUNDLE}" 2>&1 | head -n 3
 
-# オプション: --install 引数があればアプリケーションフォルダに配置
+# オプション: --install 引数があればアプリケーションフォルダに配置 (第2引数で場所指定可能、デフォルトは /Applications)
 if [[ "${1:-}" == "--install" ]]; then
-    if [[ -d "/Volumes/ExDrive/Applications" ]]; then
-        echo "-> /Volumes/ExDrive/Applications にインストール中..."
-        rm -rf "/Volumes/ExDrive/Applications/${APP_NAME}.app"
-        cp -R "${APP_BUNDLE}" "/Volumes/ExDrive/Applications/"
-        echo "Installed to /Volumes/ExDrive/Applications/${APP_NAME}.app"
-    fi
-    if [[ -d "/Applications" ]]; then
-        echo "-> /Applications にインストール中..."
-        rm -rf "/Applications/${APP_NAME}.app"
-        cp -R "${APP_BUNDLE}" "/Applications/"
-        echo "Installed to /Applications/${APP_NAME}.app"
-    fi
+    DEST_DIR="${2:-/Applications}"
+    echo "-> ${DEST_DIR} にインストール中..."
+    mkdir -p "${DEST_DIR}"
+    rm -rf "${DEST_DIR}/${APP_NAME}.app"
+    cp -R "${APP_BUNDLE}" "${DEST_DIR}/"
+    echo "Installed to ${DEST_DIR}/${APP_NAME}.app"
 fi
 
 echo ""
