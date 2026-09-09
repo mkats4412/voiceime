@@ -155,6 +155,35 @@ public struct DictionarySettingsTab: View {
                         .controlSize(.small)
                     }
 
+                    // 新規ルール追加フォーム
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("新しいルールを追加:")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+
+                        HStack(spacing: 8) {
+                            TextField("置換前 (例: アニソン)", text: $newPattern)
+                                .textFieldStyle(.roundedBorder)
+
+                            Image(systemName: "arrow.right")
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+
+                            TextField("置換後 (例: アニメソング, \\nで改行)", text: $newReplacement)
+                                .textFieldStyle(.roundedBorder)
+
+                            Toggle("正規表現", isOn: $newIsRegex)
+                                .toggleStyle(.checkbox)
+                                .font(.caption)
+
+                            Button("追加") {
+                                addRule()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(newPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+                    }
+
                     // 登録済みルール一覧
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
@@ -166,7 +195,7 @@ public struct DictionarySettingsTab: View {
 
                         ScrollView {
                             if settings.dictionaryRules.isEmpty {
-                                Text("置換ルールが登録されていません。下のフォームから追加してください。")
+                                Text("置換ルールが登録されていません。上のフォームから追加してください。")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                                     .frame(maxWidth: .infinity, minHeight: 110)
@@ -219,35 +248,6 @@ public struct DictionarySettingsTab: View {
                             RoundedRectangle(cornerRadius: 8)
                                 .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
                         )
-                    }
-
-                    // 新規ルール追加フォーム
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("新しいルールを追加:")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-
-                        HStack(spacing: 8) {
-                            TextField("置換前 (例: アニソン)", text: $newPattern)
-                                .textFieldStyle(.roundedBorder)
-
-                            Image(systemName: "arrow.right")
-                                .foregroundColor(.secondary)
-                                .font(.caption)
-
-                            TextField("置換後 (例: アニメソング, \\nで改行)", text: $newReplacement)
-                                .textFieldStyle(.roundedBorder)
-
-                            Toggle("正規表現", isOn: $newIsRegex)
-                                .toggleStyle(.checkbox)
-                                .font(.caption)
-
-                            Button("追加") {
-                                addRule()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(newPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        }
                     }
 
                     // リアルタイム置換テスト
