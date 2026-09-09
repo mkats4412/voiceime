@@ -41,19 +41,19 @@ struct TestRunner {
         let out3 = service.apply(text: "お会計は500円と1200円です", rules: rules3)
         assert(out3 == "お会計は¥500と¥1200です", "Regex test failed: got \(out3)")
 
-        // 4. デフォルトの置換ルール (改行: 有効、アニソン: チェックオフ無効)
+        // 4. デフォルトの置換ルール (改行: 有効、郵便番号: チェックオフ無効)
         let defaultRules = AppSettings.defaultDictionaryRules
-        let out4 = service.apply(text: "人気のアニソンを聴きます改行よろしくお願いいたします", rules: defaultRules)
-        assert(out4 == "人気のアニソンを聴きます\nよろしくお願いいたします", "Default rules replacement failed (アニソン should be disabled by default): got \(out4)")
+        let out4 = service.apply(text: "東京都千代田区1000001改行よろしくお願いいたします", rules: defaultRules)
+        assert(out4 == "東京都千代田区1000001\nよろしくお願いいたします", "Default rules replacement failed (郵便番号 should be disabled by default): got \(out4)")
 
-        // 有効化した場合のテスト
+        // 郵便番号を有効化した場合のテスト
         let enabledRules = defaultRules.map { rule -> DictionaryRule in
             var r = rule
-            if r.pattern == "アニソン" { r.isEnabled = true }
+            if r.pattern.contains("[0-9]{3}") { r.isEnabled = true }
             return r
         }
-        let out4Enabled = service.apply(text: "人気のアニソンを聴きます改行よろしくお願いいたします", rules: enabledRules)
-        assert(out4Enabled == "人気のアニメソングを聴きます\nよろしくお願いいたします", "Enabled rule replacement failed: got \(out4Enabled)")
+        let out4Enabled = service.apply(text: "東京都千代田区1000001改行よろしくお願いいたします", rules: enabledRules)
+        assert(out4Enabled == "東京都千代田区〒100-0001\nよろしくお願いいたします", "Enabled rule replacement failed: got \(out4Enabled)")
 
         // 5. 単語登録（customVocabulary）とプロンプトヒントの連動テスト
         let settings = AppSettings.shared

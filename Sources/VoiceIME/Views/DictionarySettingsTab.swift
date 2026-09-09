@@ -10,7 +10,7 @@ public struct DictionarySettingsTab: View {
     @State private var newPattern: String = ""
     @State private var newReplacement: String = ""
     @State private var newIsRegex: Bool = false
-    @State private var testInput: String = "人気のアニソンを聴きます。改行よろしくお願いいたします。"
+    @State private var testInput: String = "人気のアニソンを聴きます。郵便番号1000001改行よろしくお願いいたします。"
     private let dictionary = DictionaryService.shared
 
     public init() {}

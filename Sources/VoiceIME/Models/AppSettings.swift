@@ -308,13 +308,23 @@ public final class AppSettings: ObservableObject {
                 rule.pattern != "びっくり" &&
                 rule.pattern != "マック" &&
                 rule.pattern != "ウインドウズ" &&
-                rule.pattern != "マクド"
+                rule.pattern != "マクド" &&
+                rule.pattern != "アニソン"
             }
-            if !cleanedRules.contains(where: { $0.pattern == "アニソン" }) {
-                cleanedRules.append(DictionaryRule(pattern: "アニソン", replacement: "アニメソング", isRegex: false, isEnabled: false))
+            // 改行ルールが旧形式または未登録なら新形式 (改行 -> \n, isRegex: false) に補正
+            if let idx = cleanedRules.firstIndex(where: { $0.pattern == "(改行|かいぎょう)" }) {
+                cleanedRules[idx].pattern = "改行"
+                cleanedRules[idx].replacement = "\\n"
+                cleanedRules[idx].isRegex = false
+            } else if !cleanedRules.contains(where: { $0.pattern == "改行" }) {
+                cleanedRules.insert(DictionaryRule(pattern: "改行", replacement: "\\n", isRegex: false, isEnabled: true), at: 0)
+            }
+            // 郵便番号サンプルルール (正規表現ON、有効チェックOFF)
+            if !cleanedRules.contains(where: { $0.pattern.contains("[0-9]{3}") }) {
+                cleanedRules.append(DictionaryRule(pattern: "([0-9]{3})([0-9]{4})", replacement: "〒$1-$2", isRegex: true, isEnabled: false))
             }
             self.dictionaryRules = cleanedRules.isEmpty ? AppSettings.defaultDictionaryRules : cleanedRules
-            if cleanedRules.count != rules.count || !rules.contains(where: { $0.pattern == "アニソン" }) {
+            if cleanedRules.count != rules.count || !rules.contains(where: { $0.pattern.contains("[0-9]{3}") }) {
                 saveDictionaryRules()
             }
         } else {
@@ -325,8 +335,8 @@ public final class AppSettings: ObservableObject {
 
     public static var defaultDictionaryRules: [DictionaryRule] {
         [
-            DictionaryRule(pattern: "(改行|かいぎょう)", replacement: "\n", isRegex: true, isEnabled: true),
-            DictionaryRule(pattern: "アニソン", replacement: "アニメソング", isRegex: false, isEnabled: false)
+            DictionaryRule(pattern: "改行", replacement: "\\n", isRegex: false, isEnabled: true),
+            DictionaryRule(pattern: "([0-9]{3})([0-9]{4})", replacement: "〒$1-$2", isRegex: true, isEnabled: false)
         ]
     }
 
