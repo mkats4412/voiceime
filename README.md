@@ -48,7 +48,8 @@ open ./build/VoiceIME.app
    * **マイク**: 「許可をリクエスト」をクリックしてマイクへのアクセスを許可します。
    * **アクセシビリティ**: 「許可をリクエスト」をクリックしてシステム設定を開き、VoiceIME を許可します（アクティブな入力欄へ自動で `Cmd + V` ペーストを行うために必要です）。
 3. **APIキーの設定（「API連携」タブ）**:
-    * Groq/OpenAI のAPIキーを入力し「保存」（Keychainに暗号化保存）。CLIなら `security add-generic-password -a "voiceime_groq_api_key" -s "com.voiceime.mac.apikey" -w "gsk_..." -U`
+   * Groq/OpenAI のAPIキーを入力し「保存」（Keychainに暗号化保存）。
+   * ⚠️ **重要**: 初回アクセス時に macOS のキーチェーン確認ダイアログ（「VoiceIME がキーチェーンにアクセスしようとしています」）が表示されたら、**必ず「常に許可（Always Allow）」** をクリックしてください。「許可」だと音声入力やアプリ再起動のたびに毎回パスワード入力を求められてしまいます。CLIなら `security add-generic-password -a "voiceime_groq_api_key" -s "com.voiceime.mac.apikey" -w "gsk_..." -U`
 
 #### 3. 音声入力の実行手順
 1. 任意のテキスト入力欄にカーソルを合わせます。
@@ -90,6 +91,7 @@ swiftc Sources/VoiceIME/Models/*.swift \
 | ホットキーが効かない | システム設定→プライバシー→アクセシビリティで VoiceIME を許可 |
 | マイクが認識されない | システム設定→プライバシー→マイクで許可、再起動 |
 | `APIキー未登録` エラー | API連携タブで再保存。`security find-generic-password -s com.voiceime.mac.apikey -w` で確認 |
+| キーチェーンのパスワードを毎回求められる | ダイアログで「常に許可」を選択してください。再ビルド時に毎回聞かれる場合は `./scripts/create_certificate.sh` を実行して固定署名証明書を作成してください |
 | 「開発元未確認」 | 右クリック→開く、または `xattr -cr build/VoiceIME.app`、各自で再ビルド |
 
 ### アンインストール
