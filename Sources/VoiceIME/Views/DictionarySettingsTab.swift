@@ -132,22 +132,25 @@ public struct DictionarySettingsTab: View {
                 // ==========================================
                 // セクション2: 自動テキスト置換ルール
                 // ==========================================
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                    .foregroundColor(.orange)
-                                    .font(.system(size: 14))
-                                Text("自動テキスト置換ルール (特殊な置換・コマンド)")
-                                    .font(.headline)
-                            }
-                            Text("音声入力完了後、略称を正式名称に展開したり、改行などのコマンドに強制変換します。\n(例: \"アニソン\" ➔ \"アニメソング\"、\"(改行|かいぎょう)\" ➔ \"\\n\")")
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .foregroundColor(.orange)
+                            .font(.system(size: 14))
+                        Text("自動テキスト置換ルール (特殊な置換・コマンド)")
+                            .font(.headline)
+
+                        Spacer()
+
+                        if !settings.dictionaryRules.isEmpty {
+                            Text("\(settings.dictionaryRules.count)件")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color.secondary.opacity(0.15)))
                         }
-                        Spacer()
+
                         Button("初期ルールに戻す") {
                             settings.resetDictionaryRules()
                         }
@@ -155,100 +158,90 @@ public struct DictionarySettingsTab: View {
                         .controlSize(.small)
                     }
 
-                    // 新規ルール追加フォーム
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("新しいルールを追加:")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
+                    Text("音声入力完了後、略称を正式名称に展開したり、改行などのコマンドに強制変換します。（※例: \"アニソン\" ➔ \"アニメソング\"、\"改行\" ➔ \\n）")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                        HStack(spacing: 8) {
-                            TextField("置換前 (例: アニソン)", text: $newPattern)
-                                .textFieldStyle(.roundedBorder)
+                    // 置換ルール追加フォーム
+                    HStack(spacing: 8) {
+                        TextField("置換前 (例: アニソン)", text: $newPattern)
+                            .textFieldStyle(.roundedBorder)
 
-                            Image(systemName: "arrow.right")
-                                .foregroundColor(.secondary)
-                                .font(.caption)
+                        Image(systemName: "arrow.right")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
 
-                            TextField("置換後 (例: アニメソング, \\nで改行)", text: $newReplacement)
-                                .textFieldStyle(.roundedBorder)
+                        TextField("置換後 (例: アニメソング, \\nで改行)", text: $newReplacement)
+                            .textFieldStyle(.roundedBorder)
 
-                            Toggle("正規表現", isOn: $newIsRegex)
-                                .toggleStyle(.checkbox)
-                                .font(.caption)
+                        Toggle("正規表現", isOn: $newIsRegex)
+                            .toggleStyle(.checkbox)
+                            .font(.caption)
 
-                            Button("追加") {
-                                addRule()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(newPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        Button("追加") {
+                            addRule()
                         }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(newPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
 
                     // 登録済みルール一覧
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("登録ルール一覧 (\(settings.dictionaryRules.count)件):")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                            Spacer()
-                        }
+                    ScrollView {
+                        if settings.dictionaryRules.isEmpty {
+                            Text("置換ルールが登録されていません。上のフォームから追加してください。")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, minHeight: 110)
+                        } else {
+                            VStack(spacing: 6) {
+                                ForEach($settings.dictionaryRules) { $rule in
+                                    HStack(spacing: 8) {
+                                        Toggle("", isOn: $rule.isEnabled)
+                                            .labelsHidden()
+                                            .help("有効/無効の切り替え")
 
-                        ScrollView {
-                            if settings.dictionaryRules.isEmpty {
-                                Text("置換ルールが登録されていません。上のフォームから追加してください。")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .frame(maxWidth: .infinity, minHeight: 110)
-                            } else {
-                                VStack(spacing: 6) {
-                                    ForEach($settings.dictionaryRules) { $rule in
-                                        HStack(spacing: 8) {
-                                            Toggle("", isOn: $rule.isEnabled)
-                                                .labelsHidden()
-                                                .help("有効/無効の切り替え")
+                                        TextField("置換前", text: $rule.pattern)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(maxWidth: 150)
 
-                                            TextField("置換前", text: $rule.pattern)
-                                                .textFieldStyle(.roundedBorder)
-                                                .frame(maxWidth: 150)
+                                        Image(systemName: "arrow.right")
+                                            .foregroundColor(.secondary)
+                                            .font(.caption)
 
-                                            Image(systemName: "arrow.right")
-                                                .foregroundColor(.secondary)
-                                                .font(.caption)
+                                        TextField("置換後 (\\nで改行)", text: $rule.replacement)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(maxWidth: 160)
 
-                                            TextField("置換後 (\\nで改行)", text: $rule.replacement)
-                                                .textFieldStyle(.roundedBorder)
-                                                .frame(maxWidth: 160)
+                                        Toggle("正規表現", isOn: $rule.isRegex)
+                                            .toggleStyle(.checkbox)
+                                            .font(.caption)
 
-                                            Toggle("正規表現", isOn: $rule.isRegex)
-                                                .toggleStyle(.checkbox)
-                                                .font(.caption)
+                                        Spacer()
 
-                                            Spacer()
-
-                                            Button(role: .destructive) {
-                                                deleteRule(id: rule.id)
-                                            } label: {
-                                                Image(systemName: "trash")
-                                                    .foregroundColor(.red)
-                                            }
-                                            .buttonStyle(.borderless)
+                                        Button(role: .destructive) {
+                                            deleteRule(id: rule.id)
+                                        } label: {
+                                            Image(systemName: "trash")
+                                                .foregroundColor(.red)
                                         }
-                                        .padding(6)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .fill(Color(NSColor.controlBackgroundColor))
-                                        )
+                                        .buttonStyle(.borderless)
                                     }
+                                    .padding(6)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(Color(NSColor.controlBackgroundColor))
+                                    )
                                 }
                             }
                         }
-                        .frame(height: 130)
-                        .padding(8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                        )
                     }
+                    .frame(height: 130)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                    )
 
                     // リアルタイム置換テスト
                     VStack(alignment: .leading, spacing: 6) {
