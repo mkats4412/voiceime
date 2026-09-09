@@ -41,10 +41,19 @@ struct TestRunner {
         let out3 = service.apply(text: "お会計は500円と1200円です", rules: rules3)
         assert(out3 == "お会計は¥500と¥1200です", "Regex test failed: got \(out3)")
 
-        // 4. デフォルトの置換ルール (改行、Apple macOS、Microsoft Windows)
+        // 4. デフォルトの置換ルール (改行: 有効、マクド: チェックオフ無効)
         let defaultRules = AppSettings.defaultDictionaryRules
-        let out4 = service.apply(text: "マックとウインドウズを使って開発します改行よろしくお願いいたします", rules: defaultRules)
-        assert(out4 == "Apple macOSとMicrosoft Windowsを使って開発します\nよろしくお願いいたします", "Default rules replacement failed: got \(out4)")
+        let out4 = service.apply(text: "お昼はマクドで食べます改行よろしくお願いいたします", rules: defaultRules)
+        assert(out4 == "お昼はマクドで食べます\nよろしくお願いいたします", "Default rules replacement failed (マクド should be disabled by default): got \(out4)")
+
+        // 有効化した場合のテスト
+        let enabledRules = defaultRules.map { rule -> DictionaryRule in
+            var r = rule
+            if r.pattern == "マクド" { r.isEnabled = true }
+            return r
+        }
+        let out4Enabled = service.apply(text: "お昼はマクドで食べます改行よろしくお願いいたします", rules: enabledRules)
+        assert(out4Enabled == "お昼はマクドナルドで食べます\nよろしくお願いいたします", "Enabled rule replacement failed: got \(out4Enabled)")
 
         // 5. 単語登録（customVocabulary）とプロンプトヒントの連動テスト
         let settings = AppSettings.shared

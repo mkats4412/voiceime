@@ -301,14 +301,19 @@ public final class AppSettings: ObservableObject {
         // Load dictionary rules with auto-migration (単語破壊の原因となる古いまる・てんルールを自動除去)
         if let data = defaults.data(forKey: Keys.dictionaryRules),
            let rules = try? JSONDecoder().decode([DictionaryRule].self, from: data) {
-            let cleanedRules = rules.filter { rule in
+            var cleanedRules = rules.filter { rule in
                 !rule.pattern.contains("まる") &&
                 !rule.pattern.contains("てん") &&
                 rule.pattern != "はてな" &&
-                rule.pattern != "びっくり"
+                rule.pattern != "びっくり" &&
+                rule.pattern != "マック" &&
+                rule.pattern != "ウインドウズ"
+            }
+            if !cleanedRules.contains(where: { $0.pattern == "マクド" }) {
+                cleanedRules.append(DictionaryRule(pattern: "マクド", replacement: "マクドナルド", isRegex: false, isEnabled: false))
             }
             self.dictionaryRules = cleanedRules.isEmpty ? AppSettings.defaultDictionaryRules : cleanedRules
-            if cleanedRules.count != rules.count {
+            if cleanedRules.count != rules.count || !rules.contains(where: { $0.pattern == "マクド" }) {
                 saveDictionaryRules()
             }
         } else {
@@ -320,8 +325,7 @@ public final class AppSettings: ObservableObject {
     public static var defaultDictionaryRules: [DictionaryRule] {
         [
             DictionaryRule(pattern: "(改行|かいぎょう)", replacement: "\n", isRegex: true, isEnabled: true),
-            DictionaryRule(pattern: "マック", replacement: "Apple macOS", isRegex: false, isEnabled: true),
-            DictionaryRule(pattern: "ウインドウズ", replacement: "Microsoft Windows", isRegex: false, isEnabled: true)
+            DictionaryRule(pattern: "マクド", replacement: "マクドナルド", isRegex: false, isEnabled: false)
         ]
     }
 
