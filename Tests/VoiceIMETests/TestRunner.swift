@@ -41,10 +41,30 @@ struct TestRunner {
         let out3 = service.apply(text: "お会計は500円と1200円です", rules: rules3)
         assert(out3 == "お会計は¥500と¥1200です", "Regex test failed: got \(out3)")
 
-        // 4. デフォルトの改行ルール
+        // 4. デフォルトの置換ルール (改行、Apple macOS、Microsoft Windows)
         let defaultRules = AppSettings.defaultDictionaryRules
-        let out4 = service.apply(text: "おはようございます改行よろしくお願いいたします", rules: defaultRules)
-        assert(out4 == "おはようございます\nよろしくお願いいたします", "Default rules replacement failed: got \(out4)")
+        let out4 = service.apply(text: "マックとウインドウズを使って開発します改行よろしくお願いいたします", rules: defaultRules)
+        assert(out4 == "Apple macOSとMicrosoft Windowsを使って開発します\nよろしくお願いいたします", "Default rules replacement failed: got \(out4)")
+
+        // 5. 単語登録（customVocabulary）とプロンプトヒントの連動テスト
+        let settings = AppSettings.shared
+        let originalVocab = settings.customVocabulary
+        settings.clearVocabulary()
+        assert(settings.customVocabulary.isEmpty, "Vocabulary should be empty")
+
+        settings.addVocabularyWord("VoiceIME")
+        settings.addVocabularyWord("Kubernetes, 齋藤\nDocker")
+        assert(settings.customVocabulary.contains("VoiceIME"), "Should contain VoiceIME")
+        assert(settings.customVocabulary.contains("Kubernetes"), "Should contain Kubernetes")
+        assert(settings.customVocabulary.contains("齋藤"), "Should contain 齋藤")
+        assert(settings.customVocabulary.contains("Docker"), "Should contain Docker")
+        assert(settings.promptHint.contains("VoiceIME"), "promptHint should synchronize with vocabulary")
+
+        settings.removeVocabularyWord("Kubernetes")
+        assert(!settings.customVocabulary.contains("Kubernetes"), "Should not contain Kubernetes after removal")
+
+        // 状態復元
+        settings.customVocabulary = originalVocab
 
         print("  -> DictionaryService passed!")
     }

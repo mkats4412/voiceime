@@ -573,21 +573,27 @@ public struct APISettingsTab: View {
 
                     // 認識プロンプト
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("認識プロンプト (固有名詞ヒント・省略可):")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
+                        HStack {
+                            Text("認識プロンプト (固有名詞ヒント):")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            Spacer()
+                            Text("「辞書」タブの単語登録と自動連動")
+                                .font(.caption2)
+                                .foregroundColor(.accentColor)
+                        }
 
                         InputFieldBox {
                             Image(systemName: "text.quote")
                                 .foregroundColor(.secondary)
                                 .font(.system(size: 13))
                         } content: {
-                            TextField("固有名詞や略語のヒント（例: VoiceIME, 株式会社, ...）", text: $settings.promptHint)
+                            TextField("固有名詞や略語のヒント（例: VoiceIME, Kubernetes, ...）", text: $settings.promptHint)
                                 .textFieldStyle(.plain)
                                 .font(.system(size: 12.5))
                         } trailing: {
                             if !settings.promptHint.isEmpty {
-                                Button(action: { settings.promptHint = "" }) {
+                                Button(action: { settings.clearVocabulary() }) {
                                     Image(systemName: "xmark.circle.fill")
                                         .foregroundColor(.secondary)
                                         .font(.system(size: 13))

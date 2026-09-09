@@ -75,6 +75,7 @@ public final class AppSettings: ObservableObject {
         static let autoFallbackEnabled = "voiceime_autoFallbackEnabled"
         static let llmRefinementEnabled = "voiceime_llmRefinementEnabled"
         static let promptHint = "voiceime_promptHint"
+        static let customVocabulary = "voiceime_customVocabulary"
         static let language = "voiceime_language"
         static let restoreClipboard = "voiceime_restoreClipboard"
         static let hotkeyCode = "voiceime_hotkeyCode"
@@ -141,6 +142,18 @@ public final class AppSettings: ObservableObject {
 
     @Published public var promptHint: String {
         didSet { defaults.set(promptHint, forKey: Keys.promptHint) }
+    }
+
+    /// 読み不要の単語登録リスト（人名・社名・製品名・専門用語）
+    @Published public var customVocabulary: [String] {
+        didSet {
+            defaults.set(customVocabulary, forKey: Keys.customVocabulary)
+            // Whisper & LLM プロンプトヒントと自動連動
+            let joined = customVocabulary.joined(separator: ", ")
+            if promptHint != joined {
+                promptHint = joined
+            }
+        }
     }
 
     @Published public var language: String {
@@ -252,7 +265,21 @@ public final class AppSettings: ObservableObject {
         self.autoFallbackEnabled = defaults.object(forKey: Keys.autoFallbackEnabled) != nil ? defaults.bool(forKey: Keys.autoFallbackEnabled) : true
         self.llmRefinementEnabled = defaults.object(forKey: Keys.llmRefinementEnabled) != nil ? defaults.bool(forKey: Keys.llmRefinementEnabled) : true
 
-        self.promptHint = defaults.string(forKey: Keys.promptHint) ?? ""
+        let savedHint = defaults.string(forKey: Keys.promptHint) ?? ""
+        self.promptHint = savedHint
+
+        if let savedVocab = defaults.stringArray(forKey: Keys.customVocabulary) {
+            self.customVocabulary = savedVocab
+        } else if !savedHint.isEmpty {
+            // 既存の promptHint からカンマ区切りで移行
+            self.customVocabulary = savedHint
+                .components(separatedBy: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        } else {
+            self.customVocabulary = []
+        }
+
         self.language = defaults.string(forKey: Keys.language) ?? "ja"
         self.restoreClipboard = defaults.object(forKey: Keys.restoreClipboard) != nil ? defaults.bool(forKey: Keys.restoreClipboard) : true
 
@@ -292,12 +319,50 @@ public final class AppSettings: ObservableObject {
 
     public static var defaultDictionaryRules: [DictionaryRule] {
         [
-            DictionaryRule(pattern: "(改行|かいぎょう)", replacement: "\n", isRegex: true, isEnabled: true)
+            DictionaryRule(pattern: "(改行|かいぎょう)", replacement: "\n", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "マック", replacement: "Apple macOS", isRegex: false, isEnabled: true),
+            DictionaryRule(pattern: "ウインドウズ", replacement: "Microsoft Windows", isRegex: false, isEnabled: true)
         ]
     }
 
     public func resetDictionaryRules() {
         self.dictionaryRules = AppSettings.defaultDictionaryRules
+    }
+
+    // MARK: - 単語登録（語彙リスト）管理
+
+    /// 単語を追加（カンマや改行、読点区切りで複数一括入力にも対応）
+    public func addVocabularyWord(_ rawText: String) {
+        let words = rawText
+            .components(separatedBy: CharacterSet(charactersIn: ",\n、\t"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        var current = self.customVocabulary
+        for word in words {
+            if !current.contains(word) {
+                current.append(word)
+            }
+        }
+        self.customVocabulary = current
+    }
+
+    /// インデックス指定で単語を削除
+    public func removeVocabularyWord(at index: Int) {
+        guard customVocabulary.indices.contains(index) else { return }
+        var current = self.customVocabulary
+        current.remove(at: index)
+        self.customVocabulary = current
+    }
+
+    /// 単語文字列指定で削除
+    public func removeVocabularyWord(_ word: String) {
+        self.customVocabulary = self.customVocabulary.filter { $0 != word }
+    }
+
+    /// 単語リストを全クリア
+    public func clearVocabulary() {
+        self.customVocabulary = []
     }
 
     private func saveDictionaryRules() {
