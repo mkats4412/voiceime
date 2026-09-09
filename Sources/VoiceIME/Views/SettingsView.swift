@@ -2,7 +2,7 @@ import SwiftUI
 
 public enum SettingsTab: String, CaseIterable, Identifiable {
     case api = "API連携"
-    case dictionary = "辞書置換"
+    case dictionary = "単語・辞書"
     case shortcut = "操作・音声"
     case permissions = "アクセス権限"
 
