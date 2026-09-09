@@ -10,7 +10,7 @@ public struct DictionarySettingsTab: View {
     @State private var newPattern: String = ""
     @State private var newReplacement: String = ""
     @State private var newIsRegex: Bool = false
-    @State private var testInput: String = "お昼はマクドで食べます。改行よろしくお願いいたします。"
+    @State private var testInput: String = "改行の件ですが、よろしくお願いいたします。"
     private let dictionary = DictionaryService.shared
 
     public init() {}
@@ -142,7 +142,7 @@ public struct DictionarySettingsTab: View {
                                 Text("自動テキスト置換ルール (特殊な置換・コマンド)")
                                     .font(.headline)
                             }
-                            Text("音声入力完了後、略称を正式名称に展開したり、改行などのコマンドに強制変換します。\n(例: \"マクド\" ➔ \"マクドナルド\"、\"改行\" ➔ \"\\n\")")
+                            Text("音声入力完了後、改行などのコマンドに変換したり、特定の文字列を自動置換します。\n(例: \"(改行|かいぎょう)\" ➔ \"\\n\")")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -228,14 +228,14 @@ public struct DictionarySettingsTab: View {
                             .fontWeight(.medium)
 
                         HStack(spacing: 8) {
-                            TextField("置換前 (例: マクド)", text: $newPattern)
+                            TextField("置換前の単語", text: $newPattern)
                                 .textFieldStyle(.roundedBorder)
 
                             Image(systemName: "arrow.right")
                                 .foregroundColor(.secondary)
                                 .font(.caption)
 
-                            TextField("置換後 (例: マクドナルド, \\nで改行)", text: $newReplacement)
+                            TextField("置換後の単語 (\\nで改行)", text: $newReplacement)
                                 .textFieldStyle(.roundedBorder)
 
                             Toggle("正規表現", isOn: $newIsRegex)
