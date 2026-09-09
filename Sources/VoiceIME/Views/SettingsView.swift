@@ -3,7 +3,7 @@ import SwiftUI
 public enum SettingsTab: String, CaseIterable, Identifiable {
     case api = "API連携"
     case dictionary = "辞書置換"
-    case shortcut = "操作・一般"
+    case shortcut = "操作・音声"
     case permissions = "アクセス権限"
 
     public var id: String { rawValue }
@@ -12,7 +12,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .api: return "network"
         case .dictionary: return "character.book.closed"
-        case .shortcut: return "slider.horizontal.3"
+        case .shortcut: return "waveform.and.mic"
         case .permissions: return "hand.raised"
         }
     }

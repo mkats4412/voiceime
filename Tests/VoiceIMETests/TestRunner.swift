@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 
 @main
 struct TestRunner {
@@ -9,6 +10,7 @@ struct TestRunner {
         testKeychainService()
         testLaunchAtLoginService()
         testLLMService()
+        testAudioAnalysisService()
 
         print("=== All Tests Passed Successfully! ===")
     }
@@ -135,5 +137,97 @@ struct TestRunner {
         assert(out3 == "フォールバック", "Empty fallback failed: \(out3)")
 
         print("  -> LLMService URL Construction and Sanitization passed!")
+    }
+
+    static func testAudioAnalysisService() {
+        print("[TEST] AudioAnalysisService...")
+        let service = AudioAnalysisService.shared
+        let settings = AppSettings.shared
+
+        // 1. AppSettings デフォルト値確認
+        assert(settings.audioThresholdEnabled == true, "audioThresholdEnabled should be true by default")
+        assert(settings.audioThresholdDB == -32.0, "audioThresholdDB should be -32.0 by default")
+        assert(settings.audioTrimmingEnabled == true, "audioTrimmingEnabled should be true by default")
+
+        let tempDir = FileManager.default.temporaryDirectory
+        let silenceURL = tempDir.appendingPathComponent("test_silence_\(UUID().uuidString).m4a")
+        let speechURL = tempDir.appendingPathComponent("test_speech_\(UUID().uuidString).m4a")
+
+        let audioSettings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: 16000.0,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderBitRateKey: 32000,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+        ]
+
+        defer {
+            try? FileManager.default.removeItem(at: silenceURL)
+            try? FileManager.default.removeItem(at: speechURL)
+        }
+
+        // 2. 微小音／環境音のみのファイル生成 (振幅 0.001 = 約 -60dB)
+        do {
+            let file = try AVAudioFile(forWriting: silenceURL, settings: audioSettings)
+            let pcmFormat = file.processingFormat
+            let frameCount: AVAudioFrameCount = 16000 // 1.0秒
+            let buffer = AVAudioPCMBuffer(pcmFormat: pcmFormat, frameCapacity: frameCount)!
+            buffer.frameLength = frameCount
+            for i in 0..<Int(frameCount) {
+                buffer.floatChannelData![0][i] = 0.001 * sin(Float(i) * 0.1)
+            }
+            try file.write(from: buffer)
+        } catch {
+            assertionFailure("Failed to write silence test audio: \(error)")
+        }
+
+        // 小さな音の判定テスト: hasSpeech が false になること
+        let silenceMetrics = service.analyze(audioFileURL: silenceURL, thresholdDB: -32.0)
+        assert(!silenceMetrics.hasSpeech, "Silence/small sound should NOT be recognized as speech! Got maxRMS=\(silenceMetrics.maxWindowRMS_DB)dB")
+        assert(silenceMetrics.maxWindowRMS_DB < -32.0, "Silence RMS should be below -32dB")
+        print("  -> Small sound rejection passed: maxRMS=\(String(format: "%.1f", silenceMetrics.maxWindowRMS_DB))dB < -32.0dB")
+
+        // 3. 発話音声を含むファイル生成 (無音 0.4s + 音声 0.8s (振幅 0.1 = 約 -20dB) + 無音 0.4s)
+        do {
+            let file = try AVAudioFile(forWriting: speechURL, settings: audioSettings)
+            let pcmFormat = file.processingFormat
+            let frameCount: AVAudioFrameCount = 25600 // 1.6秒
+            let buffer = AVAudioPCMBuffer(pcmFormat: pcmFormat, frameCapacity: frameCount)!
+            buffer.frameLength = frameCount
+            for i in 0..<Int(frameCount) {
+                if i >= 6400 && i < 19200 {
+                    // 発話シミュレーション（-20dB）
+                    buffer.floatChannelData![0][i] = 0.1 * sin(Float(i) * 0.1)
+                } else {
+                    // 無音・キー打鍵音
+                    buffer.floatChannelData![0][i] = 0.001
+                }
+            }
+            try file.write(from: buffer)
+        } catch {
+            assertionFailure("Failed to write speech test audio: \(error)")
+        }
+
+        // 音声の判定テスト: hasSpeech が true になること
+        let speechMetrics = service.analyze(audioFileURL: speechURL, thresholdDB: -32.0)
+        assert(speechMetrics.hasSpeech, "Simulated speech should be recognized as speech!")
+        assert(speechMetrics.maxWindowRMS_DB >= -32.0, "Speech RMS should be >= -32dB")
+        print("  -> Speech detection passed: maxRMS=\(String(format: "%.1f", speechMetrics.maxWindowRMS_DB))dB >= -32.0dB")
+
+        // 4. トリミングテスト: 発話前後の不要な微小音区間がトリミングされること
+        if let trimmedURL = service.trimLeadingTrailingNoise(audioFileURL: speechURL, thresholdDB: -32.0) {
+            defer { try? FileManager.default.removeItem(at: trimmedURL) }
+            if let trimmedFile = try? AVAudioFile(forReading: trimmedURL) {
+                let trimmedDuration = Double(trimmedFile.length) / trimmedFile.processingFormat.sampleRate
+                assert(trimmedDuration < speechMetrics.totalDurationSeconds, "Trimmed duration should be shorter than original")
+                print("  -> Noise trimming passed: original=\(String(format: "%.2f", speechMetrics.totalDurationSeconds))s -> trimmed=\(String(format: "%.2f", trimmedDuration))s")
+            } else {
+                assertionFailure("Failed to read trimmed file")
+            }
+        } else {
+            assertionFailure("Trimming should succeed on padded audio")
+        }
+
+        print("  -> AudioAnalysisService passed!")
     }
 }

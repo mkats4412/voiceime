@@ -121,6 +121,9 @@ public final class AppState: ObservableObject {
 
     /// 録音開始
     public func startRecording() {
+        // マイクレベルテストが実行中の場合は停止して競合を防止
+        MicrophoneLevelTester.shared.stopTesting()
+
         permissions.checkPermissions()
         guard permissions.isMicrophoneAuthorized else {
             phase = .error("マイクへのアクセス権限が必要です。")
@@ -163,6 +166,35 @@ public final class AppState: ObservableObject {
             return
         }
 
+        // ==========================================
+        // 0. 音声しきい値判定（小さな音・環境雑音の除外）
+        // ==========================================
+        var targetAudioURL = audioURL
+        if settings.audioThresholdEnabled {
+            let metrics = AudioAnalysisService.shared.analyze(
+                audioFileURL: audioURL,
+                thresholdDB: settings.audioThresholdDB
+            )
+
+            if !metrics.hasSpeech {
+                NSLog("[VoiceIME] 音声除外: 音量レベルがしきい値未満 (maxRMS: %.1f dB, peak: %.1f dB, しきい値: %.1f dB)", metrics.maxWindowRMS_DB, metrics.peakPowerDB, settings.audioThresholdDB)
+                try? FileManager.default.removeItem(at: audioURL)
+                self.phase = .idle
+                self.statusMessage = "小さな音を検知したため無視しました"
+                return
+            }
+
+            // 発話前後の無音・微小音トリミング
+            if settings.audioTrimmingEnabled,
+               let trimmedURL = AudioAnalysisService.shared.trimLeadingTrailingNoise(
+                   audioFileURL: audioURL,
+                   thresholdDB: settings.audioThresholdDB
+               ) {
+                try? FileManager.default.removeItem(at: audioURL)
+                targetAudioURL = trimmedURL
+            }
+        }
+
         let mode = settings.apiMode
         phase = .transcribing
         statusMessage = mode == .translations ? "英語翻訳中..." : "文字起こし中..."
@@ -183,7 +215,7 @@ public final class AppState: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             defer {
-                try? FileManager.default.removeItem(at: audioURL)
+                try? FileManager.default.removeItem(at: targetAudioURL)
             }
 
             let totalStartTime = CFAbsoluteTimeGetCurrent()
@@ -200,7 +232,7 @@ public final class AppState: ObservableObject {
                 let whisperStart = CFAbsoluteTimeGetCurrent()
                 do {
                     rawText = try await self.api.transcribe(
-                        audioFileURL: audioURL,
+                        audioFileURL: targetAudioURL,
                         baseURL: baseURL,
                         apiKey: apiKey,
                         model: model,
@@ -218,7 +250,7 @@ public final class AppState: ObservableObject {
                         self.statusMessage = "\(backup.displayName) で音声認識を自動再試行中..."
                         do {
                             rawText = try await self.api.transcribe(
-                                audioFileURL: audioURL,
+                                audioFileURL: targetAudioURL,
                                 baseURL: config.baseURL,
                                 apiKey: backupKey,
                                 model: config.modelName,

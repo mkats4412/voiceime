@@ -5,6 +5,7 @@ public struct ShortcutSettingsTab: View {
     @ObservedObject var settings = AppSettings.shared
     @ObservedObject var appState = AppState.shared
     @ObservedObject var launchAtLogin = LaunchAtLoginService.shared
+    @ObservedObject var micTester = MicrophoneLevelTester.shared
 
     public struct ShortcutPreset: Identifiable {
         public let id = UUID()
@@ -166,7 +167,185 @@ public struct ShortcutSettingsTab: View {
 
                 Divider()
 
-                // セクション2: 入力モード & 音声言語
+                // セクション2: 音声入力しきい値 (小さな音の除外 / ノイズゲート)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("音声入力しきい値 (ノイズゲート)")
+                            .font(.headline)
+                        Spacer()
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle(isOn: $settings.audioThresholdEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("小さな音を自動除外する (声の音量のみ入力)")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Text("打鍵音・呼吸音・周囲の雑音などの小さな音を拾わず、一定以上の音量で発話された音声のみを入力対象にします。")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        if settings.audioThresholdEnabled {
+                            Divider()
+
+                            // 感度プリセット & スライダー
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("最小入力音量しきい値:")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+
+                                    Spacer()
+
+                                    Text(String(format: "%.0f dB", settings.audioThresholdDB))
+                                        .font(.system(.subheadline, design: .monospaced))
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.accentColor)
+                                }
+
+                                HStack(spacing: 8) {
+                                    ForEach(AudioSensitivityPreset.allCases) { preset in
+                                        Button(action: {
+                                            settings.audioThresholdDB = preset.thresholdDB
+                                            micTester.updateThreshold(preset.thresholdDB)
+                                        }) {
+                                            Text(preset.title)
+                                                .font(.system(size: 11, weight: abs(settings.audioThresholdDB - preset.thresholdDB) < 0.5 ? .bold : .regular))
+                                                .foregroundColor(abs(settings.audioThresholdDB - preset.thresholdDB) < 0.5 ? .accentColor : .primary)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 5)
+                                                .background(
+                                                    RoundedRectangle(cornerRadius: 6)
+                                                        .fill(abs(settings.audioThresholdDB - preset.thresholdDB) < 0.5 ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
+                                                )
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 6)
+                                                        .stroke(abs(settings.audioThresholdDB - preset.thresholdDB) < 0.5 ? Color.accentColor : Color.secondary.opacity(0.2), lineWidth: 1)
+                                                )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+
+                                Slider(
+                                    value: Binding(
+                                        get: { settings.audioThresholdDB },
+                                        set: { val in
+                                            settings.audioThresholdDB = val
+                                            micTester.updateThreshold(val)
+                                        }
+                                    ),
+                                    in: -50.0...(-15.0),
+                                    step: 1.0
+                                ) {
+                                    Text("しきい値")
+                                } minimumValueLabel: {
+                                    Text("-50dB (低)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                } maximumValueLabel: {
+                                    Text("-15dB (高)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Text("※ しきい値より小さな音（打鍵音や雑音）は文字起こしされず、自動的に無視されます。")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Divider()
+
+                            // 無音・打鍵音トリミング
+                            Toggle(isOn: $settings.audioTrimmingEnabled) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("発話前後の微小音・打鍵音を自動カット")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                    Text("キーを押した瞬間や離した瞬間の音、息継ぎを除去し、声の部分だけを文字起こしします。")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+
+                            Divider()
+
+                            // リアルタイムマイクテスト & レベルメーター
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("マイク入力レベルテスト")
+                                            .font(.subheadline)
+                                            .fontWeight(.semibold)
+                                        Text("声を出したりキーボードを叩いて、現在の音量としきい値を確認できます。")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+
+                                    Spacer()
+
+                                    Button(action: {
+                                        if micTester.isTesting {
+                                            micTester.stopTesting()
+                                        } else {
+                                            micTester.startTesting(thresholdDB: settings.audioThresholdDB)
+                                        }
+                                    }) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: micTester.isTesting ? "stop.fill" : "play.fill")
+                                            Text(micTester.isTesting ? "テスト停止" : "テスト開始")
+                                        }
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .tint(micTester.isTesting ? .red : .accentColor)
+                                    .controlSize(.small)
+                                }
+
+                                // レベルメーターバー
+                                AudioLevelMeterView(
+                                    currentDB: micTester.currentLevelDB,
+                                    thresholdDB: settings.audioThresholdDB,
+                                    isTesting: micTester.isTesting
+                                )
+
+                                if micTester.isTesting {
+                                    HStack {
+                                        if micTester.isSpeechDetected {
+                                            Label("声として検知中 (音声入力対象)", systemImage: "checkmark.circle.fill")
+                                                .font(.caption)
+                                                .foregroundColor(.green)
+                                        } else {
+                                            Label("小さな音 (除外対象)", systemImage: "speaker.slash.fill")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Spacer()
+                                        Text(String(format: "現在: %.0f dB", micTester.currentLevelDB))
+                                            .font(.system(.caption, design: .monospaced))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+
+                                if let error = micTester.errorMessage {
+                                    Text(error)
+                                        .font(.caption2)
+                                        .foregroundColor(.red)
+                                }
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                    )
+                }
+
+                Divider()
+
+                // セクション3: 入力モード & 音声言語
                 VStack(alignment: .leading, spacing: 10) {
                     Text("入力モード & 音声言語")
                         .font(.headline)
@@ -327,5 +506,87 @@ public struct ShortcutSettingsTab: View {
             }
             .padding(18)
         }
+        .onDisappear {
+            micTester.stopTesting()
+        }
     }
 }
+
+/// リアルタイムマイク音量メーターとしきい値表示ビュー
+public struct AudioLevelMeterView: View {
+    let currentDB: Float
+    let thresholdDB: Float
+    let isTesting: Bool
+
+    // -60 dB ... 0 dB の範囲を 0.0 ... 1.0 に正規化
+    private func normalize(db: Float) -> CGFloat {
+        let clamped = max(-60.0, min(0.0, db))
+        return CGFloat((clamped + 60.0) / 60.0)
+    }
+
+    public var body: some View {
+        VStack(spacing: 4) {
+            GeometryReader { geometry in
+                let width = geometry.size.width
+                let currentNorm = isTesting ? normalize(db: currentDB) : 0.0
+                let thresholdNorm = normalize(db: thresholdDB)
+                let isSpeech = isTesting && (currentDB >= thresholdDB)
+
+                ZStack(alignment: .leading) {
+                    // 背景トラック
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(NSColor.separatorColor).opacity(0.3))
+                        .frame(height: 14)
+
+                    // 音量バー（現在値）
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(
+                            LinearGradient(
+                                colors: isSpeech
+                                    ? [Color.green.opacity(0.8), Color.green]
+                                    : [Color.secondary.opacity(0.3), Color.secondary.opacity(0.5)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: max(0, width * currentNorm), height: 14)
+                        .animation(.linear(duration: 0.06), value: currentDB)
+
+                    // しきい値境界線（マーカー）
+                    Rectangle()
+                        .fill(Color.orange)
+                        .frame(width: 2, height: 18)
+                        .offset(x: max(0, min(width - 2, width * thresholdNorm - 1)))
+                        .overlay(
+                            Image(systemName: "arrowtriangle.down.fill")
+                                .font(.system(size: 8))
+                                .foregroundColor(.orange)
+                                .offset(x: max(0, min(width - 2, width * thresholdNorm - 1)), y: -12),
+                            alignment: .topLeading
+                        )
+                }
+            }
+            .frame(height: 22)
+            .padding(.top, 6)
+
+            // 目盛りラベル
+            HStack {
+                Text("-60dB")
+                Spacer()
+                Text("-40dB")
+                Spacer()
+                Text("しきい値 (\(Int(thresholdDB))dB)")
+                    .foregroundColor(.orange)
+                    .fontWeight(.medium)
+                Spacer()
+                Text("-10dB")
+                Spacer()
+                Text("0dB")
+            }
+            .font(.system(size: 9, design: .monospaced))
+            .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
+}
+

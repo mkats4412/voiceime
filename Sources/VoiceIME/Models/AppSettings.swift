@@ -29,6 +29,30 @@ public enum TriggerMode: String, CaseIterable, Identifiable {
     }
 }
 
+public enum AudioSensitivityPreset: String, CaseIterable, Identifiable {
+    case whisperQuiet = "whisperQuiet"
+    case standard = "standard"
+    case noisyEnv = "noisyEnv"
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .whisperQuiet: return "小声 (-38 dB)"
+        case .standard: return "標準 (-32 dB)"
+        case .noisyEnv: return "騒音対策 (-24 dB)"
+        }
+    }
+
+    public var thresholdDB: Float {
+        switch self {
+        case .whisperQuiet: return -38.0
+        case .standard: return -32.0
+        case .noisyEnv: return -24.0
+        }
+    }
+}
+
 public final class AppSettings: ObservableObject {
     public static let shared = AppSettings()
 
@@ -57,6 +81,11 @@ public final class AppSettings: ObservableObject {
         static let hotkeyModifiers = "voiceime_hotkeyModifiers"
         static let hotkeyDisplayString = "voiceime_hotkeyDisplayString"
         static let dictionaryRules = "voiceime_dictionaryRules"
+
+        // 音声しきい値・小さな音除外設定
+        static let audioThresholdEnabled = "voiceime_audioThresholdEnabled"
+        static let audioThresholdDB = "voiceime_audioThresholdDB"
+        static let audioTrimmingEnabled = "voiceime_audioTrimmingEnabled"
     }
 
     private let defaults = UserDefaults.standard
@@ -136,6 +165,21 @@ public final class AppSettings: ObservableObject {
 
     @Published public var dictionaryRules: [DictionaryRule] {
         didSet { saveDictionaryRules() }
+    }
+
+    /// 音量しきい値（ノイズゲート）による小さな音の除外
+    @Published public var audioThresholdEnabled: Bool {
+        didSet { defaults.set(audioThresholdEnabled, forKey: Keys.audioThresholdEnabled) }
+    }
+
+    /// 最小入力音量しきい値 (-50dB ... -15dB, デフォルト -32dB)
+    @Published public var audioThresholdDB: Float {
+        didSet { defaults.set(audioThresholdDB, forKey: Keys.audioThresholdDB) }
+    }
+
+    /// 発話前後の無音・打鍵音トリミング
+    @Published public var audioTrimmingEnabled: Bool {
+        didSet { defaults.set(audioTrimmingEnabled, forKey: Keys.audioTrimmingEnabled) }
     }
 
     // MARK: - プロパティ連携ヘルパー
@@ -221,6 +265,12 @@ public final class AppSettings: ObservableObject {
 
         self.hotkeyDisplayString = defaults.string(forKey: Keys.hotkeyDisplayString) ?? "⌃Space"
 
+        // 音声しきい値設定の読み込み（デフォルト: 有効, -32dB, トリミング有効）
+        self.audioThresholdEnabled = defaults.object(forKey: Keys.audioThresholdEnabled) != nil ? defaults.bool(forKey: Keys.audioThresholdEnabled) : true
+        let savedThreshold = defaults.object(forKey: Keys.audioThresholdDB) as? Float
+        self.audioThresholdDB = savedThreshold ?? -32.0
+        self.audioTrimmingEnabled = defaults.object(forKey: Keys.audioTrimmingEnabled) != nil ? defaults.bool(forKey: Keys.audioTrimmingEnabled) : true
+
         // Load dictionary rules with auto-migration (単語破壊の原因となる古いまる・てんルールを自動除去)
         if let data = defaults.data(forKey: Keys.dictionaryRules),
            let rules = try? JSONDecoder().decode([DictionaryRule].self, from: data) {
@@ -274,6 +324,9 @@ public final class AppSettings: ObservableObject {
         hotkeyCode = UInt32(kVK_Space)
         hotkeyModifiers = UInt32(controlKey)
         hotkeyDisplayString = "⌃Space"
+        audioThresholdEnabled = true
+        audioThresholdDB = -32.0
+        audioTrimmingEnabled = true
         dictionaryRules = AppSettings.defaultDictionaryRules
     }
 }
