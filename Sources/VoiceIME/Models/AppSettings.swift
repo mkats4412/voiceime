@@ -319,14 +319,17 @@ public final class AppSettings: ObservableObject {
             } else if !cleanedRules.contains(where: { $0.pattern == "改行" }) {
                 cleanedRules.insert(DictionaryRule(pattern: "改行", replacement: "\\n", isRegex: false, isEnabled: true), at: 0)
             }
-            // 郵便番号サンプルルール (正規表現ON、有効チェックOFF)
-            if !cleanedRules.contains(where: { $0.pattern.contains("[0-9]{3}") }) {
+            // 郵便番号サンプルルール (正規表現ON、有効チェックOFF: 例として置いておくため初期値はチェックなし)
+            if let zipIndex = cleanedRules.firstIndex(where: { $0.pattern.contains("[0-9]{3}") }) {
+                cleanedRules[zipIndex].isEnabled = false
+                cleanedRules[zipIndex].pattern = "([0-9]{3})([0-9]{4})"
+                cleanedRules[zipIndex].replacement = "〒$1-$2"
+                cleanedRules[zipIndex].isRegex = true
+            } else {
                 cleanedRules.append(DictionaryRule(pattern: "([0-9]{3})([0-9]{4})", replacement: "〒$1-$2", isRegex: true, isEnabled: false))
             }
             self.dictionaryRules = cleanedRules.isEmpty ? AppSettings.defaultDictionaryRules : cleanedRules
-            if cleanedRules.count != rules.count || !rules.contains(where: { $0.pattern.contains("[0-9]{3}") }) {
-                saveDictionaryRules()
-            }
+            saveDictionaryRules()
         } else {
             self.dictionaryRules = AppSettings.defaultDictionaryRules
             saveDictionaryRules()

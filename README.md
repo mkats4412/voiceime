@@ -74,10 +74,7 @@ open ./build/VoiceIME.app       # /Applications へは --install 付与
 ```bash
 cd voiceime
 swiftc Sources/VoiceIME/Models/*.swift \
-       Sources/VoiceIME/Services/DictionaryService.swift \
-       Sources/VoiceIME/Services/KeychainService.swift \
-       Sources/VoiceIME/Services/LaunchAtLoginService.swift \
-       Sources/VoiceIME/Services/LLMService.swift \
+       Sources/VoiceIME/Services/*.swift \
        Tests/VoiceIMETests/TestRunner.swift \
        -o /tmp/test_runner && /tmp/test_runner
 ```

@@ -67,12 +67,20 @@ echo "Application created at: ${APP_BUNDLE}"
 echo "-> 署名検証:"
 codesign -d -r- "${APP_BUNDLE}" 2>&1 | head -n 3
 
-# オプション: --install 引数があれば /Applications に配置
+# オプション: --install 引数があればアプリケーションフォルダに配置
 if [[ "${1:-}" == "--install" ]]; then
-    echo "-> /Applications にインストール中..."
-    rm -rf "/Applications/${APP_NAME}.app"
-    cp -R "${APP_BUNDLE}" "/Applications/"
-    echo "Installed to /Applications/${APP_NAME}.app"
+    if [[ -d "/Volumes/ExDrive/Applications" ]]; then
+        echo "-> /Volumes/ExDrive/Applications にインストール中..."
+        rm -rf "/Volumes/ExDrive/Applications/${APP_NAME}.app"
+        cp -R "${APP_BUNDLE}" "/Volumes/ExDrive/Applications/"
+        echo "Installed to /Volumes/ExDrive/Applications/${APP_NAME}.app"
+    fi
+    if [[ -d "/Applications" ]]; then
+        echo "-> /Applications にインストール中..."
+        rm -rf "/Applications/${APP_NAME}.app"
+        cp -R "${APP_BUNDLE}" "/Applications/"
+        echo "Installed to /Applications/${APP_NAME}.app"
+    fi
 fi
 
 echo ""
