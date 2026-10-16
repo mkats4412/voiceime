@@ -56,7 +56,7 @@ public struct FloatingPreviewView: View {
                     Spacer()
 
                     // ガイダンスバッジ
-                    Text("入力先を選択 ➔ ⌘↩")
+                    Text(controller.customNotice ?? "入力先を選択 ➔ ⌘↩")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 6)

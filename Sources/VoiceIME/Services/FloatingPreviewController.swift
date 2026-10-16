@@ -16,6 +16,7 @@ public final class FloatingPreviewController: ObservableObject {
     @Published public var currentText: String = ""
     @Published public var isVisible: Bool = false
     @Published public var copySuccess: Bool = false
+    @Published public var customNotice: String? = nil
 
     private var panel: NSPanel?
     private var dismissTimer: Timer?
@@ -88,7 +89,7 @@ public final class FloatingPreviewController: ObservableObject {
     }
 
     /// 認識・推敲完了後の確定テキスト表示
-    public func show(text: String) {
+    public func show(text: String, notice: String? = nil) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             hide()
             return
@@ -97,6 +98,7 @@ public final class FloatingPreviewController: ObservableObject {
         self.phase = .ready
         self.currentText = text
         self.copySuccess = false
+        self.customNotice = notice
 
         if panel == nil {
             setupPanel()

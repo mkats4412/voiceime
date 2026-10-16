@@ -691,28 +691,76 @@ public final class AppState: ObservableObject {
                 let completionNotice = fallbackNotices.isEmpty ? "" : " " + fallbackNotices.joined(separator: " ")
                 let completionMessage = "完了 (\(timeStr))" + completionNotice
 
-                // フローティングプレビュー・保留ウィンドウを表示（入力先指定忘れ・再入力対策）
-                if self.settings.floatingPreviewEnabled {
-                    FloatingPreviewController.shared.show(text: processedText)
-                }
+                // ==========================================
+                // 5. フォーカス状態の自動判定とテキスト出力
+                // ==========================================
+                let focusState = FocusDetectionService.shared.checkCurrentFocus()
+                NSLog("[VoiceIME] 🎯 フォーカス状態判定: %@", focusState.description)
 
-                if self.settings.autoPasteEnabled {
-                    self.phase = .pasting
-                    self.statusMessage = "入力中..."
-                    NSLog("[VoiceIME] 🚀 ペースト実行: [%@] (計 %.2f秒, 認識: %.2f秒, 推敲: %.2f秒)", processedText, totalElapsed, whisperDuration, llmDuration)
+                switch focusState {
+                case .editableText(let role, let detail):
+                    // 【確実に入力エリア】
+                    // 1. 自動ペーストを実行
+                    // 2. ペースト完了時にウィンドウを非表示（閉じる）
+                    if self.settings.autoPasteEnabled {
+                        self.phase = .pasting
+                        self.statusMessage = "入力中..."
+                        NSLog("[VoiceIME] 🚀 確実な入力欄へ自動ペースト実行 (\(role): \(detail)): [%@]", processedText)
 
-                    self.paster.paste(text: processedText, restoreClipboard: restoreClipboard) { [weak self] in
-                        Task { @MainActor [weak self] in
-                            guard let self = self else { return }
-                            self.phase = .idle
-                            self.statusMessage = completionMessage
-                            NSLog("[VoiceIME] ✅ 全処理完了")
+                        self.paster.paste(text: processedText, restoreClipboard: restoreClipboard) { [weak self] in
+                            Task { @MainActor [weak self] in
+                                guard let self = self else { return }
+                                self.phase = .idle
+                                self.statusMessage = completionMessage
+                                // 入力欄へのペーストが完了したため、ウィンドウを自動で閉じる
+                                if self.settings.floatingPreviewEnabled {
+                                    FloatingPreviewController.shared.hide()
+                                }
+                                NSLog("[VoiceIME] ✅ 入力完了・プレビューウィンドウ消去")
+                            }
                         }
+                    } else {
+                        if self.settings.floatingPreviewEnabled {
+                            FloatingPreviewController.shared.show(text: processedText, notice: "入力先を選択 ➔ ⌘↩")
+                        }
+                        self.phase = .idle
+                        self.statusMessage = completionMessage + " [⌘↩で入力]"
                     }
-                } else {
+
+                case .notEditable(let role, let detail):
+                    // 【明らかに入力不可（デスクトップ、ボタン等）】
+                    // 自動ペーストはスキップして空振りを防止し、ウィンドウを画面に残す
+                    if self.settings.floatingPreviewEnabled {
+                        FloatingPreviewController.shared.show(text: processedText, notice: "入力先を選択 ➔ ⌘↩")
+                    }
                     self.phase = .idle
-                    self.statusMessage = completionMessage + " [⌘↩で入力]"
-                    NSLog("[VoiceIME] ✅ 全処理完了 (プレビュー保留中: ⌘+Enterで入力)")
+                    self.statusMessage = "\(completionMessage) [入力欄未選択: ⌘↩で入力]"
+                    NSLog("[VoiceIME] ⚠️ 非入力要素（\(role): \(detail)）を検出。ペーストを保留しウィンドウを残します")
+
+                case .ambiguous(let role, let detail):
+                    // 【判定微妙・Web/Slack/VSCode等】
+                    // 微妙な場合はウィンドウをそのまま残しつつ、ペーストを試行
+                    if self.settings.floatingPreviewEnabled {
+                        FloatingPreviewController.shared.show(text: processedText, notice: "入力先を選択 ➔ ⌘↩")
+                    }
+
+                    if self.settings.autoPasteEnabled {
+                        self.phase = .pasting
+                        self.statusMessage = "入力中..."
+                        NSLog("[VoiceIME] 🚀 判定微妙（\(role): \(detail)）のためペースト試行＋ウィンドウ保留: [%@]", processedText)
+
+                        self.paster.paste(text: processedText, restoreClipboard: restoreClipboard) { [weak self] in
+                            Task { @MainActor [weak self] in
+                                guard let self = self else { return }
+                                self.phase = .idle
+                                self.statusMessage = completionMessage
+                                NSLog("[VoiceIME] ✅ ペースト試行完了（ウィンドウは保留維持）")
+                            }
+                        }
+                    } else {
+                        self.phase = .idle
+                        self.statusMessage = completionMessage + " [⌘↩で入力]"
+                    }
                 }
 
             } catch {
