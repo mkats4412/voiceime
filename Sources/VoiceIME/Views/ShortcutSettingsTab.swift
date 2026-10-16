@@ -196,6 +196,86 @@ public struct ShortcutSettingsTab: View {
 
                 Divider()
 
+                // セクション: 入力プレビュー・保留ウィンドウ (⌘+Enterでどこでも挿入)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("入力プレビュー・保留ウィンドウ")
+                            .font(.headline)
+                        Spacer()
+                        if settings.floatingPreviewEnabled {
+                            Text("⌘ + Enter で入力")
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.accentColor)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule()
+                                        .fill(Color.accentColor.opacity(0.12))
+                                )
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle(isOn: $settings.floatingPreviewEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("画面下部にプレビュー・保留ウィンドウを表示する")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Text("入力先フィールドを選択し忘れていても安心。生成されたテキストを画面中央下部に保持し、入力先をクリックしてから【⌘ + Enter】で即座に入力できます。")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        if settings.floatingPreviewEnabled {
+                            Divider()
+
+                            Toggle(isOn: $settings.autoPasteEnabled) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("音声入力完了時に直接自動ペーストも行う")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                    Text("オンにすると、フォーカス中のアプリに即時入力しつつ再入力・確認用としてウィンドウを残します。オフにすると、⌘+Enterを押すまで自動入力されなくなります。")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+
+                            Divider()
+
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("自動で閉じる時間:")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                    Text("キー入力や操作をせず放置した場合に閉じるまでの時間")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Spacer()
+
+                                Picker("", selection: $settings.floatingPreviewDuration) {
+                                    Text("30秒").tag(30.0)
+                                    Text("45秒 (推奨)").tag(45.0)
+                                    Text("60秒").tag(60.0)
+                                    Text("自動で閉じない (手動/⌘+Enterのみ)").tag(0.0)
+                                }
+                                .pickerStyle(.menu)
+                                .labelsHidden()
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                    )
+                }
+
+                Divider()
+
                 // セクション2: 音声入力しきい値 (小さな音の除外 / ノイズゲート)
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {

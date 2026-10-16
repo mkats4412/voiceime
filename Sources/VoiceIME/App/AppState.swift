@@ -154,6 +154,7 @@ public final class AppState: ObservableObject {
     public func startRecording() {
         // マイクレベルテストが実行中の場合は停止して競合を防止
         MicrophoneLevelTester.shared.stopTesting()
+        FloatingPreviewController.shared.hide()
 
         permissions.checkPermissions()
         guard permissions.isMicrophoneAuthorized else {
@@ -656,7 +657,7 @@ public final class AppState: ObservableObject {
                 self.lastProcessedText = processedText
 
                 // ==========================================
-                // 5. テキスト自動挿入（ペースト）
+                // 5. テキスト出力（自動ペースト & フローティングプレビュー保留）
                 // ==========================================
                 // キャンセル済みなら、ユーザーの意図しないタイミングでペーストしない
                 if Task.isCancelled {
@@ -665,22 +666,33 @@ public final class AppState: ObservableObject {
                     return
                 }
 
-                self.phase = .pasting
-                self.statusMessage = "入力中..."
-
                 let totalElapsed = CFAbsoluteTimeGetCurrent() - totalStartTime
                 let timeStr = String(format: "%.1f秒", totalElapsed)
                 let completionNotice = fallbackNotices.isEmpty ? "" : " " + fallbackNotices.joined(separator: " ")
                 let completionMessage = "完了 (\(timeStr))" + completionNotice
-                NSLog("[VoiceIME] 🚀 ペースト実行: [%@] (計 %.2f秒, 認識: %.2f秒, 推敲: %.2f秒)", processedText, totalElapsed, whisperDuration, llmDuration)
 
-                self.paster.paste(text: processedText, restoreClipboard: restoreClipboard) { [weak self] in
-                    Task { @MainActor [weak self] in
-                        guard let self = self else { return }
-                        self.phase = .idle
-                        self.statusMessage = completionMessage
-                        NSLog("[VoiceIME] ✅ 全処理完了")
+                // フローティングプレビュー・保留ウィンドウを表示（入力先指定忘れ・再入力対策）
+                if self.settings.floatingPreviewEnabled {
+                    FloatingPreviewController.shared.show(text: processedText)
+                }
+
+                if self.settings.autoPasteEnabled {
+                    self.phase = .pasting
+                    self.statusMessage = "入力中..."
+                    NSLog("[VoiceIME] 🚀 ペースト実行: [%@] (計 %.2f秒, 認識: %.2f秒, 推敲: %.2f秒)", processedText, totalElapsed, whisperDuration, llmDuration)
+
+                    self.paster.paste(text: processedText, restoreClipboard: restoreClipboard) { [weak self] in
+                        Task { @MainActor [weak self] in
+                            guard let self = self else { return }
+                            self.phase = .idle
+                            self.statusMessage = completionMessage
+                            NSLog("[VoiceIME] ✅ 全処理完了")
+                        }
                     }
+                } else {
+                    self.phase = .idle
+                    self.statusMessage = completionMessage + " [⌘↩で入力]"
+                    NSLog("[VoiceIME] ✅ 全処理完了 (プレビュー保留中: ⌘+Enterで入力)")
                 }
 
             } catch {
@@ -706,6 +718,7 @@ public final class AppState: ObservableObject {
 
         // 進行中の文字起こし処理があればキャンセル（URLSession の await も中断される）
         processingTask?.cancel()
+        FloatingPreviewController.shared.hide()
 
         recorder.cancelRecording()
         phase = .idle

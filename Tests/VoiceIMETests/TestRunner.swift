@@ -11,6 +11,7 @@ struct TestRunner {
         testLaunchAtLoginService()
         testLLMService()
         testAudioAnalysisService()
+        testFloatingPreviewSettings()
 
         print("=== All Tests Passed Successfully! ===")
     }
@@ -307,5 +308,36 @@ struct TestRunner {
         }
 
         print("  -> AudioAnalysisService passed!")
+    }
+
+    static func testFloatingPreviewSettings() {
+        print("[TEST] FloatingPreview Settings...")
+        let settings = AppSettings.shared
+
+        // 初期値・型チェック
+        assert(settings.floatingPreviewEnabled == true, "floatingPreviewEnabled should default to true")
+        assert(settings.autoPasteEnabled == true, "autoPasteEnabled should default to true")
+        assert(settings.floatingPreviewDuration >= 30.0, "floatingPreviewDuration should be positive default")
+
+        // 変更と復元のテスト
+        let origFloating = settings.floatingPreviewEnabled
+        let origAuto = settings.autoPasteEnabled
+        let origDuration = settings.floatingPreviewDuration
+
+        settings.floatingPreviewEnabled = false
+        assert(!settings.floatingPreviewEnabled, "floatingPreviewEnabled should update to false")
+
+        settings.autoPasteEnabled = false
+        assert(!settings.autoPasteEnabled, "autoPasteEnabled should update to false")
+
+        settings.floatingPreviewDuration = 60.0
+        assert(settings.floatingPreviewDuration == 60.0, "floatingPreviewDuration should update to 60.0")
+
+        // 元に戻す
+        settings.floatingPreviewEnabled = origFloating
+        settings.autoPasteEnabled = origAuto
+        settings.floatingPreviewDuration = origDuration
+
+        print("  -> FloatingPreview Settings passed!")
     }
 }

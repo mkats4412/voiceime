@@ -118,6 +118,11 @@ public final class AppSettings: ObservableObject {
         static let audioThresholdEnabled = "voiceime_audioThresholdEnabled"
         static let audioThresholdDB = "voiceime_audioThresholdDB"
         static let audioTrimmingEnabled = "voiceime_audioTrimmingEnabled"
+
+        // フローティングプレビュー・保留ウィンドウ設定
+        static let floatingPreviewEnabled = "voiceime_floatingPreviewEnabled"
+        static let autoPasteEnabled = "voiceime_autoPasteEnabled"
+        static let floatingPreviewDuration = "voiceime_floatingPreviewDuration"
     }
 
     private let defaults = UserDefaults.standard
@@ -231,6 +236,21 @@ public final class AppSettings: ObservableObject {
         didSet { defaults.set(audioTrimmingEnabled, forKey: Keys.audioTrimmingEnabled) }
     }
 
+    /// 画面下部にプレビュー・保留ウィンドウを表示（⌘+Enterでどこでも入力）
+    @Published public var floatingPreviewEnabled: Bool {
+        didSet { defaults.set(floatingPreviewEnabled, forKey: Keys.floatingPreviewEnabled) }
+    }
+
+    /// 録音完了時に直前のアクティブアプリへ直接自動入力（ペースト）を試みるフラグ
+    @Published public var autoPasteEnabled: Bool {
+        didSet { defaults.set(autoPasteEnabled, forKey: Keys.autoPasteEnabled) }
+    }
+
+    /// プレビューウィンドウの自動非表示秒数（0の場合は手動で閉じるまで表示）
+    @Published public var floatingPreviewDuration: Double {
+        didSet { defaults.set(floatingPreviewDuration, forKey: Keys.floatingPreviewDuration) }
+    }
+
     // MARK: - プロパティ連携ヘルパー
 
     public var currentProvider: APIProvider {
@@ -336,6 +356,10 @@ public final class AppSettings: ObservableObject {
         let savedThreshold = defaults.object(forKey: Keys.audioThresholdDB) as? Float
         self.audioThresholdDB = savedThreshold ?? -32.0
         self.audioTrimmingEnabled = defaults.object(forKey: Keys.audioTrimmingEnabled) != nil ? defaults.bool(forKey: Keys.audioTrimmingEnabled) : true
+
+        self.floatingPreviewEnabled = defaults.object(forKey: Keys.floatingPreviewEnabled) != nil ? defaults.bool(forKey: Keys.floatingPreviewEnabled) : true
+        self.autoPasteEnabled = defaults.object(forKey: Keys.autoPasteEnabled) != nil ? defaults.bool(forKey: Keys.autoPasteEnabled) : true
+        self.floatingPreviewDuration = defaults.object(forKey: Keys.floatingPreviewDuration) as? Double ?? 45.0
 
         // Load dictionary rules with auto-migration (単語破壊の原因となる古いまる・てんルールを自動除去)
         if let data = defaults.data(forKey: Keys.dictionaryRules),
