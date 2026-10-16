@@ -78,15 +78,9 @@ echo "Application created at: ${APP_BUNDLE}"
 echo "-> 署名検証:"
 codesign -d -r- "${APP_BUNDLE}" 2>&1 | head -n 3
 
-# オプション: --install 引数があればアプリケーションフォルダに配置
+# オプション: --install 引数があればアプリケーションフォルダに配置 (第2引数または環境変数 VOICEIME_INSTALL_DIR で指定可能、デフォルトは /Applications)
 if [[ "${1:-}" == "--install" ]]; then
-    if [[ -n "${2:-}" ]]; then
-        DEST_DIR="$2"
-    elif [[ -d "/Volumes/ExDrive/Applications" ]]; then
-        DEST_DIR="/Volumes/ExDrive/Applications"
-    else
-        DEST_DIR="/Applications"
-    fi
+    DEST_DIR="${2:-${VOICEIME_INSTALL_DIR:-/Applications}}"
     echo "-> ${DEST_DIR} にインストール中..."
     mkdir -p "${DEST_DIR}"
     rm -rf "${DEST_DIR}/${APP_NAME}.app"
