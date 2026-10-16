@@ -18,11 +18,14 @@ public final class SettingsWindowController: NSObject, NSWindowDelegate {
     // delegate を設定することで AppKit のウィンドウリスト管理を明確化し、
     // Instruments でリークとして誤検出されるのを防ぐ（挙動は維持）。
     public func windowWillClose(_ notification: Notification) {
-        // 再利用キャッシュのため nil 化しない。必要ならここで window = nil にして
-        // 毎回再生成する省メモリ方式にも切り替え可能。
+        // 設定ウィンドウが閉じられたらメニューバー常駐（Dock非表示）に戻す
+        NSApp.setActivationPolicy(.accessory)
     }
 
     public func showWindow() {
+        // ウィンドウを前面に出すため一時的に regular アプリ化（Dockとメニューバーを活性化）
+        NSApp.setActivationPolicy(.regular)
+
         if let existingWindow = window {
             NSApp.activate(ignoringOtherApps: true)
             existingWindow.makeKeyAndOrderFront(nil)

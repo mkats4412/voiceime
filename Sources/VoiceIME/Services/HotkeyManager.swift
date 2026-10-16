@@ -53,10 +53,12 @@ public final class HotkeyManager {
 
         if status == noErr {
             self.hotKeyRef = newRef
+            NSLog("[VoiceIME] ✅ ホットキー登録成功 (keyCode: %d, modifiers: %d)", keyCode, modifiers)
             return true
         } else {
             self.onKeyDown = nil
             self.onKeyUp = nil
+            NSLog("[VoiceIME] ❌ ホットキー登録失敗 (OSStatus: %d, keyCode: %d)", status, keyCode)
             return false
         }
     }

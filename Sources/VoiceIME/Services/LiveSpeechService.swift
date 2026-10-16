@@ -17,7 +17,7 @@ public final class LiveSpeechService: ObservableObject {
     private var onTextUpdate: ((String) -> Void)?
 
     private init() {
-        requestAuthorizationIfNeeded()
+        // 起動時ブロッキングを防ぐため、初回録音時に非同期で権限要求を行う
     }
 
     /// 音声認識の権限をリクエスト
@@ -141,28 +141,25 @@ public final class LiveSpeechService: ObservableObject {
 
         guard isJapanese else { return formatted }
 
-        // 文末表現の後に続く空白・発話の区切りに「。」を補完
-        let sentenceEndings = [
-            "です", "ます", "でした", "ました", "ません", "ませんでした",
-            "ですね", "ですよ", "でしょうか", "ございます", "ございました",
-            "と思います", "と考えます", "とのことです"
-        ]
-
-        for ending in sentenceEndings {
-            // 文末表現の直後に空白がある場合、句点「。」に置換
-            formatted = formatted.replacingOccurrences(of: "\(ending) ", with: "\(ending)。")
-            formatted = formatted.replacingOccurrences(of: "\(ending)　", with: "\(ending)。")
+        // 1. 文末表現の直後に句点「。」を補完（スペースの有無を問わず、直後に次の文が始まっている場合）
+        let endingsPattern = "(です|ます|でした|ました|ません|ませんでした|ですね|ですよ|でしょうか|ございます|ございました|と思います|と考えます|とのことです)"
+        if let regex1 = try? NSRegularExpression(pattern: "\(endingsPattern)(\\s+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))", options: []) {
+            let range = NSRange(location: 0, length: (formatted as NSString).length)
+            formatted = regex1.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1。")
         }
 
-        // 接続詞・節の切れ目の空白を読点「、」に補正
-        let clauseEndings = [
-            "ですが ", "ですので ", "ですから ", "けれども ", "けれど ",
-            "ただし ", "一方で ", "また ", "そして "
-        ]
-        for ending in clauseEndings {
-            let clean = ending.trimmingCharacters(in: .whitespaces)
-            formatted = formatted.replacingOccurrences(of: ending, with: "\(clean)、")
+        // 2. 接続詞・節の切れ目の読点「、」
+        let clausePattern = "(ですが|ですので|ですから|けれども|けれど|ただし|一方で|また|そして)(\\s+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))"
+        if let regex2 = try? NSRegularExpression(pattern: clausePattern, options: []) {
+            let range = NSRange(location: 0, length: (formatted as NSString).length)
+            formatted = regex2.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1、")
         }
+
+        // 連続した句読点の重複（例: 「。。」や「、、」）をクリーンアップ
+        formatted = formatted.replacingOccurrences(of: "。。", with: "。")
+        formatted = formatted.replacingOccurrences(of: "、、", with: "、")
+        formatted = formatted.replacingOccurrences(of: "、。", with: "。")
+        formatted = formatted.replacingOccurrences(of: "。、", with: "。")
 
         return formatted
     }
