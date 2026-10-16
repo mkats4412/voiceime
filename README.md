@@ -73,10 +73,7 @@ open ./build/VoiceIME.app       # /Applications へは --install 付与
 #### 単体テストの実行
 ```bash
 cd voiceime
-swiftc Sources/VoiceIME/Models/*.swift \
-       Sources/VoiceIME/Services/*.swift \
-       Tests/VoiceIMETests/TestRunner.swift \
-       -o /tmp/test_runner && /tmp/test_runner
+./scripts/run_tests.sh
 ```
 
 ---

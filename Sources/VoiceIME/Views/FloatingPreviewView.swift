@@ -4,7 +4,6 @@ import AppKit
 @MainActor
 public struct FloatingPreviewView: View {
     @ObservedObject var controller: FloatingPreviewController
-    @FocusState private var isEditorFocused: Bool
 
     public init(controller: FloatingPreviewController? = nil) {
         self.controller = controller ?? FloatingPreviewController.shared
@@ -69,14 +68,14 @@ public struct FloatingPreviewView: View {
 
                 // 閉じるボタン
                 Button {
-                    controller.hide()
+                    controller.cancel()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary.opacity(0.8))
                         .font(.system(size: 14))
                 }
                 .buttonStyle(.plain)
-                .help("プレビューを閉じる (Esc)")
+                .help("プレビューを閉じてクリップボードを消去 (Esc)")
             }
 
             // テキスト編集・表示エリア
@@ -84,25 +83,24 @@ public struct FloatingPreviewView: View {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(NSColor.controlBackgroundColor).opacity(0.65))
 
-                if controller.phase == .liveRecording && controller.currentText.isEmpty {
-                    Text("話した言葉がリアルタイムでここに表示されます...")
+                if controller.currentText.isEmpty {
+                    Text(controller.phase == .liveRecording ? "話した言葉がリアルタイムでここに表示されます..." : "")
                         .font(.system(size: 13, weight: .regular))
                         .foregroundColor(.secondary.opacity(0.6))
                         .padding(10)
                 }
 
-                TextEditor(text: $controller.currentText)
-                    .focused($isEditorFocused)
-                    .font(.system(size: 13.5, weight: .regular))
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 52, maxHeight: 140)
-                    .padding(6)
+                AutoScrollingTextView(
+                    text: $controller.currentText,
+                    isEditable: controller.phase == .ready
+                )
+                .frame(minHeight: 56, maxHeight: 150)
+                .padding(4)
             }
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(
-                        controller.phase == .liveRecording ? Color.red.opacity(0.4) :
-                        (isEditorFocused ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.1)),
+                        controller.phase == .liveRecording ? Color.red.opacity(0.4) : Color.primary.opacity(0.12),
                         lineWidth: 1
                     )
             )
@@ -179,5 +177,78 @@ public struct FloatingPreviewView: View {
                 .stroke(controller.phase == .liveRecording ? Color.red.opacity(0.3) : Color.primary.opacity(0.12), lineWidth: 1)
         )
         .padding(10)
+    }
+}
+
+/// 音声入力中にテキストが更新されるたびに最下部へ自動スクロールする TextView
+struct AutoScrollingTextView: NSViewRepresentable {
+    @Binding var text: String
+    var isEditable: Bool
+    var font: NSFont = .systemFont(ofSize: 13.5)
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+
+        let contentSize = scrollView.contentSize
+        let textStorage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        textStorage.addLayoutManager(layoutManager)
+        let textContainer = NSTextContainer(containerSize: NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude))
+        textContainer.widthTracksTextView = true
+        layoutManager.addTextContainer(textContainer)
+
+        let textView = NSTextView(frame: NSRect(origin: .zero, size: contentSize), textContainer: textContainer)
+        textView.minSize = NSSize(width: 0, height: contentSize.height)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.drawsBackground = false
+        textView.font = font
+        textView.textColor = .labelColor
+        textView.delegate = context.coordinator
+        textView.isEditable = isEditable
+        textView.isSelectable = true
+        textView.textContainerInset = NSSize(width: 4, height: 6)
+
+        scrollView.documentView = textView
+        context.coordinator.textView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        guard let textView = nsView.documentView as? NSTextView else { return }
+        textView.isEditable = isEditable
+
+        if textView.string != text {
+            textView.string = text
+            // 音声入力中やテキスト追加時に最新の最下行へ自動スクロール
+            DispatchQueue.main.async {
+                textView.scrollToEndOfDocument(nil)
+            }
+        }
+    }
+
+    class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: AutoScrollingTextView
+        weak var textView: NSTextView?
+
+        init(_ parent: AutoScrollingTextView) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            self.parent.text = textView.string
+        }
     }
 }

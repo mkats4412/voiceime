@@ -43,6 +43,25 @@ public final class AppState: ObservableObject {
     }
     @Published public var errorMessage: String? = nil
     @Published public var lastFallbackRecord: FallbackRecord? = nil
+    @Published public var isRecentTextCopied: Bool = false
+
+    private var copyFeedbackTimer: Timer?
+
+    /// 直前の入力テキストをクリップボードにコピー
+    public func copyRecentProcessedText() {
+        guard !lastProcessedText.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(lastProcessedText, forType: .string)
+
+        isRecentTextCopied = true
+        copyFeedbackTimer?.invalidate()
+        copyFeedbackTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.isRecentTextCopied = false
+            }
+        }
+    }
 
     private let settings = AppSettings.shared
     private let keychain = KeychainService.shared
@@ -755,20 +774,28 @@ public final class AppState: ObservableObject {
                     }
 
                 case .notEditable(let role, let detail):
-                    // 【明らかに入力不可（デスクトップ、ボタン等）】
-                    // 自動ペーストはスキップして空振りを防止し、ウィンドウを画面に残す
+                    // 【明らかに入力不可（デスクトップ、ボタン、ブラウザWebページ全体等）】
+                    // 1. 自動ペーストはスキップして空振りを防止
+                    // 2. セキュリティ保護: 最大45秒間だけ一時クリップボードに保持（45秒後またはウィンドウ消去時に自動復元・消去）
+                    let tempDuration = self.settings.floatingPreviewDuration > 0 ? min(self.settings.floatingPreviewDuration, 45.0) : 45.0
+                    FloatingPreviewController.shared.setTemporaryClipboard(text: processedText, duration: tempDuration)
+
+                    // 3. ウィンドウを画面に残して案内
                     if self.settings.floatingPreviewEnabled {
-                        FloatingPreviewController.shared.show(text: processedText, notice: "入力先を選択 ➔ ⌘↩")
+                        FloatingPreviewController.shared.show(text: processedText, notice: "45秒間コピー有効: ⌘V または ⌘↩")
                     }
                     self.phase = .idle
-                    self.statusMessage = "\(completionMessage) [入力欄未選択: ⌘↩で入力]"
-                    NSLog("[VoiceIME] ⚠️ 非入力要素（\(role): \(detail)）を検出。ペーストを保留しウィンドウを残します")
+                    self.statusMessage = "\(completionMessage) [45秒限定コピー: ⌘V/⌘↩で入力]"
+                    NSLog("[VoiceIME] ⚠️ 非入力要素（\(role): \(detail)）を検出。45秒限定でクリップボードに退避しウィンドウを残します")
 
                 case .ambiguous(let role, let detail):
                     // 【判定微妙・Web/Slack/VSCode等】
-                    // 微妙な場合はウィンドウをそのまま残しつつ、ペーストを試行
+                    // セキュリティ保護: 最大45秒間だけ一時クリップボードに保持
+                    let tempDuration = self.settings.floatingPreviewDuration > 0 ? min(self.settings.floatingPreviewDuration, 45.0) : 45.0
+                    FloatingPreviewController.shared.setTemporaryClipboard(text: processedText, duration: tempDuration)
+
                     if self.settings.floatingPreviewEnabled {
-                        FloatingPreviewController.shared.show(text: processedText, notice: "入力先を選択 ➔ ⌘↩")
+                        FloatingPreviewController.shared.show(text: processedText, notice: "45秒間コピー有効: ⌘V または ⌘↩")
                     }
 
                     if self.settings.autoPasteEnabled {

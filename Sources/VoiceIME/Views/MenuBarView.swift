@@ -211,21 +211,43 @@ public struct MenuBarView: View {
                         }
 
                         Spacer()
-                        if settings.llmRefinementEnabled && settings.apiMode == .transcriptions {
-                            Text(settings.refinementStyle.shortTitle + "モード")
-                                .font(.system(size: 9))
-                                .foregroundColor(.secondary)
+
+                        Button(action: {
+                            appState.copyRecentProcessedText()
+                        }) {
+                            HStack(spacing: 2) {
+                                Image(systemName: appState.isRecentTextCopied ? "checkmark" : "doc.on.doc")
+                                    .font(.system(size: 8.5))
+                                Text(appState.isRecentTextCopied ? "コピー済" : "コピー")
+                                    .font(.system(size: 8.5, weight: .medium))
+                            }
+                            .foregroundColor(appState.isRecentTextCopied ? .green : .accentColor)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1.5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(appState.isRecentTextCopied ? Color.green.opacity(0.15) : Color.accentColor.opacity(0.12))
+                            )
                         }
+                        .buttonStyle(.plain)
+                        .help("クリップボードにコピー")
                     }
-                    Text(appState.lastProcessedText)
-                        .font(.system(size: 11))
-                        .lineLimit(2)
-                        .padding(5)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.secondary.opacity(0.08))
-                        )
+
+                    Button(action: {
+                        appState.copyRecentProcessedText()
+                    }) {
+                        Text(appState.lastProcessedText)
+                            .font(.system(size: 11))
+                            .lineLimit(3)
+                            .padding(5)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color.secondary.opacity(0.08))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .help("クリックでクリップボードにコピー")
                 }
                 .padding(.horizontal, 2)
             }

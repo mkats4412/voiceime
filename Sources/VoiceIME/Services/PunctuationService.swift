@@ -19,32 +19,33 @@ public final class PunctuationService {
 
         guard isJapanese else { return formatted }
 
-        // 0. 「〜です。よね」「〜ます。よね」など、文末表現と終助詞が句読点や空白で誤って分断されたケースを最優先で修復
+        // 0. 「〜です。よね」「〜でしょうか？ね」「〜ですか？ね」など、文末表現と終助詞が句読点や空白で誤って分断されたケースを最優先で修復
         // 例: 「あるんです。よね」➔「あるんですよね」
-        // 例: 「あるんです よね」➔「あるんですよね」
-        // 例: 「あるんです、よね」➔「あるんですよね」
-        let brokenParticlePattern = "([でまし]す|[でま]した|ません|ございま[すした])([。、]?[ 　]*)(よね|よな|よ|ねえ|ねー|ね|かな|かね|し|もん|もの|さ)($|\\s+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))"
+        // 例: 「どうでしょうか？ねぇ」➔「どうでしょうかねぇ」
+        // 例: 「どうでしょうか？ね？」➔「どうでしょうかね？」
+        let brokenParticlePattern = "([でまし]す|[でま]した|ません|ございま[すした]|でしょうか|ですか|ますか|でしたか|ましたか)([。、？！]?[ 　]*)(よね|よな|よ|ねえ|ねー|ねぇ|ね|かな|かね|し|もん|もの|さ)($|[。、？！]|[ 　\t]+|(?=[\\nあ-んア-ン一-龥a-zA-Z0-9]))"
         if let regexBP = try? NSRegularExpression(pattern: brokenParticlePattern, options: []) {
             let range = NSRange(location: 0, length: (formatted as NSString).length)
             formatted = regexBP.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1$3$4")
         }
 
         // 2. 挨拶表現（挨拶の直後に次の文が続く場合は読点「、」）
-        let greetingPattern = "(おはようございます|こんにちは|こんばんは|お疲れ様です|お疲れ様でした)(\\s+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))"
+        let greetingPattern = "(おはようございます|こんにちは|こんばんは|お疲れ様です|お疲れ様でした)([ 　\t]+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))"
         if let regexG = try? NSRegularExpression(pattern: greetingPattern, options: []) {
             let range = NSRange(location: 0, length: (formatted as NSString).length)
             formatted = regexG.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1、")
         }
 
         // 3. 接続詞・節の切れ目の読点「、」
-        let clausePattern = "(ですが|ですので|ですから|けれども|けれど|ただし|一方で|また|そして)(\\s+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))"
+        let clausePattern = "(ですが|ですので|ですから|けれども|けれど|ただし|一方で|また|そして)([ 　\t]+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))"
         if let regexC = try? NSRegularExpression(pattern: clausePattern, options: []) {
             let range = NSRange(location: 0, length: (formatted as NSString).length)
             formatted = regexC.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1、")
         }
 
-        // 4. 疑問・確認の文末表現（「でしょうか」「ですか」「ますか」など）➔ 疑問符「？」
-        let questionPattern = "(でしょうか|ですか|ますか|でしょうかね)($|\\s+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))"
+        // 4. 疑問・確認の文末表現（「でしょうか」「ですか」「ますか」など、終助詞「ねぇ」「ねー」「ね」「よ」「かな」等も含む）➔ 疑問符「？」
+        // ※「でしょうか」の後ろに終助詞がある場合は、終助詞までを一体として捉え、決して途中に「？」を挟まない
+        let questionPattern = "((?:でしょうか|ですか|ますか|でしたか|ましたか)(?:ね[えーぇ]?|よ[おー]?|よね[えーぇ]?|かな)?)(?![がからけどのでのにしたらたりなら])(?![ねよさわぞぜかもーえぇ])($|[ 　\t]+|(?=[\\nあ-んア-ン一-龥a-zA-Z0-9]))"
         if let regexQ = try? NSRegularExpression(pattern: questionPattern, options: []) {
             let range = NSRange(location: 0, length: (formatted as NSString).length)
             formatted = regexQ.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1？")
@@ -70,7 +71,7 @@ public final class PunctuationService {
             "です", "ます"
         ]
 
-        let endingsPattern = "(\(fullEndings.joined(separator: "|")))(?![がからけどのでのにしたらたりならよねかもわぞぜさ])($|\\s+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))"
+        let endingsPattern = "(\(fullEndings.joined(separator: "|")))(?![がからけどのでのにしたらたりならよねかもわぞぜさ])($|[ 　\t]+|(?=[\\nあ-んア-ン一-龥a-zA-Z0-9]))"
         if let regexE = try? NSRegularExpression(pattern: endingsPattern, options: []) {
             let range = NSRange(location: 0, length: (formatted as NSString).length)
             formatted = regexE.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1。")
@@ -86,8 +87,8 @@ public final class PunctuationService {
     public func cleanupDuplicatePunctuation(_ text: String) -> String {
         var result = text
 
-        // 「です。よね」「ます。よね」等の誤った句点挿入の修復
-        let brokenParticlePattern = "([でまし]す|[でま]した|ません|ございま[すした])([。、][ 　]*)(よね|よな|よ|ねえ|ねー|ね|かな|かね|し|もん|もの|さ)"
+        // 「です。よね」「ます。よね」「でしょうか？ね」等の誤った句読点挿入の修復
+        let brokenParticlePattern = "([でまし]す|[でま]した|ません|ございま[すした]|でしょうか|ですか|ますか|でしたか|ましたか)([。、？！][ 　]*)(よね|よな|よ|ねえ|ねー|ねぇ|ね|かな|かね|し|もん|もの|さ)"
         if let regexBP = try? NSRegularExpression(pattern: brokenParticlePattern, options: []) {
             let range = NSRange(location: 0, length: (result as NSString).length)
             result = regexBP.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1$3")
@@ -98,6 +99,8 @@ public final class PunctuationService {
         result = result.replacingOccurrences(of: "、、", with: "、")
         result = result.replacingOccurrences(of: "、。", with: "。")
         result = result.replacingOccurrences(of: "。、", with: "。")
+        result = result.replacingOccurrences(of: "？？", with: "？")
+        result = result.replacingOccurrences(of: "？？", with: "？")
         result = result.replacingOccurrences(of: "？。", with: "？")
         result = result.replacingOccurrences(of: "。？", with: "？")
         result = result.replacingOccurrences(of: "！。", with: "！")
@@ -111,7 +114,23 @@ public final class PunctuationService {
             result = regexSpace.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1")
         }
 
-        // 末尾が終助詞（よね、ね、よ等）で句点がない場合は補完
+        // 疑問表現＋終助詞の末尾に句読点がない場合は疑問符「？」を補完
+        let questionEndingParticles = [
+            "でしょうかねぇ", "でしょうかねー", "でしょうかねえ", "でしょうかね",
+            "どうですかねぇ", "どうですかねー", "どうですかねえ", "どうですかね",
+            "ですかねぇ", "ですかねー", "ですかねえ", "ですかね",
+            "ますかねぇ", "ますかねー", "ますかねえ", "ますかね",
+            "でしたかねぇ", "でしたかねー", "でしたかねえ", "でしたかね",
+            "ましたかねぇ", "ましたかねー", "ましたかねえ", "ましたかね"
+        ]
+        for qep in questionEndingParticles {
+            if result.hasSuffix(qep) {
+                result += "？"
+                break
+            }
+        }
+
+        // 末尾が一般終助詞（よね、ね、よ等）で句点がない場合は補完
         let endingParticles = ["ですよね", "ますよね", "ですね", "ですよ", "ますね", "ますよ", "でしたよね", "ましたよね", "ませんよね"]
         for ep in endingParticles {
             if result.hasSuffix(ep) {

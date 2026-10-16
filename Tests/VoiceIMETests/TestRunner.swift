@@ -402,6 +402,19 @@ struct TestRunner {
         let outYone4 = PunctuationService.shared.format(text: inYone4, isJapanese: true)
         assert(outYone4 == "そうですよね。明日確認します。", "Sentence ending with next clause failed: got \(outYone4)")
 
+        // 8. 「どうでしょうかねぇ」等の疑問文末終助詞の結合＆分断修復テスト
+        let inQ1 = "どうでしょうかねぇ"
+        let outQ1 = PunctuationService.shared.format(text: inQ1, isJapanese: true)
+        assert(outQ1 == "どうでしょうかねぇ？", "Question with particle ending failed: got \(outQ1)")
+
+        let inQ2 = "どうでしょうか？ねぇ" // 途中で誤って分断されたケースの修復
+        let outQ2 = PunctuationService.shared.format(text: inQ2, isJapanese: true)
+        assert(outQ2 == "どうでしょうかねぇ？", "Broken question particle repair failed: got \(outQ2)")
+
+        let inQ3 = "どうでしょうか？ね？" // 途中で二重に？が入ったケースの修復
+        let outQ3 = PunctuationService.shared.format(text: inQ3, isJapanese: true)
+        assert(outQ3 == "どうでしょうかね？", "Double question particle repair failed: got \(outQ3)")
+
         print("  -> Live Punctuation Formatting & PunctuationService passed!")
     }
 }

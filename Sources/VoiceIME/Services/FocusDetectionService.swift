@@ -53,7 +53,7 @@ public final class FocusDetectionService {
         guard CFGetTypeID(element) == AXUIElementGetTypeID() else {
             return .ambiguous(role: "UnknownType", detail: "UIElement型不一致")
         }
-        let axElement = unsafeBitCast(element, to: AXUIElement.self)
+        let axElement = element as! AXUIElement
 
         // 1. 要素の Role（役割）を取得
         var roleRef: CFTypeRef?
@@ -77,21 +77,15 @@ public final class FocusDetectionService {
             return .editableText(role: role, detail: subrole.isEmpty ? "標準テキスト欄" : subrole)
         }
 
-        // 4. キャレット（入力カーソル）やテキスト選択範囲が存在するかを検査
-        var selectedRangeRef: CFTypeRef?
-        if AXUIElementCopyAttributeValue(axElement, "AXSelectedTextRange" as CFString, &selectedRangeRef) == .success {
-            return .editableText(role: role, detail: "キャレット・選択範囲検出")
+        // 4. contenteditable 属性を持つリッチエディタ要素
+        if subrole == "AXContentEditable" {
+            return .editableText(role: role, detail: "コンテンツ編集可能領域 (contenteditable)")
         }
 
-        // 5. テキスト値の変更可能性 (kAXValueAttribute が変更可能かどうか)
-        var isSettable: DarwinBoolean = false
-        if AXUIElementIsAttributeSettable(axElement, kAXValueAttribute as CFString, &isSettable) == .success, isSettable.boolValue {
-            // テキスト値が書き換え可能なUI要素
-            return .editableText(role: role, detail: "値書き換え可能属性あり")
-        }
-
-        // 6. 明らかに入力不可能な Role
+        // 5. 明らかに入力不可能な Role (ブラウザのWebページ全体 AXWebArea を含む)
         let nonEditableRoles: Set<String> = [
+            "AXWebArea",      // ブラウザのWebページ全体（ページ内のテキスト入力欄が未選択の状態）
+            "AXStaticText",   // 静的テキストラベル
             "AXButton",
             "AXRadioButton",
             "AXCheckBox",
@@ -113,10 +107,24 @@ public final class FocusDetectionService {
         ]
 
         if nonEditableRoles.contains(role) {
-            return .notEditable(role: role, detail: subrole.isEmpty ? "非テキストUI要素" : subrole)
+            let detail = (role == "AXWebArea") ? "ブラウザWebページ全体 (入力欄未選択)" : (subrole.isEmpty ? "非テキストUI要素" : subrole)
+            return .notEditable(role: role, detail: detail)
         }
 
-        // 7. それ以外 (AXGroup, AXWebArea, AXScrollArea 等) は Electron や Web アプリの可能性があるため "ambiguous"
+        // 6. テキスト値の変更可能性 (kAXValueAttribute が変更可能かどうか)
+        var isSettable: DarwinBoolean = false
+        if AXUIElementIsAttributeSettable(axElement, kAXValueAttribute as CFString, &isSettable) == .success, isSettable.boolValue {
+            // テキスト値が書き換え可能なUI要素
+            return .editableText(role: role, detail: "値書き換え可能属性あり")
+        }
+
+        // 7. キャレット（入力カーソル）または編集可能祖先 (AXEditableAncestor) の検査
+        var editableAncestorRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(axElement, "AXEditableAncestor" as CFString, &editableAncestorRef) == .success, editableAncestorRef != nil {
+            return .editableText(role: role, detail: "編集可能祖先(Web/エディタ)")
+        }
+
+        // 8. それ以外 (AXGroup, AXScrollArea 等) は Electron や Web アプリの可能性があるため "ambiguous"
         return .ambiguous(role: role, detail: subrole.isEmpty ? "独自描画・Web領域" : subrole)
     }
 }
