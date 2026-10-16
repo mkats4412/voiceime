@@ -34,7 +34,8 @@ public final class LiveSpeechService: ObservableObject {
     ) {
         stopLiveRecognition()
 
-        let localeIdentifier = languageCode.lowercased().starts(with: "en") ? "en-US" : "ja-JP"
+        let isJapanese = !languageCode.lowercased().starts(with: "en")
+        let localeIdentifier = isJapanese ? "ja-JP" : "en-US"
         let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier))
 
         guard let recognizer = recognizer, recognizer.isAvailable else {
@@ -58,10 +59,16 @@ public final class LiveSpeechService: ObservableObject {
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
+
+        // 句読点（。、！？）の自動付与を有効化 (macOS 13.0+)
+        if #available(macOS 13.0, *) {
+            request.addsPunctuation = true
+        }
+
         // オンデバイス認識が可能なら優先して低遅延化
         if #available(macOS 10.15, *) {
             if recognizer.supportsOnDeviceRecognition {
-                request.requiresOnDeviceRecognition = false // 精度向上のため柔軟に
+                request.requiresOnDeviceRecognition = false // 精度向上のため柔軟に設定
             }
         }
 
@@ -73,13 +80,14 @@ public final class LiveSpeechService: ObservableObject {
                 guard let self = self, self.isRunning else { return }
 
                 if let result = result {
-                    let text = result.bestTranscription.formattedString
-                    self.partialText = text
-                    self.onTextUpdate?(text)
+                    let rawText = result.bestTranscription.formattedString
+                    // リアルタイム句読点補正および辞書置換を適用
+                    let formattedText = Self.formatLivePunctuation(text: rawText, isJapanese: isJapanese)
+                    self.partialText = formattedText
+                    self.onTextUpdate?(formattedText)
                 }
 
                 if let error = error {
-                    // キャンセル等のエラーは通常フロー
                     let nsError = error as NSError
                     if nsError.domain != "kAFAssistantErrorDomain" || nsError.code != 203 {
                         NSLog("[VoiceIME] ℹ️ SFSpeechRecognitionTask 停止/通知: %@", error.localizedDescription)
@@ -95,7 +103,7 @@ public final class LiveSpeechService: ObservableObject {
         do {
             try engine.start()
             self.isRunning = true
-            NSLog("[VoiceIME] 🎙️ リアルタイム音声認識エンジン開始 (%@)", localeIdentifier)
+            NSLog("[VoiceIME] 🎙️ リアルタイム音声認識エンジン開始 (%@, addsPunctuation: true)", localeIdentifier)
         } catch {
             NSLog("[VoiceIME] ⚠️ AVAudioEngine 開始失敗: %@", error.localizedDescription)
             stopLiveRecognition()
@@ -119,5 +127,43 @@ public final class LiveSpeechService: ObservableObject {
             onTextUpdate = nil
             NSLog("[VoiceIME] ⏹️ リアルタイム音声認識エンジン停止")
         }
+    }
+
+    /// リアルタイム表示用の句読点補完と辞書置換
+    nonisolated public static func formatLivePunctuation(text: String, isJapanese: Bool) -> String {
+        guard !text.isEmpty else { return text }
+
+        // 辞書ルールのリアルタイム適用（例: 「改行」➔ \n）
+        var formatted = DictionaryService.shared.apply(
+            text: text,
+            rules: AppSettings.shared.dictionaryRules
+        )
+
+        guard isJapanese else { return formatted }
+
+        // 文末表現の後に続く空白・発話の区切りに「。」を補完
+        let sentenceEndings = [
+            "です", "ます", "でした", "ました", "ません", "ませんでした",
+            "ですね", "ですよ", "でしょうか", "ございます", "ございました",
+            "と思います", "と考えます", "とのことです"
+        ]
+
+        for ending in sentenceEndings {
+            // 文末表現の直後に空白がある場合、句点「。」に置換
+            formatted = formatted.replacingOccurrences(of: "\(ending) ", with: "\(ending)。")
+            formatted = formatted.replacingOccurrences(of: "\(ending)　", with: "\(ending)。")
+        }
+
+        // 接続詞・節の切れ目の空白を読点「、」に補正
+        let clauseEndings = [
+            "ですが ", "ですので ", "ですから ", "けれども ", "けれど ",
+            "ただし ", "一方で ", "また ", "そして "
+        ]
+        for ending in clauseEndings {
+            let clean = ending.trimmingCharacters(in: .whitespaces)
+            formatted = formatted.replacingOccurrences(of: ending, with: "\(clean)、")
+        }
+
+        return formatted
     }
 }

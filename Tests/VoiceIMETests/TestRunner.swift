@@ -12,6 +12,7 @@ struct TestRunner {
         testLLMService()
         testAudioAnalysisService()
         testFloatingPreviewSettings()
+        testLivePunctuationFormatting()
 
         print("=== All Tests Passed Successfully! ===")
     }
@@ -339,5 +340,26 @@ struct TestRunner {
         settings.floatingPreviewDuration = origDuration
 
         print("  -> FloatingPreview Settings passed!")
+    }
+
+    static func testLivePunctuationFormatting() {
+        print("[TEST] Live Punctuation Formatting...")
+
+        // 文末表現後の空白が句点「。」に変換されること
+        let in1 = "本日の作業は完了しました 明日もよろしくお願いします"
+        let out1 = LiveSpeechService.formatLivePunctuation(text: in1, isJapanese: true)
+        assert(out1 == "本日の作業は完了しました。明日もよろしくお願いします", "Sentence ending replacement failed: got \(out1)")
+
+        // 接続詞後の空白が読点「、」に変換されること
+        let in2 = "ですが 次のタスクに移ります"
+        let out2 = LiveSpeechService.formatLivePunctuation(text: in2, isJapanese: true)
+        assert(out2 == "ですが、次のタスクに移ります", "Clause ending replacement failed: got \(out2)")
+
+        // 辞書ルール（改行）が適用されること
+        let in3 = "こんにちは改行お元気ですか"
+        let out3 = LiveSpeechService.formatLivePunctuation(text: in3, isJapanese: true)
+        assert(out3 == "こんにちは\nお元気ですか", "Dictionary rule in live formatting failed: got \(out3)")
+
+        print("  -> Live Punctuation Formatting passed!")
     }
 }
