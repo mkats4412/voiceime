@@ -380,6 +380,23 @@ struct TestRunner {
         )
         assert(aligned == liveRef, "Align punctuation failed: got \(aligned), expected \(liveRef)")
 
+        // 7. 「〜ですよね」の分断防止および「〜です。よね」の自動修復テスト
+        let inYone1 = "まだ少し問題があるんですよね"
+        let outYone1 = PunctuationService.shared.format(text: inYone1, isJapanese: true)
+        assert(outYone1 == "まだ少し問題があるんですよね。", "Compound ending failed: got \(outYone1)")
+
+        let inYone2 = "まだ少し問題があるんです。よね" // 誤って分断されたケースの修復
+        let outYone2 = PunctuationService.shared.format(text: inYone2, isJapanese: true)
+        assert(outYone2 == "まだ少し問題があるんですよね。", "Broken particle repair failed: got \(outYone2)")
+
+        let inYone3 = "まだ少し問題があるんです よね" // 空白で分断されたケースの修復
+        let outYone3 = PunctuationService.shared.format(text: inYone3, isJapanese: true)
+        assert(outYone3 == "まだ少し問題があるんですよね。", "Space separated particle repair failed: got \(outYone3)")
+
+        let inYone4 = "そうですよね 明日確認します"
+        let outYone4 = PunctuationService.shared.format(text: inYone4, isJapanese: true)
+        assert(outYone4 == "そうですよね。明日確認します。", "Sentence ending with next clause failed: got \(outYone4)")
+
         print("  -> Live Punctuation Formatting & PunctuationService passed!")
     }
 }

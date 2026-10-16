@@ -19,6 +19,16 @@ public final class PunctuationService {
 
         guard isJapanese else { return formatted }
 
+        // 0. 「〜です。よね」「〜ます。よね」など、文末表現と終助詞が句読点や空白で誤って分断されたケースを最優先で修復
+        // 例: 「あるんです。よね」➔「あるんですよね」
+        // 例: 「あるんです よね」➔「あるんですよね」
+        // 例: 「あるんです、よね」➔「あるんですよね」
+        let brokenParticlePattern = "([でまし]す|[でま]した|ません|ございま[すした])([。、]?[ 　]*)(よね|よな|よ|ねえ|ねー|ね|かな|かね|し|もん|もの|さ)($|\\s+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))"
+        if let regexBP = try? NSRegularExpression(pattern: brokenParticlePattern, options: []) {
+            let range = NSRange(location: 0, length: (formatted as NSString).length)
+            formatted = regexBP.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1$3$4")
+        }
+
         // 2. 挨拶表現（挨拶の直後に次の文が続く場合は読点「、」）
         let greetingPattern = "(おはようございます|こんにちは|こんばんは|お疲れ様です|お疲れ様でした)(\\s+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))"
         if let regexG = try? NSRegularExpression(pattern: greetingPattern, options: []) {
@@ -40,8 +50,27 @@ public final class PunctuationService {
             formatted = regexQ.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1？")
         }
 
-        // 5. 一般文末表現（「です」「ます」など、接続助詞「が」「から」「けど」「ら」が続かない場合）➔ 句点「。」
-        let endingsPattern = "(です|ます|でした|ました|ません|ませんでした|ですね|ですよ|ございます|ございました|と思います|と考えます|とのことです)(?![がからけどら])($|\\s+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))"
+        // 5. 一般文末表現（「ですよね」「ですね」「ですよ」「ますよね」などの複合終助詞を最優先）
+        // ※「です」「ます」などの単独形は、後続に終助詞（よね/よ/ね/か等）や接続助詞（が/から/けど/ので/し等）がない場合のみ句点「。」を付与
+        let fullEndings = [
+            // 4文字以上・複合終助詞（最長一致）
+            "ですよねー", "ですよねえ", "ですねー", "ですねえ", "ですよー",
+            "ますよねー", "ますよねえ", "ますねー", "ますねえ", "ますよー",
+            "でしたよね", "ましたよね", "ませんよね",
+            "ですよね", "ますよね",
+            // 3文字終助詞
+            "ですね", "ですよ", "ますね", "ますよ",
+            "でしたね", "でしたよ", "ましたね", "ましたよ",
+            "ませんね", "ませんよ",
+            // 敬体・丁寧表現
+            "ございます", "ございました", "と思います", "と考えます", "とのことです",
+            "ませんでした",
+            "でした", "ました", "ません",
+            // 終止形（後続に助詞が続かないことが条件）
+            "です", "ます"
+        ]
+
+        let endingsPattern = "(\(fullEndings.joined(separator: "|")))(?![がからけどのでのにしたらたりならよねかもわぞぜさ])($|\\s+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))"
         if let regexE = try? NSRegularExpression(pattern: endingsPattern, options: []) {
             let range = NSRange(location: 0, length: (formatted as NSString).length)
             formatted = regexE.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1。")
@@ -56,6 +85,13 @@ public final class PunctuationService {
     /// 重複した句読点や不自然な空白を整理
     public func cleanupDuplicatePunctuation(_ text: String) -> String {
         var result = text
+
+        // 「です。よね」「ます。よね」等の誤った句点挿入の修復
+        let brokenParticlePattern = "([でまし]す|[でま]した|ません|ございま[すした])([。、][ 　]*)(よね|よな|よ|ねえ|ねー|ね|かな|かね|し|もん|もの|さ)"
+        if let regexBP = try? NSRegularExpression(pattern: brokenParticlePattern, options: []) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexBP.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1$3")
+        }
 
         // 連続・重複の除去
         result = result.replacingOccurrences(of: "。。", with: "。")
@@ -73,6 +109,15 @@ public final class PunctuationService {
         if let regexSpace = try? NSRegularExpression(pattern: "([。、？！])[ 　]+(?=[あ-んア-ン一-龥])", options: []) {
             let range = NSRange(location: 0, length: (result as NSString).length)
             result = regexSpace.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1")
+        }
+
+        // 末尾が終助詞（よね、ね、よ等）で句点がない場合は補完
+        let endingParticles = ["ですよね", "ますよね", "ですね", "ですよ", "ますね", "ますよ", "でしたよね", "ましたよね", "ませんよね"]
+        for ep in endingParticles {
+            if result.hasSuffix(ep) {
+                result += "。"
+                break
+            }
         }
 
         // 末尾が読点「、」で終わっている場合は「。」に変換
@@ -123,7 +168,7 @@ public final class PunctuationService {
         } else if !trimmedRef.hasSuffix("。") && !trimmedRef.hasSuffix("？") && !trimmedRef.hasSuffix("！") {
             // プレビュー文末に句点がなかった場合（体言止め等）、最終テキスト末尾の余計な「。」を削除してプレビューと一致させる
             if formatted.hasSuffix("。") && !cleanRef.isEmpty {
-                let endings = ["です", "ます", "でした", "ました", "ません", "ですね", "ですよ", "ございます"]
+                let endings = ["です", "ます", "でした", "ました", "ません", "ですね", "ですよ", "ございます", "ですよね"]
                 let hasEnding = endings.contains { cleanRef.hasSuffix($0) }
                 if !hasEnding {
                     formatted = String(formatted.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
