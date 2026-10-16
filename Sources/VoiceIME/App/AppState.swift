@@ -172,6 +172,14 @@ public final class AppState: ObservableObject {
             recordingStartTime = Date()
             NSLog("[VoiceIME] 🎤 録音開始 (動作モード: %@)", settings.triggerMode.rawValue)
 
+            // フローティングプレビューが有効な場合、リアルタイム音声認識とプレビューウィンドウを開始
+            if settings.floatingPreviewEnabled {
+                FloatingPreviewController.shared.showLiveRecording()
+                LiveSpeechService.shared.startLiveRecognition(languageCode: settings.language) { text in
+                    FloatingPreviewController.shared.updateLiveText(text)
+                }
+            }
+
             // 最大録音時間セーフティ（最長120秒で自動カットオフし暴走を防止）
             maxRecordingTimer?.invalidate()
             maxRecordingTimer = Timer.scheduledTimer(withTimeInterval: 120.0, repeats: false) { [weak self] _ in
@@ -194,9 +202,18 @@ public final class AppState: ObservableObject {
         maxRecordingTimer?.invalidate()
         maxRecordingTimer = nil
 
+        // リアルタイム音声認識を停止し、プレビューを処理中フェーズへ
+        LiveSpeechService.shared.stopLiveRecognition()
+        if settings.floatingPreviewEnabled {
+            FloatingPreviewController.shared.setProcessing()
+        }
+
         guard let audioURL = recorder.stopRecording() else {
             phase = .idle
             statusMessage = "録音データがありません。"
+            if settings.floatingPreviewEnabled {
+                FloatingPreviewController.shared.hide()
+            }
             NSLog("[VoiceIME] ⚠️ 録音停止: 音声データが存在しません")
             return
         }
@@ -218,6 +235,9 @@ public final class AppState: ObservableObject {
                 try? FileManager.default.removeItem(at: audioURL)
                 self.phase = .idle
                 self.statusMessage = "小さな音を検知したため無視しました"
+                if self.settings.floatingPreviewEnabled {
+                    FloatingPreviewController.shared.hide()
+                }
                 return
             }
 
@@ -718,6 +738,7 @@ public final class AppState: ObservableObject {
 
         // 進行中の文字起こし処理があればキャンセル（URLSession の await も中断される）
         processingTask?.cancel()
+        LiveSpeechService.shared.stopLiveRecognition()
         FloatingPreviewController.shared.hide()
 
         recorder.cancelRecording()

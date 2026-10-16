@@ -32,6 +32,9 @@
     <!-- マイク利用の権限理由 -->
     <key>NSMicrophoneUsageDescription</key>
     <string>音声入力・文字起こしを行うためにマイクを使用します。</string>
+    <!-- 音声認識（リアルタイムプレビュー）の権限理由 -->
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>話している最中のリアルタイム音声プレビューを表示するために音声認識を使用します。</string>
     <!-- アクセシビリティ・自動入力の説明 -->
     <key>NSAppleEventsUsageDescription</key>
     <string>フォーカスされたアプリの入力欄へ文字起こしテキストを自動入力するために使用します。</string>

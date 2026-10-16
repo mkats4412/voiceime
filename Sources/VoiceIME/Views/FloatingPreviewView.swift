@@ -14,26 +14,58 @@ public struct FloatingPreviewView: View {
         VStack(alignment: .leading, spacing: 10) {
             // ヘッダーバー
             HStack(alignment: .center, spacing: 6) {
-                Image(systemName: "mic.bubble.fill")
-                    .foregroundColor(.accentColor)
-                    .font(.system(size: 13, weight: .semibold))
+                switch controller.phase {
+                case .liveRecording:
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 9, height: 9)
+                    Text("リアルタイム音声入力中...")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.primary)
 
-                Text("音声入力プレビュー")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.primary)
+                    Spacer()
 
-                Spacer()
+                    Text("離すとAI推敲")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.red)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(Color.red.opacity(0.12))
+                        )
 
-                // ガイダンスバッジ
-                Text("入力先を選択 ➔ ⌘↩")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        Capsule()
-                            .fill(Color.primary.opacity(0.06))
-                    )
+                case .processing:
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("AI推敲中...")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.primary)
+
+                    Spacer()
+
+                case .ready:
+                    Image(systemName: "mic.bubble.fill")
+                        .foregroundColor(.accentColor)
+                        .font(.system(size: 13, weight: .semibold))
+
+                    Text("音声入力プレビュー")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.primary)
+
+                    Spacer()
+
+                    // ガイダンスバッジ
+                    Text("入力先を選択 ➔ ⌘↩")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(Color.primary.opacity(0.06))
+                        )
+                }
 
                 // 閉じるボタン
                 Button {
@@ -52,6 +84,13 @@ public struct FloatingPreviewView: View {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(NSColor.controlBackgroundColor).opacity(0.65))
 
+                if controller.phase == .liveRecording && controller.currentText.isEmpty {
+                    Text("話した言葉がリアルタイムでここに表示されます...")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundColor(.secondary.opacity(0.6))
+                        .padding(10)
+                }
+
                 TextEditor(text: $controller.currentText)
                     .focused($isEditorFocused)
                     .font(.system(size: 13.5, weight: .regular))
@@ -61,7 +100,11 @@ public struct FloatingPreviewView: View {
             }
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(isEditorFocused ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.1), lineWidth: 1)
+                    .stroke(
+                        controller.phase == .liveRecording ? Color.red.opacity(0.4) :
+                        (isEditorFocused ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.1)),
+                        lineWidth: 1
+                    )
             )
 
             // 下部アクションバー
@@ -85,6 +128,7 @@ public struct FloatingPreviewView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .disabled(controller.currentText.isEmpty)
                 .help("クリップボードにコピー")
 
                 Spacer()
@@ -115,10 +159,11 @@ public struct FloatingPreviewView: View {
                     .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.accentColor)
+                            .fill(controller.phase == .ready && !controller.currentText.isEmpty ? Color.accentColor : Color.secondary.opacity(0.4))
                     )
                 }
                 .buttonStyle(.plain)
+                .disabled(controller.phase != .ready || controller.currentText.isEmpty)
                 .help("フォーカス中のアプリにテキストをペースト (⌘+Return)")
             }
         }
@@ -131,7 +176,7 @@ public struct FloatingPreviewView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                .stroke(controller.phase == .liveRecording ? Color.red.opacity(0.3) : Color.primary.opacity(0.12), lineWidth: 1)
         )
         .padding(10)
     }

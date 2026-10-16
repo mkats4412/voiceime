@@ -2,10 +2,17 @@ import AppKit
 import SwiftUI
 import Carbon
 
+public enum FloatingPreviewPhase: Equatable {
+    case liveRecording // 録音・リアルタイム音声認識中
+    case processing    // クラウドWhisper/AI推敲中
+    case ready         // 完了・保留中 (⌘+Enterで挿入可能)
+}
+
 @MainActor
 public final class FloatingPreviewController: ObservableObject {
     public static let shared = FloatingPreviewController()
 
+    @Published public var phase: FloatingPreviewPhase = .ready
     @Published public var currentText: String = ""
     @Published public var isVisible: Bool = false
     @Published public var copySuccess: Bool = false
@@ -38,10 +45,56 @@ public final class FloatingPreviewController: ObservableObject {
         }
     }
 
-    /// フローティングプレビューを表示
-    public func show(text: String) {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    /// 録音開始時のリアルタイムプレビュー表示
+    public func showLiveRecording() {
+        dismissTimer?.invalidate()
+        dismissTimer = nil
+        unregisterCmdEnterHotkey()
 
+        self.phase = .liveRecording
+        self.currentText = ""
+        self.copySuccess = false
+
+        if panel == nil {
+            setupPanel()
+        }
+
+        updatePanelPosition()
+
+        if !isVisible {
+            panel?.alphaValue = 0.0
+            panel?.orderFrontRegardless()
+
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.15
+                panel?.animator().alphaValue = 1.0
+            }
+            self.isVisible = true
+        } else {
+            panel?.alphaValue = 1.0
+            panel?.orderFrontRegardless()
+        }
+    }
+
+    /// リアルタイム音声認識テキストの逐次更新
+    public func updateLiveText(_ text: String) {
+        guard phase == .liveRecording else { return }
+        self.currentText = text
+    }
+
+    /// 録音停止・AI推敲中へのステータス変更
+    public func setProcessing() {
+        self.phase = .processing
+    }
+
+    /// 認識・推敲完了後の確定テキスト表示
+    public func show(text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            hide()
+            return
+        }
+
+        self.phase = .ready
         self.currentText = text
         self.copySuccess = false
 
@@ -51,22 +104,23 @@ public final class FloatingPreviewController: ObservableObject {
 
         updatePanelPosition()
 
-        panel?.alphaValue = 0.0
-        panel?.orderFrontRegardless()
+        if !isVisible {
+            panel?.alphaValue = 0.0
+            panel?.orderFrontRegardless()
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            panel?.animator().alphaValue = 1.0
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.2
+                panel?.animator().alphaValue = 1.0
+            }
+            self.isVisible = true
         }
-
-        self.isVisible = true
 
         // ⌘+Enter グローバルホットキーを有効化
         registerCmdEnterHotkey()
 
         // 自動非表示タイマーの開始（設定が0より大きい場合）
         resetDismissTimer()
-        NSLog("[VoiceIME] 💬 フローティングプレビュー表示: [%@]", text)
+        NSLog("[VoiceIME] 💬 フローティングプレビュー確定表示: [%@]", text)
     }
 
     /// フローティングプレビューを非表示
@@ -85,6 +139,7 @@ public final class FloatingPreviewController: ObservableObject {
                 guard let self = self else { return }
                 self.panel?.orderOut(nil)
                 self.isVisible = false
+                self.phase = .ready
             }
         })
     }
@@ -107,6 +162,7 @@ public final class FloatingPreviewController: ObservableObject {
 
     /// 最前面のアクティブアプリケーションへテキストを挿入（ペースト）
     public func insertTextToFrontmostApp() {
+        guard phase == .ready else { return }
         let textToInsert = currentText
         guard !textToInsert.isEmpty else {
             hide()
