@@ -152,26 +152,19 @@ public final class PunctuationService {
             return format(text: trimmedRef, isJapanese: isJapanese)
         }
 
-        // 2. 文末の句読点（。や？）の整合性をプレビューと完全に同期
+        // 2. プレビューが遅延して末尾が途切れている場合（cleanRef が cleanText の前方一致）:
+        // 確定テキスト（formatted）の末尾の完全な文言を決して削らず、formatted を完全優先
+        if cleanText.hasPrefix(cleanRef) {
+            return cleanupDuplicatePunctuation(formatted)
+        }
+
+        // 3. 疑問文の整合性
         if trimmedRef.hasSuffix("？") || trimmedRef.hasSuffix("?") {
             if !formatted.hasSuffix("？") && !formatted.hasSuffix("?") {
                 if formatted.hasSuffix("。") || formatted.hasSuffix(".") {
                     formatted = String(formatted.dropLast()) + "？"
                 } else {
                     formatted += "？"
-                }
-            }
-        } else if trimmedRef.hasSuffix("。") || trimmedRef.hasSuffix(".") {
-            if !formatted.hasSuffix("。") && !formatted.hasSuffix(".") && !formatted.hasSuffix("？") && !formatted.hasSuffix("！") {
-                formatted += "。"
-            }
-        } else if !trimmedRef.hasSuffix("。") && !trimmedRef.hasSuffix("？") && !trimmedRef.hasSuffix("！") {
-            // プレビュー文末に句点がなかった場合（体言止め等）、最終テキスト末尾の余計な「。」を削除してプレビューと一致させる
-            if formatted.hasSuffix("。") && !cleanRef.isEmpty {
-                let endings = ["です", "ます", "でした", "ました", "ません", "ですね", "ですよ", "ございます", "ですよね"]
-                let hasEnding = endings.contains { cleanRef.hasSuffix($0) }
-                if !hasEnding {
-                    formatted = String(formatted.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
                 }
             }
         }

@@ -109,9 +109,13 @@ public final class AppState: ObservableObject {
                     cancelRecording()
                     return
                 }
-                // 発話末尾の余韻・終助詞（〜ね、〜よ等）がマイクバッファから欠落するのを防ぐため、
-                // キー離脱からわずか120ms遅延させて録音を停止する
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+                // キーを離した瞬間に視覚的フィードバック（処理中アニメーション）を即座に開始
+                if settings.floatingPreviewEnabled {
+                    FloatingPreviewController.shared.setProcessing()
+                }
+                // 発話末尾の単語・語尾・余韻（「〜と言及した」「〜ですよね」等）がマイクバッファから欠落するのを防ぐため、
+                // キー離脱から約220ms遅延させて録音を停止する
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [weak self] in
                     guard let self = self, self.phase == .recording else { return }
                     self.stopRecordingAndTranscribe()
                 }
@@ -286,8 +290,8 @@ public final class AppState: ObservableObject {
             effectiveWhisperPrompt = customPrompt
         } else if language == "ja" {
             effectiveWhisperPrompt = (refinementStyle == .casual)
-                ? "こんにちは。そうですね、承知いたしました。〜ですね。〜ですよ。"
-                : "こんにちは。本件について報告いたします。"
+                ? "こんにちは。そうですね、承知いたしました。〜ですね。〜ですよ。〜と言及した。"
+                : "こんにちは。本件について報告いたします。〜と言及した。〜である。"
         } else if language == "en" {
             effectiveWhisperPrompt = "Hello. Yes, I understand. Thank you."
         } else {

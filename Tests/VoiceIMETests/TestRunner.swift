@@ -170,13 +170,18 @@ struct TestRunner {
         // 5. 口語モード vs 文章モードのプロンプト生成テスト
         let casualPrompt = llm.generateSystemPrompt(style: .casual, promptHint: "用語A, 用語B")
         assert(casualPrompt.contains("口語モード"), "Casual prompt should specify 口語モード")
+        assert(casualPrompt.contains("文体（常体・敬体）および時制の完全維持"), "Casual prompt must contain style/tense rule")
         assert(casualPrompt.contains("語尾・終助詞・口語ニュアンスの完全維持"), "Casual prompt must contain trailing particle preservation rule")
+        assert(casualPrompt.contains("言及した"), "Casual prompt must mention 言及した example")
         assert(casualPrompt.contains("〇〇でありませんね"), "Casual prompt should include explicit negative example")
         assert(casualPrompt.contains("言語と約物の整合性"), "Casual prompt should include language punctuation rule")
         assert(casualPrompt.contains("用語A, 用語B"), "Casual prompt should contain prompt hint")
 
         let formalPrompt = llm.generateSystemPrompt(style: .formal, promptHint: nil)
         assert(formalPrompt.contains("文章モード"), "Formal prompt should specify 文章モード")
+        assert(formalPrompt.contains("文体（常体・敬体）および時制の完全維持"), "Formal prompt must contain style/tense rule")
+        assert(formalPrompt.contains("勝手な言い換え・語句改変の厳禁"), "Formal prompt must prohibit paraphrasing")
+        assert(formalPrompt.contains("入力文末・語尾の完全保持"), "Formal prompt must contain ending preservation rule")
         assert(formalPrompt.contains("端正な書き言葉への推敲"), "Formal prompt should specify formal rewriting")
         assert(formalPrompt.contains("言語と約物の整合性"), "Formal prompt should include language punctuation rule")
 

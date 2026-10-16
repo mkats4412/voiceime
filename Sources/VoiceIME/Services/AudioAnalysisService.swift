@@ -140,7 +140,7 @@ public final class AudioAnalysisService {
         audioFileURL: URL,
         thresholdDB: Float,
         leadingMarginSeconds: Double = 0.15,
-        trailingMarginSeconds: Double = 0.35
+        trailingMarginSeconds: Double = 0.60
     ) -> URL? {
         guard let file = try? AVAudioFile(forReading: audioFileURL) else { return nil }
         let format = file.processingFormat
