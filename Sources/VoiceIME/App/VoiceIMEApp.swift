@@ -5,6 +5,13 @@ import AppKit
 struct VoiceIMEApp: App {
     @StateObject private var appState = AppState.shared
 
+    init() {
+        if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let iconImage = NSImage(contentsOf: iconURL) {
+            NSApplication.shared.applicationIconImage = iconImage
+        }
+    }
+
     var body: some Scene {
         MenuBarExtra {
             MenuBarView(

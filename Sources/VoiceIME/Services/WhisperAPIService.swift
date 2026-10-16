@@ -30,6 +30,53 @@ public final class WhisperAPIService {
                 return "レスポンスの解析に失敗しました: \(error.localizedDescription)"
             }
         }
+
+        public var summary: String {
+            switch self {
+            case .serverError(let statusCode, let message):
+                if statusCode == 429 {
+                    return "レート制限 (429)"
+                } else if statusCode == 503 || statusCode == 502 || statusCode == 504 {
+                    return "サーバー混雑 (\(statusCode))"
+                } else if statusCode == 500 {
+                    return "サーバーエラー (500)"
+                } else if statusCode == 400 {
+                    let shortMsg = message.count > 25 ? "\(message.prefix(25))..." : message
+                    return "リクエスト不正 (400: \(shortMsg))"
+                } else if statusCode == 401 {
+                    return "認証エラー (401)"
+                } else if statusCode == 404 {
+                    return "未対応モデル/URL (404)"
+                } else {
+                    return "HTTP \(statusCode)"
+                }
+            case .networkError(let error):
+                if let urlError = error as? URLError {
+                    if urlError.code == .timedOut {
+                        return "タイムアウト (8秒超過)"
+                    } else if urlError.code == .notConnectedToInternet {
+                        return "オフライン"
+                    } else if urlError.code == .cannotConnectToHost || urlError.code == .cannotFindHost {
+                        return "接続不能"
+                    }
+                }
+                let nsError = error as NSError
+                if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut {
+                    return "タイムアウト (8秒超過)"
+                }
+                return "通信エラー (\(error.localizedDescription))"
+            case .emptyAudioFile:
+                return "音声データが空"
+            case .missingAPIKey:
+                return "APIキー未設定"
+            case .invalidURL:
+                return "無効なURL"
+            case .invalidResponse:
+                return "無効な応答"
+            case .parsingError:
+                return "解析エラー"
+            }
+        }
     }
 
     private init() {}
@@ -62,7 +109,7 @@ public final class WhisperAPIService {
         let boundary = "Boundary-\(UUID().uuidString)"
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"
-        request.timeoutInterval = 30.0
+        request.timeoutInterval = 8.0
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
         if let apiKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !apiKey.isEmpty {
@@ -89,11 +136,21 @@ public final class WhisperAPIService {
             language: language
         )
 
-        let (data, response): (Data, URLResponse)
+        var (data, response): (Data, URLResponse)
         do {
             (data, response) = try await URLSession.shared.data(for: request)
         } catch {
-            throw APIError.networkError(error)
+            // Keep-Alive アイドル切断（-1005: networkConnectionLost）の即時1回自動リトライ
+            if let urlErr = error as? URLError, urlErr.code == .networkConnectionLost {
+                NSLog("[VoiceIME] ⚠️ Keep-Alive切断(-1005)を検知。新規接続で即時再試行します...")
+                do {
+                    (data, response) = try await URLSession.shared.data(for: request)
+                } catch {
+                    throw APIError.networkError(error)
+                }
+            } else {
+                throw APIError.networkError(error)
+            }
         }
 
         guard let httpResponse = response as? HTTPURLResponse else {

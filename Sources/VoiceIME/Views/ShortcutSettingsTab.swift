@@ -163,6 +163,35 @@ public struct ShortcutSettingsTab: View {
                                 .foregroundColor(.secondary)
                         }
                     }
+
+                    Divider()
+                        .padding(.vertical, 2)
+
+                    // 文体・推敲スタイル（口語モード / 文章モード）
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("文体・推敲モード:")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            Spacer()
+                            Text(settings.refinementStyle == .casual ? "語尾・終助詞を100%保持" : "整った書き言葉に校正")
+                                .font(.caption2)
+                                .foregroundColor(.accentColor)
+                        }
+
+                        Picker("", selection: $settings.refinementStyle) {
+                            ForEach(RefinementStyle.allCases) { style in
+                                Text(style.title).tag(style)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+
+                        Text(settings.refinementStyle.description)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
 
                 Divider()

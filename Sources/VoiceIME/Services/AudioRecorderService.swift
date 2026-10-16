@@ -63,9 +63,12 @@ public final class AudioRecorderService: NSObject, AVAudioRecorderDelegate {
     }
 
     /// 録音を停止し、録音されたファイルのURLを返す
+    /// - Note: エンコードエラー等で delegate 経由で isRecording が false になっていても、
+    ///   recorder を保持している限りは確実に stop/解放し、ファイルURLを返す（リーク・データ消失防止）。
     @discardableResult
     public func stopRecording() -> URL? {
-        guard isRecording, let recorder = audioRecorder else {
+        guard let recorder = audioRecorder else {
+            isRecording = false
             return nil
         }
 
@@ -81,12 +84,13 @@ public final class AudioRecorderService: NSObject, AVAudioRecorderDelegate {
 
     /// 録音を破棄して一時ファイルを削除
     public func cancelRecording() {
-        if isRecording {
-            audioRecorder?.delegate = nil
-            audioRecorder?.stop()
-            isRecording = false
+        // isRecording フラグに依存せず、保持している recorder は必ず停止・解放する
+        if let recorder = audioRecorder {
+            recorder.delegate = nil
+            recorder.stop()
             audioRecorder = nil
         }
+        isRecording = false
 
         if let url = currentFileURL {
             try? FileManager.default.removeItem(at: url)
@@ -102,11 +106,19 @@ public final class AudioRecorderService: NSObject, AVAudioRecorderDelegate {
     }
 
     // MARK: - AVAudioRecorderDelegate
+    // delegate は任意スレッドから呼ばれ得るため、状態変更はメインスレッドに集約してデータ競合を防ぐ。
+    // 対象 recorder が現在保持中のものである場合のみフラグを落とす（古い recorder からの遅延通知を無視）。
     public func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
-        isRecording = false
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.audioRecorder === recorder else { return }
+            self.isRecording = false
+        }
     }
 
     public func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
-        isRecording = false
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.audioRecorder === recorder else { return }
+            self.isRecording = false
+        }
     }
 }

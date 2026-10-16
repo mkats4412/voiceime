@@ -19,14 +19,10 @@ public final class MicrophoneLevelTester: ObservableObject {
 
     private init() {}
 
-    deinit {
-        // バックグラウンドでタイマーと録音を破棄
-        meteringTimer?.invalidate()
-        audioRecorder?.stop()
-        if let url = tempFileURL {
-            try? FileManager.default.removeItem(at: url)
-        }
-    }
+    // NOTE: deinit は nonisolated で実行されるため、@MainActor 隔離されたプロパティ
+    // （timer / recorder）に触れるとデータ競合になる（Swift 6 ではコンパイルエラー）。
+    // 本クラスはシングルトンで解放されないため、リソース解放は stopTesting() に一元化する。
+    // （ShortcutSettingsTab.onDisappear と AppState.startRecording から呼ばれる）
 
     /// マイク入力のリアルタイムテストを開始
     public func startTesting(thresholdDB: Float) {

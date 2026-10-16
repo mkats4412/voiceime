@@ -1,19 +1,89 @@
 import SwiftUI
 
+@MainActor
+public final class APISettingsViewModel: ObservableObject {
+    @Published public var apiKeyInput: String = ""
+    @Published public var isKeyVisible: Bool = false
+    @Published public var saveMessage: String? = nil
+    @Published public var hasKeyStored: Bool = false
+    @Published public var groqHasKey: Bool = false
+    @Published public var openAIHasKey: Bool = false
+
+    public let maskText = "••••••••••••••••••••••••••••••••"
+    private let keychain = KeychainService.shared
+
+    public init() {}
+
+    public func updateKeyStatus(currentProvider: APIProvider) {
+        groqHasKey = keychain.hasAPIKey(for: .groq)
+        openAIHasKey = keychain.hasAPIKey(for: .openai)
+
+        let exists = keychain.hasAPIKey(for: currentProvider)
+        hasKeyStored = exists
+        isKeyVisible = false
+        if exists {
+            apiKeyInput = maskText
+        } else {
+            apiKeyInput = ""
+        }
+    }
+
+    public func toggleKeyVisibility(currentProvider: APIProvider) {
+        isKeyVisible.toggle()
+        if isKeyVisible {
+            if (apiKeyInput == maskText || apiKeyInput.isEmpty),
+               let loadedKey = keychain.loadAPIKey(for: currentProvider) {
+                apiKeyInput = loadedKey
+            }
+        } else {
+            if let loadedKey = keychain.loadAPIKey(for: currentProvider), apiKeyInput == loadedKey {
+                apiKeyInput = maskText
+            }
+        }
+    }
+
+    public func saveAPIKey(currentProvider: APIProvider) {
+        let trimmed = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty && trimmed != maskText else { return }
+
+        if keychain.saveAPIKey(trimmed, for: currentProvider) {
+            updateKeyStatus(currentProvider: currentProvider)
+            AppState.shared.resetError()
+            saveMessage = "✓ \(currentProvider.displayName) のAPIキーをKeychainに保存しました"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.saveMessage = nil
+            }
+        } else {
+            saveMessage = "⚠️ 保存に失敗しました"
+        }
+    }
+
+    public func deleteAPIKey(currentProvider: APIProvider) {
+        if keychain.deleteAPIKey(for: currentProvider) {
+            updateKeyStatus(currentProvider: currentProvider)
+            saveMessage = "\(currentProvider.displayName) のAPIキーを削除しました"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.saveMessage = nil
+            }
+        }
+    }
+}
+
 public struct APISettingsTab: View {
     @ObservedObject var settings = AppSettings.shared
+    @ObservedObject var appState = AppState.shared
+    @StateObject private var vm = APISettingsViewModel()
     private let keychain = KeychainService.shared
     private let apiService = WhisperAPIService.shared
     private let llmService = LLMService.shared
 
-    @State private var apiKeyInput: String = ""
-    @State private var isKeyVisible: Bool = false
-    @State private var saveMessage: String? = nil
-    @State private var hasKeyStored: Bool = false
-    @State private var groqHasKey: Bool = false
-    @State private var openAIHasKey: Bool = false
-
-    private let maskText = "••••••••••••••••••••••••••••••••"
+    private var apiKeyInput: String { vm.apiKeyInput }
+    private var isKeyVisible: Bool { vm.isKeyVisible }
+    private var saveMessage: String? { vm.saveMessage }
+    private var hasKeyStored: Bool { vm.hasKeyStored }
+    private var groqHasKey: Bool { vm.groqHasKey }
+    private var openAIHasKey: Bool { vm.openAIHasKey }
+    private var maskText: String { vm.maskText }
 
     public init() {}
 
@@ -162,12 +232,11 @@ public struct APISettingsTab: View {
 
                     // バックアップ連携カード
                     if let backup = settings.backupProvider {
-                        let backupModel = settings.config(for: backup).modelName
                         HStack(alignment: .center, spacing: 8) {
                             Image(systemName: "arrow.triangle.swap")
                                 .foregroundColor(.blue)
                                 .font(.caption)
-                            Text("相互バックアップ有効: \(currentProvider.displayName) 障害時は \(backup.displayName) (\(backupModel)) で自動再試行")
+                            Text("相互バックアップ有効: \(currentProvider.displayName) 障害時や応答遅延時は \(backup.displayName) で並行高速化")
                                 .font(.caption)
                                 .foregroundColor(.primary)
                             Spacer()
@@ -212,6 +281,57 @@ public struct APISettingsTab: View {
                     RoundedRectangle(cornerRadius: 10)
                         .stroke(Color(NSColor.separatorColor).opacity(0.6), lineWidth: 1)
                 )
+
+                // 直近の障害回避・フォールバック診断情報
+                if let fallback = appState.lastFallbackRecord {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                            Text("直近のAPI障害回避レポート (\(fallback.primaryProvider.displayName) \(fallback.step) 失敗)")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.orange)
+                            Spacer()
+                            Button("クリア") {
+                                appState.lastFallbackRecord = nil
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+                        }
+
+                        HStack(alignment: .top, spacing: 4) {
+                            Text("失敗理由:")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.primary)
+                            Text(fallback.reasonSummary)
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(.primary)
+                        }
+
+                        HStack(alignment: .top, spacing: 4) {
+                            Text("エラー詳細:")
+                                .font(.system(size: 10.5))
+                                .foregroundColor(.secondary)
+                            Text(fallback.detail)
+                                .font(.system(size: 10.5))
+                                .foregroundColor(.secondary)
+                                .lineLimit(3)
+                        }
+
+                        Text("➔ \(fallback.backupProvider.displayName) に自動フォールバックして処理を継続しました。")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.orange.opacity(0.1))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                    )
+                }
 
                 // ==========================================
                 // セクション1: APIキー入力（Keychain）
@@ -263,18 +383,18 @@ public struct APISettingsTab: View {
                                     .font(.system(size: 13))
                             } content: {
                                 if isKeyVisible {
-                                    TextField(hasKeyStored ? "新しいキーを入力して上書き保存" : "\(currentProvider.displayName) APIキーを入力 (gsk_... / sk-...)", text: $apiKeyInput)
+                                    TextField(hasKeyStored ? "新しいキーを入力して上書き保存" : "\(currentProvider.displayName) APIキーを入力 (gsk_... / sk-...)", text: $vm.apiKeyInput)
                                         .textFieldStyle(.plain)
                                         .font(.system(size: 12.5, design: .monospaced))
                                 } else {
-                                    SecureField(hasKeyStored ? "新しいキーを入力して上書き保存" : "\(currentProvider.displayName) APIキーを入力 (gsk_... / sk-...)", text: $apiKeyInput)
+                                    SecureField(hasKeyStored ? "新しいキーを入力して上書き保存" : "\(currentProvider.displayName) APIキーを入力 (gsk_... / sk-...)", text: $vm.apiKeyInput)
                                         .textFieldStyle(.plain)
                                         .font(.system(size: 12.5, design: .monospaced))
                                 }
                             } trailing: {
                                 HStack(spacing: 6) {
                                     if !apiKeyInput.isEmpty && apiKeyInput != maskText {
-                                        Button(action: { apiKeyInput = "" }) {
+                                        Button(action: { vm.apiKeyInput = "" }) {
                                             Image(systemName: "xmark.circle.fill")
                                                 .foregroundColor(.secondary)
                                                 .font(.system(size: 13))
@@ -411,6 +531,12 @@ public struct APISettingsTab: View {
                                     .foregroundColor(.secondary)
 
                                 if currentProvider == .groq {
+                                    Button("llama-3.1-8b-instant (最速・安定)") {
+                                        settings.groqLLMModel = "llama-3.1-8b-instant"
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.mini)
+
                                     Button("qwen/qwen3.8-27b") {
                                         settings.groqLLMModel = "qwen/qwen3.8-27b"
                                     }
@@ -594,57 +720,19 @@ public struct APISettingsTab: View {
     }
 
     private func updateKeyStatus() {
-        groqHasKey = keychain.hasAPIKey(for: .groq)
-        openAIHasKey = keychain.hasAPIKey(for: .openai)
-
-        let exists = keychain.hasAPIKey(for: currentProvider)
-        hasKeyStored = exists
-        isKeyVisible = false
-        if exists {
-            apiKeyInput = maskText
-        } else {
-            apiKeyInput = ""
-        }
+        vm.updateKeyStatus(currentProvider: currentProvider)
     }
 
     private func toggleKeyVisibility() {
-        isKeyVisible.toggle()
-        if isKeyVisible {
-            if (apiKeyInput == maskText || apiKeyInput.isEmpty),
-               let loadedKey = keychain.loadAPIKey(for: currentProvider) {
-                apiKeyInput = loadedKey
-            }
-        } else {
-            if let loadedKey = keychain.loadAPIKey(for: currentProvider), apiKeyInput == loadedKey {
-                apiKeyInput = maskText
-            }
-        }
+        vm.toggleKeyVisibility(currentProvider: currentProvider)
     }
 
     private func saveAPIKey() {
-        let trimmed = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty && trimmed != maskText else { return }
-
-        if keychain.saveAPIKey(trimmed, for: currentProvider) {
-            updateKeyStatus()
-            AppState.shared.resetError()
-            saveMessage = "✓ \(currentProvider.displayName) のAPIキーをKeychainに保存しました"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                saveMessage = nil
-            }
-        } else {
-            saveMessage = "⚠️ 保存に失敗しました"
-        }
+        vm.saveAPIKey(currentProvider: currentProvider)
     }
 
     private func deleteAPIKey() {
-        if keychain.deleteAPIKey(for: currentProvider) {
-            updateKeyStatus()
-            saveMessage = "\(currentProvider.displayName) のAPIキーを削除しました"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                saveMessage = nil
-            }
-        }
+        vm.deleteAPIKey(currentProvider: currentProvider)
     }
 }
 

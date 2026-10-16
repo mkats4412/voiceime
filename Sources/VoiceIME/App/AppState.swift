@@ -11,6 +11,21 @@ public enum RecordingPhase: Equatable {
     case error(String)
 }
 
+/// メインプロバイダ障害時のフォールバック記録
+public struct FallbackRecord: Identifiable, Equatable {
+    public let id = UUID()
+    public let timestamp: Date
+    public let primaryProvider: APIProvider
+    public let backupProvider: APIProvider
+    public let step: String // "音声認識" または "AI推敲"
+    public let reasonSummary: String
+    public let detail: String
+
+    public var displayNotice: String {
+        "[\(primaryProvider.displayName)\(step)失敗: \(reasonSummary) ➔ \(backupProvider.displayName)で実行]"
+    }
+}
+
 @MainActor
 public final class AppState: ObservableObject {
     public static let shared = AppState()
@@ -19,7 +34,15 @@ public final class AppState: ObservableObject {
     @Published public var statusMessage: String = "準備完了"
     @Published public var lastTranscribedText: String = ""
     @Published public var lastProcessedText: String = ""
+    @Published public var lastUsedWhisperProvider: APIProvider? = nil
+    @Published public var lastUsedLLMProvider: APIProvider? = nil
+
+    /// 直前の入力で最終的に出力（認識・推敲）を担当したプロバイダ
+    public var lastEffectiveProvider: APIProvider? {
+        lastUsedLLMProvider ?? lastUsedWhisperProvider
+    }
     @Published public var errorMessage: String? = nil
+    @Published public var lastFallbackRecord: FallbackRecord? = nil
 
     private let settings = AppSettings.shared
     private let keychain = KeychainService.shared
@@ -33,6 +56,9 @@ public final class AppState: ObservableObject {
 
     private var recordingStartTime: Date?
     private var maxRecordingTimer: Timer?
+    /// 文字起こし〜ペーストまでの非同期処理。キャンセル可能にするためハンドルを保持する
+    private var processingTask: Task<Void, Never>?
+    private var processingTaskToken: UUID?
 
     private init() {
         setupHotkey()
@@ -83,7 +109,12 @@ public final class AppState: ObservableObject {
                     cancelRecording()
                     return
                 }
-                stopRecordingAndTranscribe()
+                // 発話末尾の余韻・終助詞（〜ね、〜よ等）がマイクバッファから欠落するのを防ぐため、
+                // キー離脱からわずか120ms遅延させて録音を停止する
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+                    guard let self = self, self.phase == .recording else { return }
+                    self.stopRecordingAndTranscribe()
+                }
             }
         }
     }
@@ -138,6 +169,7 @@ public final class AppState: ObservableObject {
             statusMessage = settings.triggerMode == .pushToTalk ? "録音中... (キーを離すと入力)" : "録音中... (もう一度キーを押して停止)"
             errorMessage = nil
             recordingStartTime = Date()
+            NSLog("[VoiceIME] 🎤 録音開始 (動作モード: %@)", settings.triggerMode.rawValue)
 
             // 最大録音時間セーフティ（最長120秒で自動カットオフし暴走を防止）
             maxRecordingTimer?.invalidate()
@@ -152,6 +184,7 @@ public final class AppState: ObservableObject {
             phase = .error(error.localizedDescription)
             statusMessage = "録音の開始に失敗しました。"
             errorMessage = error.localizedDescription
+            NSLog("[VoiceIME] ❌ 録音開始失敗: %@", error.localizedDescription)
         }
     }
 
@@ -163,8 +196,11 @@ public final class AppState: ObservableObject {
         guard let audioURL = recorder.stopRecording() else {
             phase = .idle
             statusMessage = "録音データがありません。"
+            NSLog("[VoiceIME] ⚠️ 録音停止: 音声データが存在しません")
             return
         }
+
+        NSLog("[VoiceIME] ⏹️ 録音停止 (しきい値: %.1f dB, 有効: %d)", settings.audioThresholdDB, settings.audioThresholdEnabled ? 1 : 0)
 
         // ==========================================
         // 0. 音声しきい値判定（小さな音・環境雑音の除外）
@@ -209,13 +245,39 @@ public final class AppState: ObservableObject {
         let language = settings.language.isEmpty ? nil : settings.language
 
         let isLLMEnabled = settings.llmRefinementEnabled
+        let refinementStyle = settings.refinementStyle
         let rules = settings.dictionaryRules
         let restoreClipboard = settings.restoreClipboard
 
-        Task { @MainActor [weak self] in
-            guard let self = self else { return }
+        // Whisper APIの初期プロンプト: 指定言語に応じた自然な句読点や語尾の脱落を防止
+        let effectiveWhisperPrompt: String?
+        if let customPrompt = prompt, !customPrompt.isEmpty {
+            effectiveWhisperPrompt = customPrompt
+        } else if language == "ja" {
+            effectiveWhisperPrompt = (refinementStyle == .casual)
+                ? "こんにちは。そうですね、承知いたしました。〜ですね。〜ですよ。"
+                : "こんにちは。本件について報告いたします。"
+        } else if language == "en" {
+            effectiveWhisperPrompt = "Hello. Yes, I understand. Thank you."
+        } else {
+            // 言語自動検出時は特定言語へのバイアスを避けるため nil
+            effectiveWhisperPrompt = nil
+        }
+
+        processingTask?.cancel()
+        let taskToken = UUID()
+        processingTaskToken = taskToken
+        processingTask = Task { @MainActor [weak self] in
+            guard let self = self else {
+                try? FileManager.default.removeItem(at: targetAudioURL)
+                return
+            }
             defer {
                 try? FileManager.default.removeItem(at: targetAudioURL)
+                if self.processingTaskToken == taskToken {
+                    self.processingTask = nil
+                    self.processingTaskToken = nil
+                }
             }
 
             let totalStartTime = CFAbsoluteTimeGetCurrent()
@@ -227,43 +289,170 @@ public final class AppState: ObservableObject {
                 // 1. Whisper API にリクエスト送信（音声 ➔ テキスト）
                 // ==========================================
                 var rawText: String
-                var fallbackNotice: String? = nil
+                var fallbackNotices: [String] = []
 
                 let whisperStart = CFAbsoluteTimeGetCurrent()
-                do {
-                    rawText = try await self.api.transcribe(
-                        audioFileURL: targetAudioURL,
-                        baseURL: baseURL,
-                        apiKey: apiKey,
-                        model: model,
-                        mode: mode,
-                        prompt: prompt,
-                        language: language
-                    )
-                    whisperDuration = CFAbsoluteTimeGetCurrent() - whisperStart
-                } catch {
-                    // メインプロバイダが失敗し、バックアッププロバイダのキーが存在する場合に自動再試行
-                    if let backup = self.settings.backupProvider,
-                       let backupKey = self.keychain.loadAPIKey(for: backup) {
-                        let config = self.settings.config(for: backup)
+                // バックアッププロバイダが存在するか確認
+                let backupProvider = self.settings.backupProvider
+                let backupKey = backupProvider != nil ? self.keychain.loadAPIKey(for: backupProvider!) : nil
 
-                        self.statusMessage = "\(backup.displayName) で音声認識を自動再試行中..."
-                        do {
-                            rawText = try await self.api.transcribe(
-                                audioFileURL: targetAudioURL,
-                                baseURL: config.baseURL,
-                                apiKey: backupKey,
-                                model: config.modelName,
-                                mode: mode,
-                                prompt: prompt,
-                                language: language
-                            )
-                            whisperDuration = CFAbsoluteTimeGetCurrent() - whisperStart
-                            fallbackNotice = " (\(backup.displayName) 音声認識)"
-                        } catch let backupError {
-                            throw backupError
+                if let backup = backupProvider, let bKey = backupKey {
+                    // =========================================================
+                    // 🚀 ヘッジド・リクエスト (Hedged Requests / 時間差レーシング)
+                    // =========================================================
+                    // 1. まずメイン（Groq等）にリクエスト送信
+                    // 2. 1.8秒経過しても応答がない場合、バックアップ（OpenAI等）にも並列で投げる
+                    // 3. どちらか早く成功した方の結果を採用する
+                    let backupConfig = self.settings.config(for: backup)
+                    let hedgedDelayNanoseconds: UInt64 = 1_800_000_000 // 1.8秒
+
+                    enum TranscribeWinner {
+                        case primary(String)
+                        case backup(String, FallbackRecord, primaryError: Error?)
+                    }
+
+                    enum TaskResult {
+                        case success(TranscribeWinner)
+                        case failure(Error, isPrimary: Bool)
+                    }
+
+                    do {
+                        let winner = try await withThrowingTaskGroup(of: TaskResult.self) { group -> TranscribeWinner in
+                            // タスク1: メインプロバイダ
+                            group.addTask {
+                                do {
+                                    let res = try await self.api.transcribe(
+                                        audioFileURL: targetAudioURL,
+                                        baseURL: baseURL,
+                                        apiKey: apiKey,
+                                        model: model,
+                                        mode: mode,
+                                        prompt: effectiveWhisperPrompt,
+                                        language: language
+                                    )
+                                    return .success(.primary(res))
+                                } catch {
+                                    return .failure(error, isPrimary: true)
+                                }
+                            }
+
+                            // タスク2: 1.8秒ディレイ後にバックアップを発射（メインが早く終わればキャンセルされる）
+                            group.addTask {
+                                do {
+                                    try await Task.sleep(nanoseconds: hedgedDelayNanoseconds)
+                                    try Task.checkCancellation()
+
+                                    await MainActor.run {
+                                        self.statusMessage = "\(backup.displayName) で並列認識中 (応答遅延)..."
+                                    }
+                                    NSLog("[VoiceIME] ⚡️ メイン(%@)応答待ち1.8秒超過: バックアップ(%@)へ並行リクエスト発射", currentProvider.displayName, backup.displayName)
+
+                                    let res = try await self.api.transcribe(
+                                        audioFileURL: targetAudioURL,
+                                        baseURL: backupConfig.baseURL,
+                                        apiKey: bKey,
+                                        model: backupConfig.modelName,
+                                        mode: mode,
+                                        prompt: effectiveWhisperPrompt,
+                                        language: language
+                                    )
+
+                                    let record = FallbackRecord(
+                                        timestamp: Date(),
+                                        primaryProvider: currentProvider,
+                                        backupProvider: backup,
+                                        step: "音声認識",
+                                        reasonSummary: "応答遅延 (1.8秒超過)",
+                                        detail: "メインプロバイダの応答が1.8秒以内に返らなかったため、バックアップを並行実行し最速応答を採用しました。"
+                                    )
+                                    return .success(.backup(res, record, primaryError: nil))
+                                } catch {
+                                    return .failure(error, isPrimary: false)
+                                }
+                            }
+
+                            var primaryError: Error?
+                            var backupError: Error?
+
+                            for try await result in group {
+                                switch result {
+                                case .success(let win):
+                                    group.cancelAll()
+                                    if case .backup(let txt, let rec, _) = win, let pErr = primaryError {
+                                        return .backup(txt, rec, primaryError: pErr)
+                                    }
+                                    return win
+                                case .failure(let err, let isPrimary):
+                                    if isPrimary {
+                                        primaryError = err
+                                        let (summary, detail) = self.extractErrorSummary(err)
+                                        NSLog("[VoiceIME] ⚠️ メイン音声認識エラー (%@): %@ (%@)", currentProvider.displayName, summary, detail)
+                                    } else {
+                                        backupError = err
+                                        NSLog("[VoiceIME] ⚠️ バックアップ音声認識エラー: %@", err.localizedDescription)
+                                    }
+                                }
+                            }
+
+                            if let err = primaryError {
+                                throw err
+                            } else if let bErr = backupError {
+                                throw bErr
+                            } else {
+                                throw WhisperAPIService.APIError.invalidResponse
+                            }
                         }
-                    } else {
+
+                        whisperDuration = CFAbsoluteTimeGetCurrent() - whisperStart
+                        switch winner {
+                        case .primary(let text):
+                            rawText = text
+                            self.lastUsedWhisperProvider = currentProvider
+                            NSLog("[VoiceIME] 📝 メイン音声認識成功 (%.2f秒): [%@]", whisperDuration, rawText)
+                        case .backup(let text, var record, let primErr):
+                            rawText = text
+                            self.lastUsedWhisperProvider = backup
+
+                            // メインが明示的エラー（429や接続切断等）で落ちていた場合は、その具体的なエラー理由を記録
+                            if let primErr = primErr {
+                                let (summary, detail) = self.extractErrorSummary(primErr)
+                                record = FallbackRecord(
+                                    timestamp: Date(),
+                                    primaryProvider: currentProvider,
+                                    backupProvider: backup,
+                                    step: "音声認識",
+                                    reasonSummary: summary,
+                                    detail: detail
+                                )
+                            }
+
+                            self.lastFallbackRecord = record
+                            fallbackNotices.append(record.displayNotice)
+                            NSLog("[VoiceIME] 📝 バックアップ音声認識が勝利 (%.2f秒): [%@]", whisperDuration, rawText)
+                        }
+                    } catch {
+                        let (summary, detail) = self.extractErrorSummary(error)
+                        NSLog("[VoiceIME] ⚠️ ヘッジド音声認識両系失敗 (%@): %@ (%@)", currentProvider.displayName, summary, detail)
+                        throw error
+                    }
+                } else {
+                    // バックアップ未設定の場合は通常通りメインのみ実行
+                    do {
+                        rawText = try await self.api.transcribe(
+                            audioFileURL: targetAudioURL,
+                            baseURL: baseURL,
+                            apiKey: apiKey,
+                            model: model,
+                            mode: mode,
+                            prompt: effectiveWhisperPrompt,
+                            language: language
+                        )
+                        whisperDuration = CFAbsoluteTimeGetCurrent() - whisperStart
+                        self.lastUsedWhisperProvider = currentProvider
+                        NSLog("[VoiceIME] 📝 音声認識成功 (%.2f秒): [%@]", whisperDuration, rawText)
+                    } catch {
+                        let (summary, detail) = self.extractErrorSummary(error)
+                        NSLog("[VoiceIME] ⚠️ 音声認識エラー (%@): %@ (%@)", currentProvider.displayName, summary, detail)
                         throw error
                     }
                 }
@@ -272,6 +461,7 @@ public final class AppState: ObservableObject {
                 guard !trimmedText.isEmpty else {
                     self.phase = .idle
                     self.statusMessage = "音声が検出されませんでした。"
+                    NSLog("[VoiceIME] ⚠️ 音声認識テキストが空でした")
                     return
                 }
 
@@ -284,77 +474,227 @@ public final class AppState: ObservableObject {
 
                 if isLLMEnabled && mode == .transcriptions {
                     self.phase = .refining
-                    self.statusMessage = "AI推敲中..."
+                    self.statusMessage = refinementStyle == .casual ? "AI推敲中(口語)..." : "AI推敲中(文章)..."
+                    NSLog("[VoiceIME] 🤖 AI推敲リクエスト送信 (%@, モデル: %@, スタイル: %@)", currentProvider.displayName, currentLLMConfig.modelName, refinementStyle.rawValue)
 
                     let llmStart = CFAbsoluteTimeGetCurrent()
-                    do {
-                        refinedText = try await self.llm.refine(
-                            text: trimmedText,
-                            baseURL: currentLLMConfig.baseURL,
-                            apiKey: apiKey,
-                            model: currentLLMConfig.modelName,
-                            promptHint: prompt
-                        )
-                        llmDuration = CFAbsoluteTimeGetCurrent() - llmStart
-                    } catch {
-                        // メインLLMが失敗した場合、バックアッププロバイダでLLM推敲を自動試行
-                        if let backup = self.settings.backupProvider,
-                           let backupKey = self.keychain.loadAPIKey(for: backup) {
-                            let backupLLMConfig = self.settings.llmConfig(for: backup)
-                            self.statusMessage = "\(backup.displayName) でAI推敲を再試行中..."
 
-                            do {
-                                refinedText = try await self.llm.refine(
-                                    text: trimmedText,
-                                    baseURL: backupLLMConfig.baseURL,
-                                    apiKey: backupKey,
-                                    model: backupLLMConfig.modelName,
-                                    promptHint: prompt
-                                )
-                                llmDuration = CFAbsoluteTimeGetCurrent() - llmStart
-                                fallbackNotice = (fallbackNotice ?? "") + " (\(backup.displayName) AI推敲)"
-                            } catch {
-                                // バックアップも失敗した場合は、生テキスト（Whisper出力）にフォールバックして処理を継続
-                                refinedText = trimmedText
+                    if let backup = self.settings.backupProvider,
+                       let backupKey = self.keychain.loadAPIKey(for: backup) {
+                        // =========================================================
+                        // 🚀 LLM ヘッジド・リクエスト (Hedged Requests / 時間差レーシング)
+                        // =========================================================
+                        // 1. まずメイン（Groq等）に推敲リクエスト送信
+                        // 2. 1.5秒経過しても応答がない場合、バックアップ（OpenAI等）にも並列で投げる
+                        // 3. どちらか早く成功した方の推敲結果を採用する
+                        let backupLLMConfig = self.settings.llmConfig(for: backup)
+                        let hedgedDelayNanoseconds: UInt64 = 1_500_000_000 // 1.5秒
+
+                        enum RefineWinner {
+                            case primary(String)
+                            case backup(String, FallbackRecord, primaryError: Error?)
+                        }
+
+                        enum LLMTaskResult {
+                            case success(RefineWinner)
+                            case failure(Error, isPrimary: Bool)
+                        }
+
+                        do {
+                            let winner = try await withThrowingTaskGroup(of: LLMTaskResult.self) { group -> RefineWinner in
+                                // タスク1: メインLLM
+                                group.addTask {
+                                    do {
+                                        let res = try await self.llm.refine(
+                                            text: trimmedText,
+                                            baseURL: currentLLMConfig.baseURL,
+                                            apiKey: apiKey,
+                                            model: currentLLMConfig.modelName,
+                                            promptHint: prompt,
+                                            style: refinementStyle
+                                        )
+                                        return .success(.primary(res))
+                                    } catch {
+                                        return .failure(error, isPrimary: true)
+                                    }
+                                }
+
+                                // タスク2: 1.5秒ディレイ後にバックアップを発射
+                                group.addTask {
+                                    do {
+                                        try await Task.sleep(nanoseconds: hedgedDelayNanoseconds)
+                                        try Task.checkCancellation()
+
+                                        await MainActor.run {
+                                            self.statusMessage = "\(backup.displayName) で並列推敲中 (応答遅延)..."
+                                        }
+                                        NSLog("[VoiceIME] ⚡️ メインLLM(%@)応答待ち1.5秒超過: バックアップ(%@)へ並行リクエスト発射", currentProvider.displayName, backup.displayName)
+
+                                        let res = try await self.llm.refine(
+                                            text: trimmedText,
+                                            baseURL: backupLLMConfig.baseURL,
+                                            apiKey: backupKey,
+                                            model: backupLLMConfig.modelName,
+                                            promptHint: prompt,
+                                            style: refinementStyle
+                                        )
+
+                                        let record = FallbackRecord(
+                                            timestamp: Date(),
+                                            primaryProvider: currentProvider,
+                                            backupProvider: backup,
+                                            step: "AI推敲",
+                                            reasonSummary: "応答遅延 (1.5秒超過)",
+                                            detail: "メインプロバイダの推敲応答が1.5秒以内に返らなかったため、バックアップを並行実行し最速応答を採用しました。"
+                                        )
+                                        return .success(.backup(res, record, primaryError: nil))
+                                    } catch {
+                                        return .failure(error, isPrimary: false)
+                                    }
+                                }
+
+                                var primaryError: Error?
+                                var backupError: Error?
+
+                                for try await result in group {
+                                    switch result {
+                                    case .success(let win):
+                                        group.cancelAll()
+                                        if case .backup(let txt, let rec, _) = win, let pErr = primaryError {
+                                            return .backup(txt, rec, primaryError: pErr)
+                                        }
+                                        return win
+                                    case .failure(let err, let isPrimary):
+                                        if isPrimary {
+                                            primaryError = err
+                                            let (summary, detail) = self.extractErrorSummary(err)
+                                            NSLog("[VoiceIME] ⚠️ メインAI推敲エラー (%@): %@ (%@)", currentProvider.displayName, summary, detail)
+                                        } else {
+                                            backupError = err
+                                            NSLog("[VoiceIME] ⚠️ バックアップAI推敲エラー: %@", err.localizedDescription)
+                                        }
+                                    }
+                                }
+
+                                if let err = primaryError {
+                                    throw err
+                                } else if let bErr = backupError {
+                                    throw bErr
+                                } else {
+                                    throw LLMService.LLMError.invalidResponse
+                                }
                             }
-                        } else {
-                            // バックアップキーがない場合は生テキストを使用
+
+                            llmDuration = CFAbsoluteTimeGetCurrent() - llmStart
+                            switch winner {
+                            case .primary(let text):
+                                refinedText = text
+                                self.lastUsedLLMProvider = currentProvider
+                                NSLog("[VoiceIME] ✨ メインAI推敲成功 (%.2f秒): [%@]", llmDuration, refinedText)
+                            case .backup(let text, var record, let primErr):
+                                refinedText = text
+                                self.lastUsedLLMProvider = backup
+
+                                if let primErr = primErr {
+                                    let (summary, detail) = self.extractErrorSummary(primErr)
+                                    record = FallbackRecord(
+                                        timestamp: Date(),
+                                        primaryProvider: currentProvider,
+                                        backupProvider: backup,
+                                        step: "AI推敲",
+                                        reasonSummary: summary,
+                                        detail: detail
+                                    )
+                                }
+
+                                self.lastFallbackRecord = record
+                                fallbackNotices.append(record.displayNotice)
+                                NSLog("[VoiceIME] ✨ バックアップAI推敲が勝利 (%.2f秒): [%@]", llmDuration, refinedText)
+                            }
+                        } catch {
+                            NSLog("[VoiceIME] ⚠️ ヘッジドAI推敲両系失敗: %@。生テキストを使用します", error.localizedDescription)
                             refinedText = trimmedText
+                            self.lastUsedLLMProvider = nil
+                        }
+                    } else {
+                        // バックアップ未設定の場合は通常通りメインのみ実行
+                        do {
+                            refinedText = try await self.llm.refine(
+                                text: trimmedText,
+                                baseURL: currentLLMConfig.baseURL,
+                                apiKey: apiKey,
+                                model: currentLLMConfig.modelName,
+                                promptHint: prompt,
+                                style: refinementStyle
+                            )
+                            llmDuration = CFAbsoluteTimeGetCurrent() - llmStart
+                            self.lastUsedLLMProvider = currentProvider
+                            NSLog("[VoiceIME] ✨ AI推敲成功 (%.2f秒): [%@]", llmDuration, refinedText)
+                        } catch {
+                            let (summary, detail) = self.extractErrorSummary(error)
+                            NSLog("[VoiceIME] ⚠️ AI推敲エラー (%@): %@ (%@)。生テキストを使用します", currentProvider.displayName, summary, detail)
+                            refinedText = trimmedText
+                            self.lastUsedLLMProvider = nil
                         }
                     }
+                } else {
+                    self.lastUsedLLMProvider = nil
                 }
 
                 // ==========================================
-                // 3. ユーザー独自の辞書置換ルールを適用
+                // 3. 句読点正規化（英文末尾の「。」を「.」にする等）
+                // ==========================================
+                let normalizedText = LLMService.normalizePunctuation(for: refinedText)
+
+                // ==========================================
+                // 4. ユーザー独自の辞書置換ルールを適用
                 // ==========================================
                 let processedText = self.dictionary.apply(
-                    text: refinedText,
+                    text: normalizedText,
                     rules: rules
                 )
                 self.lastProcessedText = processedText
 
                 // ==========================================
-                // 4. テキスト自動挿入（ペースト）
+                // 5. テキスト自動挿入（ペースト）
                 // ==========================================
+                // キャンセル済みなら、ユーザーの意図しないタイミングでペーストしない
+                if Task.isCancelled {
+                    self.phase = .idle
+                    self.statusMessage = "処理をキャンセルしました。"
+                    return
+                }
+
                 self.phase = .pasting
                 self.statusMessage = "入力中..."
 
                 let totalElapsed = CFAbsoluteTimeGetCurrent() - totalStartTime
                 let timeStr = String(format: "%.1f秒", totalElapsed)
-                NSLog("[VoiceIME] 完了: 計 %.2f秒 (音声認識: %.2f秒, AI推敲: %.2f秒)", totalElapsed, whisperDuration, llmDuration)
+                let completionNotice = fallbackNotices.isEmpty ? "" : " " + fallbackNotices.joined(separator: " ")
+                let completionMessage = "完了 (\(timeStr))" + completionNotice
+                NSLog("[VoiceIME] 🚀 ペースト実行: [%@] (計 %.2f秒, 認識: %.2f秒, 推敲: %.2f秒)", processedText, totalElapsed, whisperDuration, llmDuration)
 
                 self.paster.paste(text: processedText, restoreClipboard: restoreClipboard) { [weak self] in
                     Task { @MainActor [weak self] in
                         guard let self = self else { return }
                         self.phase = .idle
-                        self.statusMessage = fallbackNotice != nil ? "完了 (\(timeStr))\(fallbackNotice!)" : "完了 (\(timeStr))"
+                        self.statusMessage = completionMessage
+                        NSLog("[VoiceIME] ✅ 全処理完了")
                     }
                 }
 
             } catch {
+                // URLSession のキャンセルは URLError(.cancelled) としてラップされて届くため、
+                // エラー型ではなく Task のキャンセル状態で判定する
+                if Task.isCancelled {
+                    self.phase = .idle
+                    self.statusMessage = "処理をキャンセルしました。"
+                    return
+                }
                 self.phase = .error(error.localizedDescription)
                 self.statusMessage = "エラーが発生しました。"
                 self.errorMessage = error.localizedDescription
+                NSLog("[VoiceIME] ❌ 処理中断エラー: %@", error.localizedDescription)
             }
         }
     }
@@ -364,8 +704,34 @@ public final class AppState: ObservableObject {
         maxRecordingTimer?.invalidate()
         maxRecordingTimer = nil
 
+        // 進行中の文字起こし処理があればキャンセル（URLSession の await も中断される）
+        processingTask?.cancel()
+
         recorder.cancelRecording()
         phase = .idle
         statusMessage = "録音をキャンセルしました。"
+    }
+
+    /// エラーから要約表示用の理由と詳細メッセージを抽出
+    public func extractErrorSummary(_ error: Error) -> (summary: String, detail: String) {
+        if let apiError = error as? WhisperAPIService.APIError {
+            let detail = apiError.errorDescription ?? error.localizedDescription
+            return (apiError.summary, detail)
+        }
+        if let llmError = error as? LLMService.LLMError {
+            let detail = llmError.errorDescription ?? error.localizedDescription
+            return (llmError.summary, detail)
+        }
+        if let urlError = error as? URLError {
+            if urlError.code == .timedOut {
+                return ("タイムアウト (応答なし)", "リクエストがタイムアウトしました。")
+            }
+            return ("通信エラー", urlError.localizedDescription)
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut {
+            return ("タイムアウト (応答なし)", "リクエストがタイムアウトしました。")
+        }
+        return ("エラー", error.localizedDescription)
     }
 }

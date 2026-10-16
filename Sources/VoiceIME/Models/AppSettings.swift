@@ -29,6 +29,36 @@ public enum TriggerMode: String, CaseIterable, Identifiable {
     }
 }
 
+public enum RefinementStyle: String, CaseIterable, Identifiable {
+    case casual = "casual"   // 口語モード (自然な話し言葉・チャット)
+    case formal = "formal"   // 文章モード (整った書き言葉・メール・ドキュメント)
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .casual: return "口語モード (自然な会話・チャット)"
+        case .formal: return "文章モード (報告書・ビジネスメール)"
+        }
+    }
+
+    public var shortTitle: String {
+        switch self {
+        case .casual: return "口語"
+        case .formal: return "文章"
+        }
+    }
+
+    public var description: String {
+        switch self {
+        case .casual:
+            return "話したとおりの語尾（〜ね、〜よ、〜かな等）や口語ニュアンスを100%維持し、聞き間違いやフィラーのみを修正します。"
+        case .formal:
+            return "話し言葉を、読みやすく整った標準的な書き言葉（です・ます調など）に校正・推敲します。"
+        }
+    }
+}
+
 public enum AudioSensitivityPreset: String, CaseIterable, Identifiable {
     case whisperQuiet = "whisperQuiet"
     case standard = "standard"
@@ -74,6 +104,7 @@ public final class AppSettings: ObservableObject {
         static let triggerMode = "voiceime_triggerMode"
         static let autoFallbackEnabled = "voiceime_autoFallbackEnabled"
         static let llmRefinementEnabled = "voiceime_llmRefinementEnabled"
+        static let refinementStyle = "voiceime_refinementStyle"
         static let promptHint = "voiceime_promptHint"
         static let customVocabulary = "voiceime_customVocabulary"
         static let language = "voiceime_language"
@@ -138,6 +169,11 @@ public final class AppSettings: ObservableObject {
     /// AI（LLM）による文脈理解・句読点・推敲の有効化フラグ
     @Published public var llmRefinementEnabled: Bool {
         didSet { defaults.set(llmRefinementEnabled, forKey: Keys.llmRefinementEnabled) }
+    }
+
+    /// AI推敲のスタイル（口語モード / 文章モード）
+    @Published public var refinementStyle: RefinementStyle {
+        didSet { defaults.set(refinementStyle.rawValue, forKey: Keys.refinementStyle) }
     }
 
     @Published public var promptHint: String {
@@ -264,6 +300,9 @@ public final class AppSettings: ObservableObject {
 
         self.autoFallbackEnabled = defaults.object(forKey: Keys.autoFallbackEnabled) != nil ? defaults.bool(forKey: Keys.autoFallbackEnabled) : true
         self.llmRefinementEnabled = defaults.object(forKey: Keys.llmRefinementEnabled) != nil ? defaults.bool(forKey: Keys.llmRefinementEnabled) : true
+
+        let savedStyle = defaults.string(forKey: Keys.refinementStyle) ?? RefinementStyle.casual.rawValue
+        self.refinementStyle = RefinementStyle(rawValue: savedStyle) ?? .casual
 
         let savedHint = defaults.string(forKey: Keys.promptHint) ?? ""
         self.promptHint = savedHint
@@ -401,6 +440,7 @@ public final class AppSettings: ObservableObject {
         triggerMode = .pushToTalk
         autoFallbackEnabled = true
         llmRefinementEnabled = true
+        refinementStyle = .casual
         promptHint = ""
         language = "ja"
         restoreClipboard = true

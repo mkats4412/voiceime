@@ -36,6 +36,16 @@ swiftc \
 echo "-> Copying Info.plist..."
 cp Info.plist "${CONTENTS_DIR}/Info.plist"
 
+# アプリアイコン (AppIcon.icns) の配置
+if [[ ! -f "AppIcon.icns" ]]; then
+    echo "-> Generating AppIcon.icns..."
+    swift scripts/generate_icon.swift
+fi
+if [[ -f "AppIcon.icns" ]]; then
+    echo "-> Copying AppIcon.icns..."
+    cp AppIcon.icns "${RESOURCES_DIR}/AppIcon.icns"
+fi
+
 # PkgInfo の作成
 echo -n "APPL????" > "${CONTENTS_DIR}/PkgInfo"
 
@@ -68,9 +78,15 @@ echo "Application created at: ${APP_BUNDLE}"
 echo "-> 署名検証:"
 codesign -d -r- "${APP_BUNDLE}" 2>&1 | head -n 3
 
-# オプション: --install 引数があればアプリケーションフォルダに配置 (第2引数で場所指定可能、デフォルトは /Applications)
+# オプション: --install 引数があればアプリケーションフォルダに配置
 if [[ "${1:-}" == "--install" ]]; then
-    DEST_DIR="${2:-/Applications}"
+    if [[ -n "${2:-}" ]]; then
+        DEST_DIR="$2"
+    elif [[ -d "/Volumes/ExDrive/Applications" ]]; then
+        DEST_DIR="/Volumes/ExDrive/Applications"
+    else
+        DEST_DIR="/Applications"
+    fi
     echo "-> ${DEST_DIR} にインストール中..."
     mkdir -p "${DEST_DIR}"
     rm -rf "${DEST_DIR}/${APP_NAME}.app"

@@ -1,16 +1,53 @@
 import SwiftUI
 
+@MainActor
+public final class DictionarySettingsViewModel: ObservableObject {
+    @Published public var newWordInput: String = ""
+    @Published public var newPattern: String = ""
+    @Published public var newReplacement: String = ""
+    @Published public var newIsRegex: Bool = false
+    @Published public var testInput: String = "人気のアニソンを聴きます。郵便番号1000001改行よろしくお願いいたします。"
+
+    public init() {}
+
+    public func addWord(settings: AppSettings) {
+        let trimmed = newWordInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        settings.addVocabularyWord(trimmed)
+        newWordInput = ""
+    }
+
+    public func addRule(settings: AppSettings) {
+        let pattern = newPattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pattern.isEmpty else { return }
+
+        let rule = DictionaryRule(
+            pattern: pattern,
+            replacement: newReplacement,
+            isRegex: newIsRegex,
+            isEnabled: true
+        )
+        settings.dictionaryRules.append(rule)
+
+        newPattern = ""
+        newReplacement = ""
+        newIsRegex = false
+    }
+
+    public func deleteRule(id: UUID, settings: AppSettings) {
+        settings.dictionaryRules.removeAll { $0.id == id }
+    }
+}
+
 public struct DictionarySettingsTab: View {
     @ObservedObject var settings = AppSettings.shared
+    @StateObject private var vm = DictionarySettingsViewModel()
 
-    // 単語登録用
-    @State private var newWordInput: String = ""
-
-    // 置換ルール用
-    @State private var newPattern: String = ""
-    @State private var newReplacement: String = ""
-    @State private var newIsRegex: Bool = false
-    @State private var testInput: String = "人気のアニソンを聴きます。郵便番号1000001改行よろしくお願いいたします。"
+    private var newWordInput: String { vm.newWordInput }
+    private var newPattern: String { vm.newPattern }
+    private var newReplacement: String { vm.newReplacement }
+    private var newIsRegex: Bool { vm.newIsRegex }
+    private var testInput: String { vm.testInput }
     // フォーカス状態の管理（フォーカス時にプレースホルダーを非表示にするため）
     private enum FocusField: Hashable {
         case newWord
@@ -68,7 +105,7 @@ public struct DictionarySettingsTab: View {
 
                     // 単語追加フォーム
                     HStack(spacing: 8) {
-                        TextField(focusedField == .newWord ? "" : "単語を入力 (例: VoiceIME, Kubernetes, 齋藤)...", text: $newWordInput)
+                        TextField(focusedField == .newWord ? "" : "単語を入力 (例: VoiceIME, Kubernetes, 齋藤)...", text: $vm.newWordInput)
                             .focused($focusedField, equals: .newWord)
                             .textFieldStyle(.roundedBorder)
                             .onSubmit {
@@ -178,7 +215,7 @@ public struct DictionarySettingsTab: View {
 
                     // 置換ルール追加フォーム
                     HStack(spacing: 8) {
-                        TextField(focusedField == .newPattern ? "" : "置換前 (例: アニソン)", text: $newPattern)
+                        TextField(focusedField == .newPattern ? "" : "置換前 (例: アニソン)", text: $vm.newPattern)
                             .focused($focusedField, equals: .newPattern)
                             .textFieldStyle(.roundedBorder)
 
@@ -186,11 +223,11 @@ public struct DictionarySettingsTab: View {
                             .foregroundColor(.secondary)
                             .font(.caption)
 
-                        TextField(focusedField == .newReplacement ? "" : "置換後 (例: アニメソング, \\nで改行)", text: $newReplacement)
+                        TextField(focusedField == .newReplacement ? "" : "置換後 (例: アニメソング, \\nで改行)", text: $vm.newReplacement)
                             .focused($focusedField, equals: .newReplacement)
                             .textFieldStyle(.roundedBorder)
 
-                        Toggle("正規表現", isOn: $newIsRegex)
+                        Toggle("正規表現", isOn: $vm.newIsRegex)
                             .toggleStyle(.checkbox)
                             .font(.caption)
 
@@ -266,7 +303,7 @@ public struct DictionarySettingsTab: View {
                             .font(.subheadline)
                             .fontWeight(.medium)
 
-                        TextField(focusedField == .testInput ? "" : "キーボードで入力してテスト...", text: $testInput)
+                        TextField(focusedField == .testInput ? "" : "キーボードで入力してテスト...", text: $vm.testInput)
                             .focused($focusedField, equals: .testInput)
                             .textFieldStyle(.roundedBorder)
 
@@ -312,31 +349,15 @@ public struct DictionarySettingsTab: View {
     }
 
     private func addWord() {
-        let trimmed = newWordInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        settings.addVocabularyWord(trimmed)
-        newWordInput = ""
+        vm.addWord(settings: settings)
     }
 
     private func addRule() {
-        let pattern = newPattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !pattern.isEmpty else { return }
-
-        let rule = DictionaryRule(
-            pattern: pattern,
-            replacement: newReplacement,
-            isRegex: newIsRegex,
-            isEnabled: true
-        )
-        settings.dictionaryRules.append(rule)
-
-        newPattern = ""
-        newReplacement = ""
-        newIsRegex = false
+        vm.addRule(settings: settings)
     }
 
     private func deleteRule(id: UUID) {
-        settings.dictionaryRules.removeAll { $0.id == id }
+        vm.deleteRule(id: id, settings: settings)
     }
 }
 

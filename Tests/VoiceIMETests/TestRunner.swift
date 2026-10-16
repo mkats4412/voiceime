@@ -165,7 +165,56 @@ struct TestRunner {
         let out3 = llm.sanitizeLLMOutput("   \n\n  ", fallback: "フォールバック")
         assert(out3 == "フォールバック", "Empty fallback failed: \(out3)")
 
-        print("  -> LLMService URL Construction and Sanitization passed!")
+        // 5. 口語モード vs 文章モードのプロンプト生成テスト
+        let casualPrompt = llm.generateSystemPrompt(style: .casual, promptHint: "用語A, 用語B")
+        assert(casualPrompt.contains("口語モード"), "Casual prompt should specify 口語モード")
+        assert(casualPrompt.contains("語尾・終助詞・口語ニュアンスの完全維持"), "Casual prompt must contain trailing particle preservation rule")
+        assert(casualPrompt.contains("〇〇でありませんね"), "Casual prompt should include explicit negative example")
+        assert(casualPrompt.contains("言語と約物の整合性"), "Casual prompt should include language punctuation rule")
+        assert(casualPrompt.contains("用語A, 用語B"), "Casual prompt should contain prompt hint")
+
+        let formalPrompt = llm.generateSystemPrompt(style: .formal, promptHint: nil)
+        assert(formalPrompt.contains("文章モード"), "Formal prompt should specify 文章モード")
+        assert(formalPrompt.contains("端正な書き言葉への推敲"), "Formal prompt should specify formal rewriting")
+        assert(formalPrompt.contains("言語と約物の整合性"), "Formal prompt should include language punctuation rule")
+
+        // 6. 英文句読点の正規化テスト (英語で入力した際に末尾が「。」でなく「.」になること等の検証)
+        let enOut1 = LLMService.normalizePunctuation(for: "This is a test。")
+        assert(enOut1 == "This is a test.", "English trailing period normalization failed: got '\(enOut1)'")
+
+        let enOut2 = LLMService.normalizePunctuation(for: "How are you doing？")
+        assert(enOut2 == "How are you doing?", "English trailing question mark normalization failed: got '\(enOut2)'")
+
+        let enOut3 = LLMService.normalizePunctuation(for: "Hello world、how is it going。")
+        assert(enOut3 == "Hello world, how is it going.", "English comma and period normalization failed: got '\(enOut3)'")
+
+        let enOut4 = LLMService.normalizePunctuation(for: "Great job！")
+        assert(enOut4 == "Great job!", "English exclamation mark normalization failed: got '\(enOut4)'")
+
+        let enOut5 = llm.sanitizeLLMOutput("整形後：Thank you very much。", fallback: "fallback")
+        assert(enOut5 == "Thank you very much.", "LLM output sanitize with English trailing period failed: got '\(enOut5)'")
+
+        // 日本語文が維持されることの確認
+        let jaOut1 = LLMService.normalizePunctuation(for: "明日の打ち合わせは10時からです。")
+        assert(jaOut1 == "明日の打ち合わせは10時からです。", "Japanese trailing period should be preserved: got '\(jaOut1)'")
+
+        let jaOut2 = LLMService.normalizePunctuation(for: "おすすめのPCはMacです。")
+        assert(jaOut2 == "おすすめのPCはMacです。", "Japanese text with English word should preserve Japanese period: got '\(jaOut2)'")
+
+        // 最後の文が英語の節で終わる場合の救済確認
+        let mixedOut = LLMService.normalizePunctuation(for: "メモを作成しました。\nThank you for your help。")
+        assert(mixedOut == "メモを作成しました。\nThank you for your help.", "Trailing English clause should have period normalized: got '\(mixedOut)'")
+
+        // 7. AppSettings refinementStyle テスト
+        let settings = AppSettings.shared
+        let originalStyle = settings.refinementStyle
+        settings.refinementStyle = .formal
+        assert(settings.refinementStyle == .formal, "RefinementStyle should be formal")
+        settings.refinementStyle = .casual
+        assert(settings.refinementStyle == .casual, "RefinementStyle should be casual")
+        settings.refinementStyle = originalStyle
+
+        print("  -> LLMService URL Construction, Sanitization, Punctuation Normalization, and Prompt Modes passed!")
     }
 
     static func testAudioAnalysisService() {

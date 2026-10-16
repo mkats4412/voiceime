@@ -39,7 +39,8 @@ public final class AudioAnalysisService {
         }
 
         let format = file.processingFormat
-        let frameCount = AVAudioFrameCount(file.length)
+        // Int64 → UInt32 の変換は範囲外だとトラップ（クラッシュ）するため exactly で安全に変換
+        let frameCount = AVAudioFrameCount(exactly: max(0, file.length)) ?? 0
         guard frameCount > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
             return AudioAnalysisMetrics(
                 hasSpeech: false,
@@ -138,11 +139,12 @@ public final class AudioAnalysisService {
     public func trimLeadingTrailingNoise(
         audioFileURL: URL,
         thresholdDB: Float,
-        marginSeconds: Double = 0.18
+        leadingMarginSeconds: Double = 0.15,
+        trailingMarginSeconds: Double = 0.35
     ) -> URL? {
         guard let file = try? AVAudioFile(forReading: audioFileURL) else { return nil }
         let format = file.processingFormat
-        let frameCount = AVAudioFrameCount(file.length)
+        let frameCount = AVAudioFrameCount(exactly: max(0, file.length)) ?? 0
         guard frameCount > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return nil }
         guard format.channelCount > 0,
               (try? file.read(into: buffer)) != nil,
@@ -177,10 +179,12 @@ public final class AudioAnalysisService {
             return nil
         }
 
-        // 前後に自然なマージン（約 180ms）を確保して、子音や語尾の脱落を防止
-        let marginFrames = Int(sampleRate * Float(marginSeconds))
-        let startFrame = max(0, first - marginFrames)
-        let endFrame = min(totalFrames, last + marginFrames)
+        // 先頭（150ms）と末尾（350ms）のマージンを確保。
+        // 特に語尾の終助詞（〜ね、〜よ等）のフェードアウトや息づかいが脱落しないよう末尾マージンを十分に確保する。
+        let leadingMarginFrames = Int(sampleRate * Float(leadingMarginSeconds))
+        let trailingMarginFrames = Int(sampleRate * Float(trailingMarginSeconds))
+        let startFrame = max(0, first - leadingMarginFrames)
+        let endFrame = min(totalFrames, last + trailingMarginFrames)
         let trimmedLength = endFrame - startFrame
 
         // 削る部分が前後合計で 150ms 未満なら、再エンコードのコストを避けて元のファイルをそのまま使用
@@ -195,6 +199,12 @@ public final class AudioAnalysisService {
             return nil
         }
 
+        // 生ポインタアクセスの前提条件（非インターリーブ・範囲内）を明示的に検証
+        guard !format.isInterleaved,
+              startFrame >= 0, endFrame <= totalFrames, trimmedLength > 0 else {
+            return nil
+        }
+
         let trimmedURL = FileManager.default.temporaryDirectory.appendingPathComponent("voiceime_trimmed_\(UUID().uuidString).m4a")
         let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
@@ -204,26 +214,41 @@ public final class AudioAnalysisService {
             AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
         ]
 
+        // AVAudioFile(forWriting:) の時点でファイルが作成されるため、
+        // 以降のどの失敗経路でも一時ファイルを確実に削除する（一時ファイルリーク防止）
+        var succeeded = false
+        defer {
+            if !succeeded {
+                try? FileManager.default.removeItem(at: trimmedURL)
+            }
+        }
+
         do {
-            let outFile = try AVAudioFile(forWriting: trimmedURL, settings: settings)
-            let outFormat = outFile.processingFormat
-            guard let trimBuffer = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: AVAudioFrameCount(trimmedLength)) else {
-                return nil
-            }
-            trimBuffer.frameLength = AVAudioFrameCount(trimmedLength)
-            guard let trimChannels = trimBuffer.floatChannelData else { return nil }
-
-            let outChannels = Int(outFormat.channelCount)
-            for ch in 0..<outChannels {
-                let srcCh = min(ch, Int(format.channelCount) - 1)
-                let src = channels[srcCh]
-                let dst = trimChannels[ch]
-                for i in 0..<trimmedLength {
-                    dst[i] = src[startFrame + i]
+            // writer をスコープ内に閉じ込め、URL を返す前に確実に解放（= flush/close）させる
+            try autoreleasepool {
+                let outFile = try AVAudioFile(forWriting: trimmedURL, settings: settings)
+                let outFormat = outFile.processingFormat
+                guard !outFormat.isInterleaved,
+                      let trimBuffer = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: AVAudioFrameCount(trimmedLength)),
+                      let trimChannels = trimBuffer.floatChannelData else {
+                    throw CocoaError(.fileWriteUnknown)
                 }
-            }
+                trimBuffer.frameLength = AVAudioFrameCount(trimmedLength)
 
-            try outFile.write(from: trimBuffer)
+                let srcChannelCount = Int(buffer.format.channelCount)
+                let outChannels = Int(outFormat.channelCount)
+                for ch in 0..<outChannels {
+                    let srcCh = min(ch, srcChannelCount - 1)
+                    let src = channels[srcCh]
+                    let dst = trimChannels[ch]
+                    for i in 0..<trimmedLength {
+                        dst[i] = src[startFrame + i]
+                    }
+                }
+
+                try outFile.write(from: trimBuffer)
+            }
+            succeeded = true
             return trimmedURL
         } catch {
             return nil

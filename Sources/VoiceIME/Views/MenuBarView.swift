@@ -143,12 +143,80 @@ public struct MenuBarView: View {
                 .padding(.horizontal, 4)
             }
 
+            // 口語モード / 文章モード切替（文字起こし & AI推敲ON時）
+            if settings.apiMode == .transcriptions && settings.llmRefinementEnabled {
+                HStack(spacing: 6) {
+                    Text("推敲:")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+
+                    Button("口語") {
+                        settings.refinementStyle = .casual
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: settings.refinementStyle == .casual ? .bold : .regular))
+                    .foregroundColor(settings.refinementStyle == .casual ? .accentColor : .primary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(settings.refinementStyle == .casual ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
+                    )
+                    .help("語尾や口語ニュアンスをそのまま維持（チャット・会話向け）")
+
+                    Button("文章") {
+                        settings.refinementStyle = .formal
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: settings.refinementStyle == .formal ? .bold : .regular))
+                    .foregroundColor(settings.refinementStyle == .formal ? .accentColor : .primary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(settings.refinementStyle == .formal ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
+                    )
+                    .help("整った標準的な書き言葉に推敲（メール・報告書向け）")
+
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+            }
+
             // 直前の書き起こしプレビュー（存在する場合のみコンパクトに表示）
             if !appState.lastProcessedText.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("直前の入力:")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .center, spacing: 6) {
+                        Text("直前の入力:")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+
+                        // どちらのLLM/音声認識プロバイダで認識・出力されたかを示すバッジ
+                        if let provider = appState.lastEffectiveProvider {
+                            let pColor = providerColor(for: provider)
+                            HStack(spacing: 3) {
+                                Circle()
+                                    .fill(pColor)
+                                    .frame(width: 5, height: 5)
+                                Text("認識: \(provider.displayName)")
+                                    .font(.system(size: 9.5, weight: .bold))
+                                    .foregroundColor(pColor)
+                            }
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(pColor.opacity(0.12))
+                            )
+                        }
+
+                        Spacer()
+                        if settings.llmRefinementEnabled && settings.apiMode == .transcriptions {
+                            Text(settings.refinementStyle.shortTitle + "モード")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                        }
+                    }
                     Text(appState.lastProcessedText)
                         .font(.system(size: 11))
                         .lineLimit(2)
@@ -159,6 +227,53 @@ public struct MenuBarView: View {
                                 .fill(Color.secondary.opacity(0.08))
                         )
                 }
+                .padding(.horizontal, 2)
+            }
+
+            // 直近の障害回避・フォールバック警告（Groq等の失敗理由を可視化）
+            if let fallback = appState.lastFallbackRecord {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                            .font(.system(size: 11))
+                        Text("\(fallback.primaryProvider.displayName) \(fallback.step)失敗")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.orange)
+                        Spacer()
+                        Button(action: {
+                            appState.lastFallbackRecord = nil
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Text("理由: \(fallback.reasonSummary)")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundColor(.primary)
+
+                    Text(fallback.detail)
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text("➔ \(fallback.backupProvider.displayName) で自動継続しました")
+                        .font(.system(size: 9.5))
+                        .foregroundColor(.secondary)
+                }
+                .padding(7)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.orange.opacity(0.12))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                )
                 .padding(.horizontal, 2)
             }
 
@@ -224,7 +339,14 @@ public struct MenuBarView: View {
             }
         }
         .padding(10)
-        .frame(width: 210)
+        .frame(width: 220)
+    }
+
+    private func providerColor(for provider: APIProvider) -> Color {
+        switch provider {
+        case .groq: return .orange
+        case .openai: return .green
+        }
     }
 
     @ViewBuilder
@@ -242,18 +364,13 @@ public struct MenuBarView: View {
     }
 }
 
-/// メニュー項目用のホバースタイル
+/// メニュー項目用のボタンスタイル
 private struct HoverMenuItemStyle: ButtonStyle {
-    @State private var isHovered = false
-
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(configuration.isPressed ? Color.accentColor.opacity(0.3) : (isHovered ? Color.secondary.opacity(0.15) : Color.clear))
+                    .fill(configuration.isPressed ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.06))
             )
-            .onHover { hovering in
-                isHovered = hovering
-            }
     }
 }

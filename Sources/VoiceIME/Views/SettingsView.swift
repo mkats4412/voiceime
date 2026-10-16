@@ -18,8 +18,15 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
     }
 }
 
+@MainActor
+public final class SettingsViewModel: ObservableObject {
+    @Published public var selectedTab: SettingsTab = .api
+    @Published public var hoveredTab: SettingsTab? = nil
+    public init() {}
+}
+
 public struct SettingsView: View {
-    @State private var selectedTab: SettingsTab = .api
+    @StateObject private var vm = SettingsViewModel()
 
     public init() {}
 
@@ -30,11 +37,19 @@ public struct SettingsView: View {
                 ForEach(SettingsTab.allCases) { tab in
                     SettingsTabButton(
                         tab: tab,
-                        isSelected: selectedTab == tab,
+                        isSelected: vm.selectedTab == tab,
+                        isHovered: vm.hoveredTab == tab,
+                        onHover: { hovering in
+                            if hovering {
+                                vm.hoveredTab = tab
+                            } else if vm.hoveredTab == tab {
+                                vm.hoveredTab = nil
+                            }
+                        },
                         action: {
-                            guard selectedTab != tab else { return }
+                            guard vm.selectedTab != tab else { return }
                             withAnimation(.easeInOut(duration: 0.15)) {
-                                selectedTab = tab
+                                vm.selectedTab = tab
                             }
                         }
                     )
@@ -49,7 +64,7 @@ public struct SettingsView: View {
 
             // タブのコンテンツエリア（固定サイズでスクロール不要、すっきり配置）
             Group {
-                switch selectedTab {
+                switch vm.selectedTab {
                 case .api:
                     APISettingsTab()
                 case .dictionary:
@@ -70,9 +85,9 @@ public struct SettingsView: View {
 private struct SettingsTabButton: View {
     let tab: SettingsTab
     let isSelected: Bool
+    let isHovered: Bool
+    let onHover: (Bool) -> Void
     let action: () -> Void
-
-    @State private var isHovered: Bool = false
 
     var body: some View {
         Button(action: action) {
@@ -84,17 +99,14 @@ private struct SettingsTabButton: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(backgroundColor)
-            )
+            .background(backgroundColor)
             // ボタン全体の矩形（パディングおよび余白領域を含む）をクリック判定対象にする
             .contentShape(RoundedRectangle(cornerRadius: 8))
             .foregroundColor(isSelected ? .accentColor : .primary)
         }
         .buttonStyle(TabPressButtonStyle())
         .onHover { hovering in
-            isHovered = hovering
+            onHover(hovering)
         }
     }
 
