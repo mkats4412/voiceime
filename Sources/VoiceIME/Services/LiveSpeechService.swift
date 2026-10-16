@@ -131,36 +131,6 @@ public final class LiveSpeechService: ObservableObject {
 
     /// リアルタイム表示用の句読点補完と辞書置換
     nonisolated public static func formatLivePunctuation(text: String, isJapanese: Bool) -> String {
-        guard !text.isEmpty else { return text }
-
-        // 辞書ルールのリアルタイム適用（例: 「改行」➔ \n）
-        var formatted = DictionaryService.shared.apply(
-            text: text,
-            rules: AppSettings.shared.dictionaryRules
-        )
-
-        guard isJapanese else { return formatted }
-
-        // 1. 文末表現の直後に句点「。」を補完（スペースの有無を問わず、直後に次の文が始まっている場合）
-        let endingsPattern = "(です|ます|でした|ました|ません|ませんでした|ですね|ですよ|でしょうか|ございます|ございました|と思います|と考えます|とのことです)"
-        if let regex1 = try? NSRegularExpression(pattern: "\(endingsPattern)(\\s+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))", options: []) {
-            let range = NSRange(location: 0, length: (formatted as NSString).length)
-            formatted = regex1.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1。")
-        }
-
-        // 2. 接続詞・節の切れ目の読点「、」
-        let clausePattern = "(ですが|ですので|ですから|けれども|けれど|ただし|一方で|また|そして)(\\s+|(?=[あ-んア-ン一-龥a-zA-Z0-9]))"
-        if let regex2 = try? NSRegularExpression(pattern: clausePattern, options: []) {
-            let range = NSRange(location: 0, length: (formatted as NSString).length)
-            formatted = regex2.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1、")
-        }
-
-        // 連続した句読点の重複（例: 「。。」や「、、」）をクリーンアップ
-        formatted = formatted.replacingOccurrences(of: "。。", with: "。")
-        formatted = formatted.replacingOccurrences(of: "、、", with: "、")
-        formatted = formatted.replacingOccurrences(of: "、。", with: "。")
-        formatted = formatted.replacingOccurrences(of: "。、", with: "。")
-
-        return formatted
+        return PunctuationService.shared.format(text: text, isJapanese: isJapanese)
     }
 }

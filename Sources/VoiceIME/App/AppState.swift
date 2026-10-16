@@ -202,6 +202,16 @@ public final class AppState: ObservableObject {
         maxRecordingTimer?.invalidate()
         maxRecordingTimer = nil
 
+        // リアルタイムプレビューで最後に表示されていたテキストを取得・句読点補正を確定
+        let rawLive = LiveSpeechService.shared.partialText
+        let isJapanese = (settings.language.isEmpty || settings.language.lowercased().starts(with: "ja"))
+        let livePreviewText = PunctuationService.shared.format(text: rawLive, isJapanese: isJapanese)
+
+        // プレビューのテキストを最新の句読点付きに更新
+        if settings.floatingPreviewEnabled && !livePreviewText.isEmpty {
+            FloatingPreviewController.shared.updateLiveText(livePreviewText)
+        }
+
         // リアルタイム音声認識を停止し、プレビューを処理中フェーズへ
         LiveSpeechService.shared.stopLiveRecognition()
         if settings.floatingPreviewEnabled {
@@ -532,7 +542,8 @@ public final class AppState: ObservableObject {
                                             apiKey: apiKey,
                                             model: currentLLMConfig.modelName,
                                             promptHint: prompt,
-                                            style: refinementStyle
+                                            style: refinementStyle,
+                                            livePreviewText: livePreviewText
                                         )
                                         return .success(.primary(res))
                                     } catch {
@@ -557,7 +568,8 @@ public final class AppState: ObservableObject {
                                             apiKey: backupKey,
                                             model: backupLLMConfig.modelName,
                                             promptHint: prompt,
-                                            style: refinementStyle
+                                            style: refinementStyle,
+                                            livePreviewText: livePreviewText
                                         )
 
                                         let record = FallbackRecord(
@@ -646,7 +658,8 @@ public final class AppState: ObservableObject {
                                 apiKey: apiKey,
                                 model: currentLLMConfig.modelName,
                                 promptHint: prompt,
-                                style: refinementStyle
+                                style: refinementStyle,
+                                livePreviewText: livePreviewText
                             )
                             llmDuration = CFAbsoluteTimeGetCurrent() - llmStart
                             self.lastUsedLLMProvider = currentProvider
@@ -663,9 +676,14 @@ public final class AppState: ObservableObject {
                 }
 
                 // ==========================================
-                // 3. 句読点正規化（英文末尾の「。」を「.」にする等）
+                // 3. 画面プレビュー表示テキストとの句読点整合化・正規化
                 // ==========================================
-                let normalizedText = LLMService.normalizePunctuation(for: refinedText)
+                let alignedText = PunctuationService.shared.alignPunctuation(
+                    text: refinedText,
+                    referenceLiveText: livePreviewText,
+                    isJapanese: isJapanese
+                )
+                let normalizedText = LLMService.normalizePunctuation(for: alignedText)
 
                 // ==========================================
                 // 4. ユーザー独自の辞書置換ルールを適用
@@ -675,6 +693,11 @@ public final class AppState: ObservableObject {
                     rules: rules
                 )
                 self.lastProcessedText = processedText
+
+                // プレビューウィンドウの内容も最新の確定テキストに同期
+                if self.settings.floatingPreviewEnabled {
+                    FloatingPreviewController.shared.updateLiveText(processedText)
+                }
 
                 // ==========================================
                 // 5. テキスト出力（自動ペースト & フローティングプレビュー保留）

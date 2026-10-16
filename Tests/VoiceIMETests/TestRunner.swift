@@ -343,23 +343,43 @@ struct TestRunner {
     }
 
     static func testLivePunctuationFormatting() {
-        print("[TEST] Live Punctuation Formatting...")
+        print("[TEST] Live Punctuation Formatting & PunctuationService...")
 
-        // 文末表現後の空白が句点「。」に変換されること
+        // 1. 文末表現の直後および末尾（$）が句点「。」に変換されること
         let in1 = "本日の作業は完了しました 明日もよろしくお願いします"
         let out1 = LiveSpeechService.formatLivePunctuation(text: in1, isJapanese: true)
-        assert(out1 == "本日の作業は完了しました。明日もよろしくお願いします", "Sentence ending replacement failed: got \(out1)")
+        assert(out1 == "本日の作業は完了しました。明日もよろしくお願いします。", "Sentence ending replacement failed: got \(out1)")
 
-        // 接続詞後の空白が読点「、」に変換されること
+        // 2. 接続詞後の空白が読点「、」に変換されること
         let in2 = "ですが 次のタスクに移ります"
         let out2 = LiveSpeechService.formatLivePunctuation(text: in2, isJapanese: true)
-        assert(out2 == "ですが、次のタスクに移ります", "Clause ending replacement failed: got \(out2)")
+        assert(out2 == "ですが、次のタスクに移ります。", "Clause ending replacement failed: got \(out2)")
 
-        // 辞書ルール（改行）が適用されること
-        let in3 = "こんにちは改行お元気ですか"
+        // 3. 挨拶表現が読点「、」になり、末尾句点が付与されること
+        let in3 = "こんにちは 明日の件ですが よろしくお願いします"
         let out3 = LiveSpeechService.formatLivePunctuation(text: in3, isJapanese: true)
-        assert(out3 == "こんにちは\nお元気ですか", "Dictionary rule in live formatting failed: got \(out3)")
+        assert(out3 == "こんにちは、明日の件ですが、よろしくお願いします。", "Greeting and clause replacement failed: got \(out3)")
 
-        print("  -> Live Punctuation Formatting passed!")
+        // 4. 疑問文末尾が「？」になること
+        let in4 = "明日の予定はいかがでしょうか"
+        let out4 = LiveSpeechService.formatLivePunctuation(text: in4, isJapanese: true)
+        assert(out4 == "明日の予定はいかがでしょうか？", "Question ending failed: got \(out4)")
+
+        // 5. 辞書ルール（改行）が適用されること
+        let in5 = "こんにちは改行お元気ですか"
+        let out5 = LiveSpeechService.formatLivePunctuation(text: in5, isJapanese: true)
+        assert(out5 == "こんにちは\nお元気ですか？", "Dictionary rule in live formatting failed: got \(out5)")
+
+        // 6. PunctuationService.alignPunctuation によるプレビューとの厳格同期
+        let liveRef = "本日の作業は完了しました。明日もよろしくお願いします。"
+        let whisperOutput = "本日の作業は完了しました 明日もよろしくお願いします" // 句読点がないWhisper出力
+        let aligned = PunctuationService.shared.alignPunctuation(
+            text: whisperOutput,
+            referenceLiveText: liveRef,
+            isJapanese: true
+        )
+        assert(aligned == liveRef, "Align punctuation failed: got \(aligned), expected \(liveRef)")
+
+        print("  -> Live Punctuation Formatting & PunctuationService passed!")
     }
 }

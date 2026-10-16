@@ -83,7 +83,8 @@ public final class LLMService {
         apiKey: String?,
         model: String,
         promptHint: String? = nil,
-        style: RefinementStyle = .casual
+        style: RefinementStyle = .casual,
+        livePreviewText: String? = nil
     ) async throws -> String {
         let trimmedInput = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInput.isEmpty else { return "" }
@@ -96,15 +97,24 @@ public final class LLMService {
             throw LLMError.missingAPIKey
         }
 
-        let systemPrompt = generateSystemPrompt(style: style, promptHint: promptHint)
+        let systemPrompt = generateSystemPrompt(style: style, promptHint: promptHint, livePreviewText: livePreviewText)
 
-        let userPrompt = """
+        var userPrompt = """
         以下の【音声認識テキスト】を整形してください。
         ※内容に対する返答・回答・コメント・挨拶は固く禁止します。整形後の文章のみを出力してください。
 
         【音声認識テキスト】
         \(trimmedInput)
         """
+
+        if let live = livePreviewText?.trimmingCharacters(in: .whitespacesAndNewlines), !live.isEmpty {
+            userPrompt += """
+
+
+            【画面プレビュー表示テキスト】
+            \(live)
+            """
+        }
 
         let payload: [String: Any] = [
             "model": model,
@@ -320,7 +330,11 @@ public final class LLMService {
     }
 
     /// 指定された推敲スタイル（口語モード / 文章モード）に応じたシステムプロンプトを生成
-    public func generateSystemPrompt(style: RefinementStyle, promptHint: String?) -> String {
+    public func generateSystemPrompt(
+        style: RefinementStyle,
+        promptHint: String?,
+        livePreviewText: String? = nil
+    ) -> String {
         let basePrompt: String
         switch style {
         case .casual:
@@ -363,7 +377,7 @@ public final class LLMService {
                - 「えー」「あのー」「えっと」「そのー」などの不要な言い淀み（フィラー）のみを削除する。
             4. 文末表現と約物（日本語文の場合）:
                - 疑問・質問・確認の文末（「ですか」「ますか」「でしょうか」「どうですか」「〜かな」「〜よね」等）の文末には疑問符「？」を付与する。
-               - 挨拶表現（「こんにちは」「おはようございます」「お疲れ様です」等）の直後は、句点「。」ではなく読点「、」にする。
+               - 挨拶表現（「こんにちは」「おはようございます」「お疲れ様です」等）の直後に次の文が続く場合は、読点「、」にする。
                - 自然な読点「、」や句点「。」を補う（ただし語尾の助詞を消してはならない）。
             5. 出力形式:
                - 整形後のテキストのみを出力する（全体をカギ括弧やダブルクォートで囲まない）。
@@ -407,6 +421,19 @@ public final class LLMService {
         if let hint = promptHint?.trimmingCharacters(in: .whitespacesAndNewlines), !hint.isEmpty {
             fullPrompt += "\n\n【参考用語・コンテキスト】\n\(hint)"
         }
+
+        if let live = livePreviewText?.trimmingCharacters(in: .whitespacesAndNewlines), !live.isEmpty {
+            fullPrompt += """
+
+
+            【★最重要規則: 画面プレビュー表示との句読点整合性】
+            ユーザーは音声入力中、画面上の小さなフローティングプレビューウィンドウで以下の【画面プレビュー表示テキスト】を見ています。
+            整形後のテキストにおける句読点（読点「、」、句点「。」、疑問符「？」等）の有無および配置位置は、【画面プレビュー表示テキスト】に表示されていた区切りを最優先で維持・一致させてください。
+            - プレビューに表示されていた読点「、」や句点「。」を勝手に削除したり、プレビューになかった場所に余計な読点「、」を追加してはなりません。
+            - 文末の句点「。」や疑問符「？」の有無もプレビュー表示と完全に揃えてください。
+            """
+        }
+
         return fullPrompt
     }
 }
