@@ -323,6 +323,12 @@ public final class KatakanaEnglishConverter {
         }
     }
 
+    /// 与えられたカタカナ文字列が辞書によって英語に変換可能かどうかを判定
+    public func hasConversion(for text: String) -> Bool {
+        let converted = convertToEnglish(text)
+        return converted != text && converted.unicodeScalars.contains { CharacterSet.letters.contains($0) && $0.value < 0x200 }
+    }
+
     /// 最長一致（Greedy）アルゴリズムによる連続カタカナの分解変換
     private func tokenizeGreedy(_ text: String) -> String {
         var remaining = text

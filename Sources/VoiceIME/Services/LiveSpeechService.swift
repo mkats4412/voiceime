@@ -15,6 +15,14 @@ public final class LiveSpeechService: ObservableObject {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
 
+    // 日英デュアル認識用の英語ヘルパープロセス
+    private var helperProcess: Process?
+    private var helperStdinPipe: Pipe?
+    private var helperStdoutPipe: Pipe?
+    private var isDualMode: Bool = false
+    private var latestJaText: String = ""
+    private var latestEnText: String = ""
+
     private var onTextUpdate: ((String) -> Void)?
 
     private init() {
@@ -52,7 +60,10 @@ public final class LiveSpeechService: ObservableObject {
         self.speechRecognizer = recognizer
         self.onTextUpdate = onUpdate
         self.partialText = ""
+        self.latestJaText = ""
+        self.latestEnText = ""
         self.detectedLanguageIsJapanese = !isExplicitEnglish
+        self.isDualMode = isAuto
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
@@ -75,6 +86,7 @@ public final class LiveSpeechService: ObservableObject {
         self.recognitionRequest = request
         self.audioEngine = engine
 
+        // 親プロセスの音声認識タスク（日本語または英語明示）
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             Task { @MainActor [weak self] in
                 guard let self = self, self.isRunning else { return }
@@ -82,34 +94,18 @@ public final class LiveSpeechService: ObservableObject {
                 if let result = result {
                     let rawText = result.bestTranscription.formattedString
                     let cleanText = Self.cleanTranscriptionText(rawText)
-                    guard !cleanText.isEmpty else { return }
 
-                    let chosenText: String
-                    let isJp: Bool
-
-                    if isExplicitEnglish {
-                        chosenText = cleanText
-                        isJp = false
-                    } else if isAuto {
-                        // 自動判定モード:
-                        // カタカナ音訳（例: 「ディド ユー フィニッシュ イット」）の場合は即座に英語（"Did you finish it?"）に変換！
-                        if Self.isPhoneticEnglishTransliteration(cleanText) {
-                            chosenText = KatakanaEnglishConverter.shared.convertToEnglish(cleanText)
-                            isJp = false
-                        } else {
-                            // 通常の日本語文（「こんにちは」「お疲れ様です」等）は100%リアルタイムに日本語出力
-                            chosenText = cleanText
-                            isJp = true
-                        }
+                    if self.isDualMode {
+                        self.latestJaText = cleanText
+                        self.handleDualTranscriptionUpdate()
                     } else {
-                        chosenText = cleanText
-                        isJp = true
+                        guard !cleanText.isEmpty else { return }
+                        let isJp = !isExplicitEnglish
+                        self.detectedLanguageIsJapanese = isJp
+                        let formatted = isJp ? Self.formatLivePunctuation(text: cleanText, isJapanese: true) : cleanText
+                        self.partialText = formatted
+                        self.onTextUpdate?(formatted)
                     }
-
-                    self.detectedLanguageIsJapanese = isJp
-                    let formatted = isJp ? Self.formatLivePunctuation(text: chosenText, isJapanese: true) : chosenText
-                    self.partialText = formatted
-                    self.onTextUpdate?(formatted)
                 }
 
                 if let error = error {
@@ -121,8 +117,23 @@ public final class LiveSpeechService: ObservableObject {
             }
         }
 
+        // 自動判定モードの場合: 別プロセスで英語認識ヘルパーを立ち上げ、デュアル認識を行う
+        if isAuto, let execPath = Bundle.main.executablePath, FileManager.default.isExecutableFile(atPath: execPath) {
+            startEnglishHelperProcess(executablePath: execPath, format: recordingFormat)
+        }
+
+        // マイク入力バッファの取得と配信
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
+            guard let self = self else { return }
+            // 1. 親プロセスの認識器へバッファ供給
+            self.recognitionRequest?.append(buffer)
+
+            // 2. 英語ヘルパープロセスの stdin へ PCM Float32 データをパイプ送信
+            if self.isDualMode, let pipe = self.helperStdinPipe, let channelData = buffer.floatChannelData {
+                let byteCount = Int(buffer.frameLength) * MemoryLayout<Float>.size
+                let data = Data(bytes: channelData[0], count: byteCount)
+                try? pipe.fileHandleForWriting.write(contentsOf: data)
+            }
         }
 
         do {
@@ -133,6 +144,138 @@ public final class LiveSpeechService: ObservableObject {
             NSLog("[VoiceIME] ⚠️ AVAudioEngine 開始失敗: %@", error.localizedDescription)
             stopLiveRecognition()
         }
+    }
+
+    /// 英語認識ヘルパー子プロセスの起動
+    private func startEnglishHelperProcess(executablePath: String, format: AVAudioFormat) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = [
+            "--live-speech-helper",
+            "--locale", "en-US",
+            "--sample-rate", "\(format.sampleRate)",
+            "--channels", "\(format.channelCount)"
+        ]
+
+        let inPipe = Pipe()
+        let outPipe = Pipe()
+        process.standardInput = inPipe
+        process.standardOutput = outPipe
+        process.standardError = FileHandle.nullDevice
+
+        outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else { return }
+
+            let lines = output.components(separatedBy: .newlines)
+            for line in lines where line.hasPrefix("TEXT:") {
+                let text = String(line.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { continue }
+
+                Task { @MainActor [weak self] in
+                    guard let self = self, self.isRunning, self.isDualMode else { return }
+                    self.latestEnText = Self.cleanTranscriptionText(text)
+                    self.handleDualTranscriptionUpdate()
+                }
+            }
+        }
+
+        do {
+            try process.run()
+            self.helperProcess = process
+            self.helperStdinPipe = inPipe
+            self.helperStdoutPipe = outPipe
+            NSLog("[VoiceIME] 🚀 英語認識ヘルパー子プロセス起動完了 (PID: %d)", process.processIdentifier)
+        } catch {
+            NSLog("[VoiceIME] ⚠️ 英語認識ヘルパー起動失敗: %@", error.localizedDescription)
+        }
+    }
+
+    /// デュアル認識（ja-JP と en-US）の認識結果を照合し、最適な言語とテキストを選択
+    private func handleDualTranscriptionUpdate() {
+        guard let decision = Self.decideBestTranscription(
+            jaText: latestJaText,
+            enText: latestEnText
+        ) else { return }
+
+        self.detectedLanguageIsJapanese = decision.isJapanese
+        let formatted = decision.isJapanese
+            ? Self.formatLivePunctuation(text: decision.text, isJapanese: true)
+            : decision.text
+        self.partialText = formatted
+        self.onTextUpdate?(formatted)
+    }
+
+    /// 判定ロジック構造体
+    public struct ScriptCounts {
+        public let kanji: Int
+        public let hiragana: Int
+        public let katakana: Int
+        public let latin: Int
+    }
+
+    /// 文字種カウント（漢字、ひらがな、カタカナ、ラテン文字）
+    nonisolated public static func analyzeScriptCounts(_ text: String) -> ScriptCounts {
+        var kanji = 0
+        var hiragana = 0
+        var katakana = 0
+        var latin = 0
+
+        for scalar in text.unicodeScalars {
+            if (0x3040...0x309F).contains(scalar.value) {
+                hiragana += 1
+            } else if (0x30A0...0x30FF).contains(scalar.value) {
+                katakana += 1
+            } else if (0x4E00...0x9FAF).contains(scalar.value) {
+                kanji += 1
+            } else if CharacterSet.letters.contains(scalar) && scalar.value < 0x200 {
+                latin += 1
+            }
+        }
+        return ScriptCounts(kanji: kanji, hiragana: hiragana, katakana: katakana, latin: latin)
+    }
+
+    /// 日本語（JA）と英語（EN）の部分認識テキストから、リアルタイム表示に最適なテキストと判定言語を決定
+    nonisolated public static func decideBestTranscription(
+        jaText: String,
+        enText: String
+    ) -> (text: String, isJapanese: Bool)? {
+        let ja = cleanTranscriptionText(jaText)
+        let en = cleanTranscriptionText(enText)
+
+        guard !ja.isEmpty || !en.isEmpty else { return nil }
+
+        let counts = analyzeScriptCounts(ja)
+
+        // 1. 漢字が1文字でもある、またはひらがなが1文字でもある（例: 「こ」「ん」「こんにちは」「お疲れ様です」「はい」「今日」など）
+        // ➔ 100% 日本語（JA）を採用！
+        if counts.kanji > 0 || counts.hiragana >= 1 {
+            return (ja, true)
+        }
+
+        // 2. 日本語テキストが存在する場合（崩れ英字「A ロ had ゥ ー in グ」やカタカナ音訳「ハローハード」など）:
+        // 英語側に有効な英文フレーズがあれば英語を採用！
+        if !ja.isEmpty {
+            if !en.isEmpty && isValidEnglishPhrase(en) && !containsRomajiJapanese(en) {
+                return (en, false)
+            }
+            if counts.katakana > 0 && KatakanaEnglishConverter.shared.hasConversion(for: ja) {
+                let converted = KatakanaEnglishConverter.shared.convertToEnglish(ja)
+                return (converted, false)
+            }
+            return (ja, true)
+        }
+
+        // 3. 日本語側（ja）がまだ空の初期段階:
+        // 英語側の初動1単語（例: "Kak", "Can" 等）はノイズ誤認の可能性があるため、
+        // 2単語以上の明確な英文フレーズ（例: "Hello, how are you", "did you finish it" 等）でない限り、
+        // 日本語エンジンの初動テキストが届くまで待機する！
+        let words = en.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        if words.count >= 2 && isValidEnglishPhrase(en) && !containsRomajiJapanese(en) {
+            return (en, false)
+        }
+
+        return nil
     }
 
     /// 音声認識結果のクリーンアップ（"Dictate " プレフィックスの除去等）
@@ -146,47 +289,58 @@ public final class LiveSpeechService: ObservableObject {
         return cleaned
     }
 
-    /// 日本語エンジンが英語の発話を無理やりカタカナで音訳している状態（例: 「ディド ユー フィニッシュ イット」）を判定
-    nonisolated public static func isPhoneticEnglishTransliteration(_ text: String) -> Bool {
-        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// 自然な英単語フレーズ（アルファベットと英語標準記号で構成された有効な英文）かどうかを判定
+    nonisolated public static func isValidEnglishPhrase(_ text: String) -> Bool {
+        let cleaned = cleanTranscriptionText(text)
         guard !cleaned.isEmpty else { return false }
 
-        var kanjiCount = 0
-        var hiraganaCount = 0
-        var katakanaCount = 0
-
-        for scalar in cleaned.unicodeScalars {
-            // ひらがな: 3040〜309F
-            if (0x3040...0x309F).contains(scalar.value) {
-                hiraganaCount += 1
-            }
-            // カタカナ: 30A0〜30FF
-            else if (0x30A0...0x30FF).contains(scalar.value) {
-                katakanaCount += 1
-            }
-            // 漢字: 4E00〜9FAF
-            else if (0x4E00...0x9FAF).contains(scalar.value) {
-                kanjiCount += 1
-            }
+        // アルファベットと標準的な英語記号のみかチェック
+        let allowed = CharacterSet.letters.union(.whitespaces).union(CharacterSet(charactersIn: "',.-?!"))
+        guard cleaned.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+            return false
         }
 
-        // 漢字が1文字でもあれば通常の日本語
-        if kanjiCount > 0 { return false }
+        let words = cleaned.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        guard !words.isEmpty else { return false }
 
-        // ひらがなが2文字以上あれば通常の日本語文（「です」「ます」など）
-        if hiraganaCount >= 2 { return false }
+        return true
+    }
 
-        // カタカナが主体で、ひらがながほぼ無い場合は英語のカタカナ音訳とみなす
-        if katakanaCount > 0 && hiraganaCount <= 1 {
+    /// 英語認識器が日本語の音を聞いた際に誤って出力する代表的なローマ字単語を検知
+    nonisolated public static func containsRomajiJapanese(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let romajiKeywords = [
+            "konnichiwa", "konnichwa", "konichiwa",
+            "arigato", "arigatou",
+            "ohayo", "ohayou",
+            "sayonara", "sayounara",
+            "kudasai", "onegaishimasu",
+            "otsukare", "otsukaresama",
+            "desu", "masu", "mashita", "deshita",
+            "hai", "iie", "chotto", "sugoi", "deki"
+        ]
+        for kw in romajiKeywords {
+            if lower.contains(kw) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 日本語エンジンが英語の発話を無理やりカタカナで音訳している状態（例: 「ディド ユー フィニッシュ イット」）を判定
+    nonisolated public static func isPhoneticEnglishTransliteration(_ text: String) -> Bool {
+        let counts = analyzeScriptCounts(text)
+        if counts.kanji > 0 { return false }
+        if counts.hiragana >= 2 { return false }
+        if counts.katakana > 0 && counts.hiragana <= 1 {
             return true
         }
-
         return false
     }
 
     /// リアルタイム音声認識を停止
     public func stopLiveRecognition() {
-        if isRunning || audioEngine != nil {
+        if isRunning || audioEngine != nil || helperProcess != nil {
             audioEngine?.stop()
             audioEngine?.inputNode.removeTap(onBus: 0)
             audioEngine = nil
@@ -199,7 +353,24 @@ public final class LiveSpeechService: ObservableObject {
 
             speechRecognizer = nil
 
+            // 英語ヘルパープロセスの安全な終了
+            if let inPipe = helperStdinPipe {
+                try? inPipe.fileHandleForWriting.close()
+                helperStdinPipe = nil
+            }
+            if let outPipe = helperStdoutPipe {
+                outPipe.fileHandleForReading.readabilityHandler = nil
+                helperStdoutPipe = nil
+            }
+            if let process = helperProcess, process.isRunning {
+                process.terminate()
+                helperProcess = nil
+            }
+
             isRunning = false
+            isDualMode = false
+            latestJaText = ""
+            latestEnText = ""
             onTextUpdate = nil
             NSLog("[VoiceIME] ⏹️ リアルタイム音声認識エンジン停止")
         }

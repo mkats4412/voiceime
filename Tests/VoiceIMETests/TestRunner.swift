@@ -60,6 +60,34 @@ struct TestRunner {
         let out5 = converter.convertToEnglish("アイ ハブ ア ペン")
         assert(out5 == "I have a pen", "Expected 'I have a pen', got '\(out5)'")
 
+        // 5. 日英デュアル認識判定（decideBestTranscription）の徹底検証
+        // ケースA: 日本語発声（「こんにちは」）- 初動でひらがな1文字でも日本語として採用（英語のKakやKonnichiwaは完全遮断）
+        let decJaInitial = LiveSpeechService.decideBestTranscription(jaText: "こん", enText: "Kak")
+        assert(decJaInitial?.text == "こん" && decJaInitial?.isJapanese == true, "Initial hiragana must take precedence as Japanese")
+
+        let decJaFull = LiveSpeechService.decideBestTranscription(jaText: "こんにちは", enText: "Konnichiwa")
+        assert(decJaFull?.text == "こんにちは" && decJaFull?.isJapanese == true, "Full Japanese greeting must be Japanese")
+
+        let decJaPolite = LiveSpeechService.decideBestTranscription(jaText: "お疲れ様です", enText: "Otsukaresama")
+        assert(decJaPolite?.text == "お疲れ様です" && decJaPolite?.isJapanese == true, "Polite Japanese must be Japanese")
+
+        // ケースB: 英語発声（"Hello, how are you doing?"）
+        // ユーザー報告の「A ロ had ゥ ー in グ」崩れ文字が出ても、有効英文があるため100%英語を採用！
+        let decEnBroken = LiveSpeechService.decideBestTranscription(jaText: "A ロ had ゥ ー in グ", enText: "Hello, how are you doing?")
+        assert(decEnBroken?.text == "Hello, how are you doing?" && decEnBroken?.isJapanese == false, "Broken transcription must yield valid English phrase")
+
+        // JAがカタカナ音訳（ハローハード等）の場合も英語を採用
+        let decEnKatakana = LiveSpeechService.decideBestTranscription(jaText: "ハローハード", enText: "Hello, how are you doing?")
+        assert(decEnKatakana?.text == "Hello, how are you doing?" && decEnKatakana?.isJapanese == false, "Phonetic transliteration must yield English")
+
+        // ケースC: 英語発声（"did you finish it"）
+        let decEnDid = LiveSpeechService.decideBestTranscription(jaText: "ディド ユー フィニッシュ イット", enText: "did you finish it")
+        assert(decEnDid?.text == "did you finish it" && decEnDid?.isJapanese == false, "English phrase must take precedence over katakana")
+
+        // ケースD: 日本語エンジンの初動テキストが届くまでのノイズ遮断（"Kak" 等の初動単語ノイズは保留）
+        let decNoisePending = LiveSpeechService.decideBestTranscription(jaText: "", enText: "Kak")
+        assert(decNoisePending == nil, "Single noise word in English should wait for Japanese engine")
+
         print("  -> Live Speech & KatakanaEnglishConverter passed!")
     }
 

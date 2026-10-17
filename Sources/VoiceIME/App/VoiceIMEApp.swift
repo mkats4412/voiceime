@@ -6,6 +6,11 @@ struct VoiceIMEApp: App {
     @StateObject private var appState = AppState.shared
 
     init() {
+        if CommandLine.arguments.contains("--live-speech-helper") {
+            LiveSpeechHelper.run()
+            exit(0)
+        }
+
         if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
            let iconImage = NSImage(contentsOf: iconURL) {
             NSApplication.shared.applicationIconImage = iconImage
