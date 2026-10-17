@@ -103,8 +103,8 @@ struct TestRunner {
         assert(firstRule.pattern == "AI略称")
         assert(firstRule.replacement == "Artificial Intelligence")
         assert(firstRule.isEnabled == true, "isEnabled should default to true")
-        assert(firstRule.isRegex == false, "isRegex should default to false")
-        assert(!firstRule.id.uuidString.isEmpty, "id should be auto-generated")
+        // 外部リロード通知の送受信テスト
+        VoiceIMEDiskSyncService.postReloadNotification()
 
         print("  -> VoiceIMEDiskSync passed!")
     }

@@ -755,11 +755,18 @@ public final class AppSettings: ObservableObject {
 
     /// `~/.voiceime/` の JSON ファイル（dictionary.json, vocabulary.json）から強制再読み込みして設定に反映
     public func reloadFromDisk() {
-        if let rules = VoiceIMEDiskSyncService.shared.importDictionaryFromDisk() {
-            self.dictionaryRules = rules
-        }
-        if let vocab = VoiceIMEDiskSyncService.shared.importVocabularyFromDisk() {
-            self.customVocabulary = vocab
+        VoiceIMEDiskSyncService.shared.performWithoutExport {
+            if let rules = VoiceIMEDiskSyncService.shared.importDictionaryFromDisk() {
+                self.dictionaryRules = rules
+                if let data = try? JSONEncoder().encode(rules) {
+                    self.defaults.set(data, forKey: Keys.dictionaryRules)
+                }
+            }
+            if let vocab = VoiceIMEDiskSyncService.shared.importVocabularyFromDisk() {
+                self.customVocabulary = vocab
+                self.defaults.set(vocab, forKey: Keys.customVocabulary)
+            }
+            self.defaults.synchronize()
         }
     }
 

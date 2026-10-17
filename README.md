@@ -60,6 +60,25 @@ open ./build/VoiceIME.app
 #### 4. AI会話（クイック質問）
 * `Ctrl + Shift + Space` を押しながら話すと、単語スペルや計算等の答えだけを小さな画面に極小表示します（`⌘ + Enter` で挿入 / `Esc` で消去）。
 
+#### 5. AI Agent / MCP 連携 (Model Context Protocol)
+VoiceIME は単語登録や置換ルールを AI Agent から直接操作できる **MCP サーバー**（`~/.voiceime/mcp_server.py`）を標準搭載しています。外部からの変更はファイル監視により**アプリ再起動不要で即座に自動反映**されます。
+
+* **Claude Desktop / Cursor 設定例 (`claude_desktop_config.json` 等)**:
+```json
+{
+  "mcpServers": {
+    "voiceime": {
+      "command": "python3",
+      "args": ["/Users/YOUR_USER/.voiceime/mcp_server.py"]
+    }
+  }
+}
+```
+* **主なツール**:
+  * `list_vocabulary` / `add_vocabulary` / `remove_vocabulary`: 単語登録の取得・追加・削除
+  * `list_dictionary_rules` / `add_dictionary_rule` / `remove_dictionary_rule` / `update_dictionary_rule`: 置換ルールの取得・追加・削除・更新
+  * `reload_voiceime`: 設定の即時再同期通知
+
 ---
 
 ### ビルドとテストの実行

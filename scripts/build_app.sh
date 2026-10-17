@@ -46,6 +46,16 @@ if [[ -f "AppIcon.icns" ]]; then
     cp AppIcon.icns "${RESOURCES_DIR}/AppIcon.icns"
 fi
 
+# MCP サーバー用スクリプトの配置
+if [[ -f "scripts/voiceime_mcp_server.py" ]]; then
+    echo "-> Copying voiceime_mcp_server.py to Resources & ~/.voiceime..."
+    cp scripts/voiceime_mcp_server.py "${RESOURCES_DIR}/voiceime_mcp_server.py"
+    chmod +x "${RESOURCES_DIR}/voiceime_mcp_server.py"
+    mkdir -p "${HOME}/.voiceime"
+    cp scripts/voiceime_mcp_server.py "${HOME}/.voiceime/mcp_server.py"
+    chmod +x "${HOME}/.voiceime/mcp_server.py"
+fi
+
 # PkgInfo の作成
 echo -n "APPL????" > "${CONTENTS_DIR}/PkgInfo"
 

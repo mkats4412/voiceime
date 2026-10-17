@@ -21,6 +21,14 @@ public final class VoiceIMEDiskSyncService {
     private let fileManager = FileManager.default
     private var isSyncingInternal = false
 
+    /// 再読み込み時などに exportToDisk が再発火するのを防ぐスコープ実行
+    public func performWithoutExport(_ block: () -> Void) {
+        let prev = isSyncingInternal
+        isSyncingInternal = true
+        defer { isSyncingInternal = prev }
+        block()
+    }
+
     private init() {
         ensureDirectoryExists()
     }
@@ -33,6 +41,18 @@ public final class VoiceIMEDiskSyncService {
         }
     }
 
+    /// プロセス間通知名（外部CLIやMCPから即時リロードを促す通知）
+    public static let reloadNotificationName = Notification.Name("com.voiceime.notification.reloadDictionary")
+
+    private var monitorSource: DispatchSourceFileSystemObject?
+    private var directoryFileDescriptor: Int32 = -1
+    private let monitorQueue = DispatchQueue(label: "com.voiceime.disksync.monitor", qos: .utility)
+    private var reloadDebounceWorkItem: DispatchWorkItem?
+    private var lastExportTimestamp: TimeInterval = 0
+    private var lastDictionaryContentHash: Int = 0
+    private var lastVocabularyContentHash: Int = 0
+    private weak var targetSettings: AppSettings?
+
     /// アプリの設定内容を `~/.voiceime/*.json` に整形して書き出し
     public func exportToDisk(rules: [DictionaryRule], vocabulary: [String]) {
         guard !isSyncingInternal else { return }
@@ -41,14 +61,18 @@ public final class VoiceIMEDiskSyncService {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
 
+        lastExportTimestamp = Date().timeIntervalSince1970
+
         // 1. dictionary.json
         if let dictData = try? encoder.encode(rules) {
+            lastDictionaryContentHash = dictData.hashValue
             try? dictData.write(to: dictionaryFileURL, options: .atomic)
             NSLog("[VoiceIME] 💾 ~/.voiceime/dictionary.json を更新しました (%d ルール)", rules.count)
         }
 
         // 2. vocabulary.json
         if let vocabData = try? encoder.encode(vocabulary) {
+            lastVocabularyContentHash = vocabData.hashValue
             try? vocabData.write(to: vocabularyFileURL, options: .atomic)
             NSLog("[VoiceIME] 💾 ~/.voiceime/vocabulary.json を更新しました (%d 語)", vocabulary.count)
         }
@@ -60,6 +84,8 @@ public final class VoiceIMEDiskSyncService {
               let data = try? Data(contentsOf: dictionaryFileURL) else {
             return nil
         }
+
+        lastDictionaryContentHash = data.hashValue
 
         do {
             let decoder = JSONDecoder()
@@ -79,6 +105,8 @@ public final class VoiceIMEDiskSyncService {
             return nil
         }
 
+        lastVocabularyContentHash = data.hashValue
+
         do {
             let decoder = JSONDecoder()
             let words = try decoder.decode([String].self, from: data)
@@ -90,14 +118,17 @@ public final class VoiceIMEDiskSyncService {
         }
     }
 
-    /// アプリ起動時の同期
-    /// `~/.voiceime/dictionary.json` が存在すれば読み込み、無ければ初期ルールを書き出す
+    /// アプリ起動時の同期および常駐ファイル監視の開始
     public func syncOnLaunch(settings: AppSettings) {
+        self.targetSettings = settings
         ensureDirectoryExists()
 
         var didImport = false
         isSyncingInternal = true
-        defer { isSyncingInternal = false }
+        defer {
+            isSyncingInternal = false
+            startMonitoring(settings: settings)
+        }
 
         // 辞書ルールの同期
         if let diskRules = importDictionaryFromDisk(), !diskRules.isEmpty {
@@ -118,6 +149,98 @@ public final class VoiceIMEDiskSyncService {
         } else if didImport {
             NSLog("[VoiceIME] ✅ ~/.voiceime からの初期設定読み込みが完了しました")
         }
+    }
+
+    /// `~/.voiceime/` フォルダの変更監視を開始（AI Agent や外部スクリプトの変更を自動検知）
+    public func startMonitoring(settings: AppSettings) {
+        self.targetSettings = settings
+        stopMonitoring()
+
+        ensureDirectoryExists()
+
+        // 1. 分散通知（DistributedNotificationCenter）による即時リロード監視
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(handleDistributedReloadNotification),
+            name: Self.reloadNotificationName,
+            object: nil,
+            suspensionBehavior: .deliverImmediately
+        )
+
+        // 2. ディレクトリ監視 (kqueue / DispatchSource)
+        let path = baseDirectory.path
+        directoryFileDescriptor = open(path, O_EVTONLY)
+        guard directoryFileDescriptor >= 0 else {
+            NSLog("[VoiceIME] ⚠️ ~/.voiceime のファイル監視オープンに失敗しました: errno=%d", errno)
+            return
+        }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: directoryFileDescriptor,
+            eventMask: [.write, .extend, .attrib, .link, .rename],
+            queue: monitorQueue
+        )
+
+        source.setEventHandler { [weak self] in
+            self?.handleFileSystemEvent()
+        }
+
+        source.setCancelHandler { [weak self] in
+            if let fd = self?.directoryFileDescriptor, fd >= 0 {
+                close(fd)
+                self?.directoryFileDescriptor = -1
+            }
+        }
+
+        self.monitorSource = source
+        source.resume()
+        NSLog("[VoiceIME] 👁️ ~/.voiceime ディレクトリのリアルタイム自動監視を開始しました")
+    }
+
+    /// 監視の停止
+    public func stopMonitoring() {
+        if let source = monitorSource {
+            source.cancel()
+            monitorSource = nil
+        }
+        DistributedNotificationCenter.default().removeObserver(self, name: Self.reloadNotificationName, object: nil)
+    }
+
+    @objc private func handleDistributedReloadNotification() {
+        NSLog("[VoiceIME] 🔔 外部（MCP / CLI）からのリロード通知を受信しました")
+        DispatchQueue.main.async {
+            AppSettings.shared.reloadFromDisk()
+        }
+    }
+
+    private func handleFileSystemEvent() {
+        // 自プロセスによる書き出しから0.5秒以内はスキップ
+        let now = Date().timeIntervalSince1970
+        guard now - lastExportTimestamp > 0.5 else { return }
+
+        // デバウンス処理（0.3秒待機して書き込み完了を待つ）
+        reloadDebounceWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard self != nil else { return }
+
+            NSLog("[VoiceIME] 🔄 外部変更を検知したため、~/.voiceime の設定を自動再読み込みします")
+            DispatchQueue.main.async {
+                AppSettings.shared.reloadFromDisk()
+            }
+        }
+
+        self.reloadDebounceWorkItem = workItem
+        monitorQueue.asyncAfter(deadline: .now() + 0.3, execute: workItem)
+    }
+
+    /// 外部（MCPやスクリプト）からアプリにリロードを促す通知を送信するヘルパー
+    public static func postReloadNotification() {
+        DistributedNotificationCenter.default().postNotificationName(
+            reloadNotificationName,
+            object: nil,
+            userInfo: nil,
+            deliverImmediately: true
+        )
     }
 
     /// Finderで `~/.voiceime` フォルダを開く
