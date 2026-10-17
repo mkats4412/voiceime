@@ -8,6 +8,8 @@ struct TestRunner {
         print("=== Running VoiceIME Tests ===")
 
         testDictionaryService()
+        testSymbolDictionaryRules()
+        testVoiceIMEDiskSync()
         testKeychainService()
         testLaunchAtLoginService()
         testLLMService()
@@ -17,6 +19,86 @@ struct TestRunner {
         testQuickAskAndPasteShortcuts()
 
         print("=== All Tests Passed Successfully! ===")
+    }
+
+    static func testSymbolDictionaryRules() {
+        print("[TEST] Symbol Dictionary Rules (音声入力用記号置換)...")
+        let service = DictionaryService.shared
+        let rules = AppSettings.symbolDictionaryRules
+
+        // 1. 丸括弧 ()
+        assert(service.apply(text: "ひらきまるかっこテストまるかっことじ", rules: rules) == "(テスト)")
+        assert(service.apply(text: "まるかっこhelloまるかっことじ", rules: rules) == "(hello)")
+        assert(service.apply(text: "Open parenthesisworldClose parenthesis", rules: rules) == "(world)")
+        assert(service.apply(text: "open parenthesistestclose parenthesis", rules: rules) == "(test)")
+
+        // 2. 角括弧 []
+        assert(service.apply(text: "ひらきかくかっこ配列かくかっことじ", rules: rules) == "[配列]")
+        assert(service.apply(text: "Open bracket0Close bracket", rules: rules) == "[0]")
+
+        // 3. 波括弧 {}
+        assert(service.apply(text: "ひらきなみかっこブロックなみかっことじ", rules: rules) == "{ブロック}")
+        assert(service.apply(text: "Open bracebodyClose brace", rules: rules) == "{body}")
+
+        // 4. 鍵括弧 「」
+        assert(service.apply(text: "ひらきかぎかっこ重要かぎかっことじ", rules: rules) == "「重要」")
+        assert(service.apply(text: "かぎかっこ発言かぎかっことじ", rules: rules) == "「発言」")
+        assert(service.apply(text: "Open quotespeechClose quote", rules: rules) == "「speech」")
+
+        // 5. ダブルクォート ""
+        assert(service.apply(text: "ひらきダブルクォート引用ダブルクォートとじ", rules: rules) == "\"引用\"")
+        assert(service.apply(text: "Open double quotetextClose double quote", rules: rules) == "\"text\"")
+
+        // 6. シングルクォート ''
+        assert(service.apply(text: "ひらきシングルクォート単語シングルクォートとじ", rules: rules) == "'単語'")
+        assert(service.apply(text: "Open single quotecharClose single quote", rules: rules) == "'char'")
+
+        print("  -> Symbol Dictionary Rules passed!")
+    }
+
+    static func testVoiceIMEDiskSync() {
+        print("[TEST] VoiceIMEDiskSyncService (~/.voiceime 同期 & JSON復元)...")
+        let syncService = VoiceIMEDiskSyncService.shared
+        syncService.ensureDirectoryExists()
+        assert(FileManager.default.fileExists(atPath: syncService.baseDirectory.path), "Base dir must exist")
+
+        // テストデータ
+        let testRules = [
+            DictionaryRule(pattern: "テスト置換", replacement: "TestReplace", isRegex: false, isEnabled: true)
+        ]
+        let testVocab = ["テスト単語A", "テスト単語B"]
+
+        syncService.exportToDisk(rules: testRules, vocabulary: testVocab)
+        assert(FileManager.default.fileExists(atPath: syncService.dictionaryFileURL.path), "dictionary.json should exist")
+        assert(FileManager.default.fileExists(atPath: syncService.vocabularyFileURL.path), "vocabulary.json should exist")
+
+        // 読み込みテスト
+        let loadedRules = syncService.importDictionaryFromDisk()
+        assert(loadedRules != nil && loadedRules!.contains(where: { $0.pattern == "テスト置換" }), "Should decode rules from JSON")
+
+        let loadedVocab = syncService.importVocabularyFromDisk()
+        assert(loadedVocab != nil && loadedVocab!.contains("テスト単語A"), "Should decode vocab from JSON")
+
+        // AI Agent が手動で ID やオプションを省略した最小限の JSON を書いた場合の互換デコードテスト
+        let minimalJSON = """
+        [
+            {
+                "pattern": "AI略称",
+                "replacement": "Artificial Intelligence"
+            }
+        ]
+        """.data(using: .utf8)!
+
+        let decodedMinimal = try? JSONDecoder().decode([DictionaryRule].self, from: minimalJSON)
+        assert(decodedMinimal != nil && decodedMinimal!.count == 1, "Minimal JSON should decode successfully")
+        let firstRule = decodedMinimal!.first!
+        assert(firstRule.pattern == "AI略称")
+        assert(firstRule.replacement == "Artificial Intelligence")
+        assert(firstRule.isEnabled == true, "isEnabled should default to true")
+        assert(firstRule.isRegex == false, "isRegex should default to false")
+        assert(!firstRule.id.uuidString.isEmpty, "id should be auto-generated")
+
+        print("  -> VoiceIMEDiskSync passed!")
     }
 
     static func testDictionaryService() {

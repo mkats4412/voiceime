@@ -260,7 +260,6 @@ public final class AppSettings: ObservableObject {
         didSet { defaults.set(promptHint, forKey: Keys.promptHint) }
     }
 
-    /// 読み不要の単語登録リスト（人名・社名・製品名・専門用語）
     @Published public var customVocabulary: [String] {
         didSet {
             defaults.set(customVocabulary, forKey: Keys.customVocabulary)
@@ -269,6 +268,7 @@ public final class AppSettings: ObservableObject {
             if promptHint != joined {
                 promptHint = joined
             }
+            VoiceIMEDiskSyncService.shared.exportToDisk(rules: dictionaryRules, vocabulary: customVocabulary)
         }
     }
 
@@ -648,19 +648,62 @@ public final class AppSettings: ObservableObject {
             } else {
                 cleanedRules.append(DictionaryRule(pattern: "([0-9]{3})([0-9]{4})", replacement: "〒$1-$2", isRegex: true, isEnabled: false))
             }
+
+            // 記号ルールの自動追加マイグレーション
+            for symbolRule in AppSettings.symbolDictionaryRules {
+                if !cleanedRules.contains(where: { $0.pattern == symbolRule.pattern }) {
+                    cleanedRules.append(symbolRule)
+                }
+            }
+
             self.dictionaryRules = cleanedRules.isEmpty ? AppSettings.defaultDictionaryRules : cleanedRules
             saveDictionaryRules()
         } else {
             self.dictionaryRules = AppSettings.defaultDictionaryRules
             saveDictionaryRules()
         }
+
+        // ~/.voiceime/ ディレクトリとの同期 (JSON読み込み / 書き出し)
+        VoiceIMEDiskSyncService.shared.syncOnLaunch(settings: self)
+    }
+
+    /// 音声入力用の括弧・引用符記号ルール一式（スペースなし、日本語・英語両対応）
+    /// ※「まるかっこ」が開きのマッチ候補に含まれるため、「まるかっことじ」等閉じルールを先に評価して取り残しを防ぐ
+    public static var symbolDictionaryRules: [DictionaryRule] {
+        [
+            // 丸括弧 ()
+            DictionaryRule(pattern: "(まるかっことじ|丸括弧閉じ|[Cc]lose parenthesis)", replacement: ")", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(ひらきまるかっこ|まるかっこ|開き丸括弧|丸括弧|[Oo]pen parenthesis)", replacement: "(", isRegex: true, isEnabled: true),
+
+            // 角括弧 []
+            DictionaryRule(pattern: "(かくかっことじ|角括弧閉じ|[Cc]lose bracket)", replacement: "]", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(ひらきかくかっこ|かくかっこ|開き角括弧|角括弧|[Oo]pen bracket)", replacement: "[", isRegex: true, isEnabled: true),
+
+            // 波括弧 {}
+            DictionaryRule(pattern: "(なみかっことじ|波括弧閉じ|[Cc]lose brace)", replacement: "}", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(ひらきなみかっこ|なみかっこ|開き波括弧|波括弧|[Oo]pen brace)", replacement: "{", isRegex: true, isEnabled: true),
+
+            // 鍵括弧 「」
+            DictionaryRule(pattern: "(かぎかっことじ|鍵括弧閉じ|[Cc]lose quote)", replacement: "」", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(ひらきかぎかっこ|かぎかっこ|開き鍵括弧|鍵括弧|[Oo]pen quote)", replacement: "「", isRegex: true, isEnabled: true),
+
+            // ダブルクォート ""
+            DictionaryRule(pattern: "(ダブルクォートとじ|ダブルクォート閉じ|[Cc]lose double quote)", replacement: "\"", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(ひらきダブルクォート|開きダブルクォート|[Oo]pen double quote)", replacement: "\"", isRegex: true, isEnabled: true),
+
+            // シングルクォート ''
+            DictionaryRule(pattern: "(シングルクォートとじ|シングルクォート閉じ|[Cc]lose single quote)", replacement: "'", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(ひらきシングルクォート|開きシングルクォート|[Oo]pen single quote)", replacement: "'", isRegex: true, isEnabled: true)
+        ]
     }
 
     public static var defaultDictionaryRules: [DictionaryRule] {
-        [
-            DictionaryRule(pattern: "改行", replacement: "\\n", isRegex: false, isEnabled: true),
-            DictionaryRule(pattern: "([0-9]{3})([0-9]{4})", replacement: "〒$1-$2", isRegex: true, isEnabled: false)
+        var rules = [
+            DictionaryRule(pattern: "改行", replacement: "\\n", isRegex: false, isEnabled: true)
         ]
+        rules.append(contentsOf: symbolDictionaryRules)
+        rules.append(DictionaryRule(pattern: "([0-9]{3})([0-9]{4})", replacement: "〒$1-$2", isRegex: true, isEnabled: false))
+        return rules
     }
 
     public func resetDictionaryRules() {
@@ -706,6 +749,17 @@ public final class AppSettings: ObservableObject {
     private func saveDictionaryRules() {
         if let data = try? JSONEncoder().encode(dictionaryRules) {
             defaults.set(data, forKey: Keys.dictionaryRules)
+        }
+        VoiceIMEDiskSyncService.shared.exportToDisk(rules: dictionaryRules, vocabulary: customVocabulary)
+    }
+
+    /// `~/.voiceime/` の JSON ファイル（dictionary.json, vocabulary.json）から強制再読み込みして設定に反映
+    public func reloadFromDisk() {
+        if let rules = VoiceIMEDiskSyncService.shared.importDictionaryFromDisk() {
+            self.dictionaryRules = rules
+        }
+        if let vocab = VoiceIMEDiskSyncService.shared.importVocabularyFromDisk() {
+            self.customVocabulary = vocab
         }
     }
 

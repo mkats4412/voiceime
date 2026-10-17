@@ -69,6 +69,51 @@ public struct DictionarySettingsTab: View {
             VStack(alignment: .leading, spacing: 20) {
 
                 // ==========================================
+                // ~/.voiceime 外部連携 (AI Agent / JSON編集)
+                // ==========================================
+                HStack(spacing: 12) {
+                    Image(systemName: "folder.badge.gearshape")
+                        .font(.title2)
+                        .foregroundColor(.accentColor)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("~/.voiceime 連携 (AI Agent & JSON同期)")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Text("単語登録と置換ルールは ~/.voiceime/ にJSON形式で自動同期され、AI Agent等から直接編集可能です。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        VoiceIMEDiskSyncService.shared.openFolderInFinder()
+                    } label: {
+                        Label("フォルダを開く", systemImage: "folder")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button {
+                        settings.reloadFromDisk()
+                    } label: {
+                        Label("JSONから再読込", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.accentColor.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.accentColor.opacity(0.2), lineWidth: 1)
+                )
+
+                // ==========================================
                 // セクション1: 読み不要のAI単語登録
                 // ==========================================
                 VStack(alignment: .leading, spacing: 10) {
