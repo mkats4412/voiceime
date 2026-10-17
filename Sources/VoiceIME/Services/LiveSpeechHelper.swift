@@ -11,17 +11,13 @@ public final class LiveSpeechHelper {
 
         var localeIdentifier = "en-US"
         var sampleRate: Double = 44100.0
-        var channels: Int = 1
 
         let args = CommandLine.arguments
         if let idx = args.firstIndex(of: "--locale"), idx + 1 < args.count {
             localeIdentifier = args[idx + 1]
         }
-        if let idx = args.firstIndex(of: "--sample-rate"), idx + 1 < args.count, let sr = Double(args[idx + 1]) {
+        if let idx = args.firstIndex(of: "--sample-rate"), idx + 1 < args.count, let sr = Double(args[idx + 1]), sr > 0 {
             sampleRate = sr
-        }
-        if let idx = args.firstIndex(of: "--channels"), idx + 1 < args.count, let ch = Int(args[idx + 1]) {
-            channels = ch
         }
 
         let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier))
@@ -40,14 +36,18 @@ public final class LiveSpeechHelper {
             request.requiresOnDeviceRecognition = false
         }
 
+        let stdoutLock = NSLock()
         let task = recognizer.recognitionTask(with: request) { result, error in
             if let result = result {
                 let text = result.bestTranscription.formattedString
                     .replacingOccurrences(of: "\n", with: " ")
+                    .replacingOccurrences(of: "\r", with: " ")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if !text.isEmpty {
                     let out = "TEXT:\(text)\n"
                     if let data = out.data(using: .utf8) {
+                        stdoutLock.lock()
+                        defer { stdoutLock.unlock() }
                         try? FileHandle.standardOutput.write(contentsOf: data)
                     }
                 }
@@ -60,49 +60,64 @@ public final class LiveSpeechHelper {
             }
         }
 
+        // 親プロセスからは常に channelData[0]（モノラル 1ch Float32）が送られるため 1ch 固定で整合させる
         guard let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: sampleRate,
-            channels: AVAudioChannelCount(max(1, channels)),
+            channels: 1,
             interleaved: false
         ) else {
             fputs("[Helper] Invalid audio format\n", stderr)
             exit(1)
         }
 
-        let stdinHandle = FileHandle.standardInput
-        stdinHandle.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                // EOF: 親プロセスがパイプを閉じた ➔ 音声終了・ハンドラ解除・正常終了
-                handle.readabilityHandler = nil
-                request.endAudio()
-                task.cancel()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    exit(0)
-                }
-                return
-            }
-
-            let bytesPerFrame = format.streamDescription.pointee.mBytesPerFrame
-            guard bytesPerFrame > 0 else { return }
-            let frameCount = UInt32(data.count) / bytesPerFrame
-            guard frameCount > 0 else { return }
-
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
-            buffer.frameLength = frameCount
-
-            data.withUnsafeBytes { rawBuffer in
-                guard let baseAddress = rawBuffer.baseAddress,
-                      let channelData = buffer.floatChannelData else { return }
-                // バッファ容量を超えない正確なバイト数をコピー（バッファオーバーラン防止）
-                let copyByteCount = Int(frameCount * bytesPerFrame)
-                memcpy(channelData[0], baseAddress, copyByteCount)
-            }
-            request.append(buffer)
+        let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
+        guard bytesPerFrame > 0 else {
+            exit(1)
         }
 
-        // 親プロセスがクラッシュ等で突然死した場合のセーフティ（定期的に親の存在を監視）
+        // ストリーム断片化（4バイト境界の端数）対策用の直列キューと残余バッファ
+        let ingestQueue = DispatchQueue(label: "com.voiceime.helper.ingest")
+        var remainderData = Data()
+
+        let stdinHandle = FileHandle.standardInput
+        stdinHandle.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            ingestQueue.async {
+                if chunk.isEmpty {
+                    // EOF: 親プロセスがパイプを閉じた ➔ 音声終了・ハンドラ解除・正常終了
+                    handle.readabilityHandler = nil
+                    request.endAudio()
+                    task.cancel()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        exit(0)
+                    }
+                    return
+                }
+
+                remainderData.append(chunk)
+                let availableFrames = remainderData.count / bytesPerFrame
+                guard availableFrames > 0 else { return }
+
+                let consumableBytes = availableFrames * bytesPerFrame
+                let frameCount = AVAudioFrameCount(availableFrames)
+
+                if let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) {
+                    buffer.frameLength = frameCount
+                    remainderData.withUnsafeBytes { rawBuffer in
+                        guard let baseAddress = rawBuffer.baseAddress,
+                              let channelData = buffer.floatChannelData else { return }
+                        memcpy(channelData[0], baseAddress, consumableBytes)
+                    }
+                    request.append(buffer)
+                }
+
+                // 消費したフレーム分を除去し、端数バイト（0〜3バイト）を次回に繰り越す
+                remainderData.removeFirst(consumableBytes)
+            }
+        }
+
+        // 親プロセスがクラッシュ等で突然死した場合のセーフティ（定期的に親PIDの生存を監視）
         let ppid = getppid()
         let watchdogTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .background))
         watchdogTimer.schedule(deadline: .now() + 2.0, repeating: 2.0)

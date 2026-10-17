@@ -178,8 +178,10 @@ public final class FloatingPreviewController: ObservableObject {
         clipboardExpiryTimer?.invalidate()
         clipboardExpiryTimer = nil
 
-        // 元のクリップボード内容を退避
-        self.temporaryClipboardBackup = backupPasteboard(pasteboard)
+        // 前回の時限クリップボード有効期間中に連続で呼ばれた場合は、最初に退避した本来のクリップボード内容を上書きしない
+        if temporaryChangeCount <= 0 || pasteboard.changeCount != temporaryChangeCount {
+            self.temporaryClipboardBackup = backupPasteboard(pasteboard)
+        }
 
         // クリップボードにセット（外部履歴ツールへの永続記録を防止するマーカー付き）
         pasteboard.clearContents()

@@ -25,6 +25,8 @@ public final class LiveSpeechService: ObservableObject {
 
     // オーディオレンダースレッドをブロックさせないための専用書き込みシリアルキュー
     private let helperAudioQueue = DispatchQueue(label: "com.voiceime.livespeech.helperaudio", qos: .userInteractive)
+    // 子プロセス標準出力の行結合・UTF-8デコード用シリアルキュー
+    private let helperStdoutQueue = DispatchQueue(label: "com.voiceime.livespeech.helperstdout", qos: .userInitiated)
 
     private var onTextUpdate: ((String) -> Void)?
 
@@ -137,7 +139,7 @@ public final class LiveSpeechService: ObservableObject {
             // 1. 親プロセスの認識器へバッファ供給（メインオーディオタップスレッド）
             request?.append(buffer)
 
-            // 2. 英語ヘルパープロセスの stdin へ PCM Float32 データを非同期シリアルキューで送信
+            // 2. 英語ヘルパープロセスの stdin へ PCM Float32 (1ch: channelData[0]) を非同期シリアルキューで送信
             // CoreAudio のリアルタイムスレッドをブロッキング I/O から完全に保護
             if dualModeActive, let pipe = currentHelperPipe,
                let channelData = buffer.floatChannelData, buffer.frameLength > 0 {
@@ -167,7 +169,7 @@ public final class LiveSpeechService: ObservableObject {
             "--live-speech-helper",
             "--locale", "en-US",
             "--sample-rate", "\(format.sampleRate)",
-            "--channels", "\(max(1, format.channelCount))"
+            "--channels", "1"
         ]
 
         let inPipe = Pipe()
@@ -176,19 +178,31 @@ public final class LiveSpeechService: ObservableObject {
         process.standardOutput = outPipe
         process.standardError = FileHandle.nullDevice
 
+        let stdoutQueue = self.helperStdoutQueue
+        var lineBuffer = Data()
+
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else { return }
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
 
-            let lines = output.components(separatedBy: .newlines)
-            for line in lines where line.hasPrefix("TEXT:") {
-                let text = String(line.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { continue }
+            stdoutQueue.async { [weak self] in
+                lineBuffer.append(chunk)
+                // 改行バイト (0x0A) 単位で完全な行のみを切り出してデコード（UTF-8分断・行途中分断の完全防止）
+                while let newlineIndex = lineBuffer.firstIndex(of: 0x0A) {
+                    let lineData = lineBuffer.subdata(in: 0..<newlineIndex)
+                    lineBuffer.removeSubrange(0...newlineIndex)
 
-                Task { @MainActor [weak self] in
-                    guard let self = self, self.isRunning, self.isDualMode else { return }
-                    self.latestEnText = Self.cleanTranscriptionText(text)
-                    self.handleDualTranscriptionUpdate()
+                    guard let line = String(data: lineData, encoding: .utf8),
+                          line.hasPrefix("TEXT:") else { continue }
+
+                    let text = String(line.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !text.isEmpty else { continue }
+
+                    Task { @MainActor [weak self] in
+                        guard let self = self, self.isRunning, self.isDualMode else { return }
+                        self.latestEnText = Self.cleanTranscriptionText(text)
+                        self.handleDualTranscriptionUpdate()
+                    }
                 }
             }
         }
@@ -201,6 +215,9 @@ public final class LiveSpeechService: ObservableObject {
             NSLog("[VoiceIME] 🚀 英語認識ヘルパー子プロセス起動完了 (PID: %d)", process.processIdentifier)
         } catch {
             NSLog("[VoiceIME] ⚠️ 英語認識ヘルパー起動失敗: %@", error.localizedDescription)
+            outPipe.fileHandleForReading.readabilityHandler = nil
+            try? inPipe.fileHandleForWriting.close()
+            try? outPipe.fileHandleForReading.close()
             self.helperStdinPipe = nil
             self.helperStdoutPipe = nil
             self.helperProcess = nil
@@ -385,15 +402,20 @@ public final class LiveSpeechService: ObservableObject {
             speechRecognizer = nil
 
             // 3. 英語ヘルパープロセスの安全な終了とリソース解放
+            // helperAudioQueue 内の未処理 write とのデータ競合を防ぐため、同一シリアルキュー上で close する
             if let inPipe = helperStdinPipe {
-                try? inPipe.fileHandleForWriting.close()
                 helperStdinPipe = nil
+                helperAudioQueue.async {
+                    try? inPipe.fileHandleForWriting.close()
+                }
             }
             if let outPipe = helperStdoutPipe {
                 outPipe.fileHandleForReading.readabilityHandler = nil
+                try? outPipe.fileHandleForReading.close()
                 helperStdoutPipe = nil
             }
             if let process = helperProcess {
+                helperProcess = nil
                 if process.isRunning {
                     process.terminate()
                     // ゾンビプロセス化を防ぐためバックグラウンドで回収待ち
@@ -401,7 +423,6 @@ public final class LiveSpeechService: ObservableObject {
                         process.waitUntilExit()
                     }
                 }
-                helperProcess = nil
             }
 
             isRunning = false

@@ -45,10 +45,22 @@ public final class VoiceIMEDiskSyncService {
     public static let reloadNotificationName = Notification.Name("com.voiceime.notification.reloadDictionary")
 
     private var monitorSource: DispatchSourceFileSystemObject?
-    private var directoryFileDescriptor: Int32 = -1
     private let monitorQueue = DispatchQueue(label: "com.voiceime.disksync.monitor", qos: .utility)
     private var reloadDebounceWorkItem: DispatchWorkItem?
-    private var lastExportTimestamp: TimeInterval = 0
+    private let timestampLock = NSLock()
+    private var _lastExportTimestamp: TimeInterval = 0
+    private var lastExportTimestamp: TimeInterval {
+        get {
+            timestampLock.lock()
+            defer { timestampLock.unlock() }
+            return _lastExportTimestamp
+        }
+        set {
+            timestampLock.lock()
+            defer { timestampLock.unlock() }
+            _lastExportTimestamp = newValue
+        }
+    }
     private var lastDictionaryContentHash: Int = 0
     private var lastVocabularyContentHash: Int = 0
     private weak var targetSettings: AppSettings?
@@ -169,14 +181,14 @@ public final class VoiceIMEDiskSyncService {
 
         // 2. ディレクトリ監視 (kqueue / DispatchSource)
         let path = baseDirectory.path
-        directoryFileDescriptor = open(path, O_EVTONLY)
-        guard directoryFileDescriptor >= 0 else {
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else {
             NSLog("[VoiceIME] ⚠️ ~/.voiceime のファイル監視オープンに失敗しました: errno=%d", errno)
             return
         }
 
         let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: directoryFileDescriptor,
+            fileDescriptor: fd,
             eventMask: [.write, .extend, .attrib, .link, .rename],
             queue: monitorQueue
         )
@@ -185,11 +197,9 @@ public final class VoiceIMEDiskSyncService {
             self?.handleFileSystemEvent()
         }
 
-        source.setCancelHandler { [weak self] in
-            if let fd = self?.directoryFileDescriptor, fd >= 0 {
-                close(fd)
-                self?.directoryFileDescriptor = -1
-            }
+        // 自身の fd を値キャプチャし、再監視開始時の新旧FD競合（誤クローズ）を完全に防止
+        source.setCancelHandler {
+            close(fd)
         }
 
         self.monitorSource = source
@@ -199,6 +209,8 @@ public final class VoiceIMEDiskSyncService {
 
     /// 監視の停止
     public func stopMonitoring() {
+        reloadDebounceWorkItem?.cancel()
+        reloadDebounceWorkItem = nil
         if let source = monitorSource {
             source.cancel()
             monitorSource = nil
