@@ -18,21 +18,23 @@ public struct FloatingPreviewView: View {
                     Circle()
                         .fill(controller.mode == .quickAsk ? Color.purple : Color.red)
                         .frame(width: 9, height: 9)
-                    Text(controller.mode == .quickAsk ? "AIクイック質問中..." : "リアルタイム音声入力中...")
+                    Text(controller.mode == .quickAsk ? "AIクイック質問中..." : "音声入力中です..")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.primary)
 
                     Spacer()
 
-                    Text(controller.mode == .quickAsk ? "離すとAIが回答" : "離すとAI推敲")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(controller.mode == .quickAsk ? .purple : .red)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            Capsule()
-                                .fill((controller.mode == .quickAsk ? Color.purple : Color.red).opacity(0.12))
-                        )
+                    if controller.mode == .quickAsk {
+                        Text("離すとAIが回答")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.purple)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule()
+                                    .fill(Color.purple.opacity(0.12))
+                            )
+                    }
 
                 case .processing:
                     ProgressView()
