@@ -66,7 +66,15 @@ struct TestRunner {
         assert(service.apply(text: "本当ですか。？", rules: rules) == "本当ですか？")
         assert(service.apply(text: "本当ですか。はてなマーク", rules: rules) == "本当ですか？")
 
-        // 9. 初期ルール (defaultDictionaryRules) に全記号ルールが最初から登録・有効化されていることを検証
+        // 9. 英語の感嘆符 (!) / 疑問符 (?) のピリオド・カンマ巻き込み置換
+        assert(service.apply(text: "Great!.", rules: rules) == "Great!")
+        assert(service.apply(text: "Great.!", rules: rules) == "Great!")
+        assert(service.apply(text: "Thank you. exclamation mark", rules: rules) == "Thank you!")
+        assert(service.apply(text: "Really?.", rules: rules) == "Really?")
+        assert(service.apply(text: "Really.?", rules: rules) == "Really?")
+        assert(service.apply(text: "Are you sure. question mark", rules: rules) == "Are you sure?")
+
+        // 10. 初期ルール (defaultDictionaryRules) に全記号ルールが最初から登録・有効化されていることを検証
         let defaultRules = AppSettings.defaultDictionaryRules
         for symbol in AppSettings.symbolDictionaryRules {
             let found = defaultRules.first(where: { $0.pattern == symbol.pattern })

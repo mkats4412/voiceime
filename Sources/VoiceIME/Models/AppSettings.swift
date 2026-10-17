@@ -695,11 +695,17 @@ public final class AppSettings: ObservableObject {
             DictionaryRule(pattern: "(シングルクォートとじ|シングルクォート閉じ|[Cc]lose single quote)", replacement: "'", isRegex: true, isEnabled: true),
             DictionaryRule(pattern: "(ひらきシングルクォート|開きシングルクォート|[Oo]pen single quote)", replacement: "'", isRegex: true, isEnabled: true),
 
-            // 感嘆符 (!) / びっくりマーク（前後に勝手に入った「。」「、」を巻き込んで「！」に置換）
-            DictionaryRule(pattern: "[。、]*[ 　]*([!！]|びっくりまーく|びっくりマーク|感嘆符|[Ee]xclamation mark)[ 　]*[。、]*", replacement: "！", isRegex: true, isEnabled: true),
+            // 日本語の直後にある感嘆符 (！)（前後に勝手に入った「。」「、」「.」を巻き込んで「！」に置換）
+            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[ 　]*([!！]|びっくりまーく|びっくりマーク|感嘆符)[ 　]*[。、\\.,]*", replacement: "！", isRegex: true, isEnabled: true),
 
-            // 疑問符 (?) / はてなマーク（前後に勝手に入った「。」「、」を巻き込んで「？」に置換）
-            DictionaryRule(pattern: "[。、]*[ 　]*([?？]|はてなまーく|はてなマーク|疑問符|クエスチョンマーク|[Qq]uestion mark)[ 　]*[。、]*", replacement: "？", isRegex: true, isEnabled: true)
+            // 日本語の直後にある疑問符 (？)（前後に勝手に入った「。」「、」「.」を巻き込んで「？」に置換）
+            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[ 　]*([?？]|はてなまーく|はてなマーク|疑問符|クエスチョンマーク)[ 　]*[。、\\.,]*", replacement: "？", isRegex: true, isEnabled: true),
+
+            // 英語・英字向けの感嘆符 (!)（前後に勝手に入ったピリオド「.」やカンマ「,」を巻き込んで半角「!」に置換）
+            DictionaryRule(pattern: "[。、\\.,]*\\s*(!|[Ee]xclamation mark)\\s*[。、\\.,]*", replacement: "!", isRegex: true, isEnabled: true),
+
+            // 英語・英字向けの疑問符 (?)（前後に勝手に入ったピリオド「.」やカンマ「,」を巻き込んで半角「?」に置換）
+            DictionaryRule(pattern: "[。、\\.,]*\\s*(\\?|[Qq]uestion mark)\\s*[。、\\.,]*", replacement: "?", isRegex: true, isEnabled: true)
         ]
     }
 
