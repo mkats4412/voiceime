@@ -337,8 +337,8 @@ public final class KatakanaEnglishConverter {
         while !remaining.isEmpty {
             var matched = false
             for key in sortedKeys {
-                if remaining.hasPrefix(key) {
-                    resultWords.append(katakanaToEnglish[key]!)
+                if remaining.hasPrefix(key), let english = katakanaToEnglish[key] {
+                    resultWords.append(english)
                     remaining.removeFirst(key.count)
                     matched = true
                     break

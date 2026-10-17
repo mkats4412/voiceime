@@ -6,6 +6,9 @@ struct VoiceIMEApp: App {
     @StateObject private var appState = AppState.shared
 
     init() {
+        // プロセス間パイプ通信等での SIGPIPE シグナルによる異常終了を無視
+        signal(SIGPIPE, SIG_IGN)
+
         if CommandLine.arguments.contains("--live-speech-helper") {
             LiveSpeechHelper.run()
             exit(0)

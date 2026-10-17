@@ -6,6 +6,9 @@ import AVFoundation
 /// SFSpeechRecognizer でリアルタイム音声認識を行い、stdout に認識結果を 1 行ずつ出力するクラス
 public final class LiveSpeechHelper {
     public static func run() {
+        // パイプ破断時の SIGPIPE による異常終了を無視
+        signal(SIGPIPE, SIG_IGN)
+
         var localeIdentifier = "en-US"
         var sampleRate: Double = 44100.0
         var channels: Int = 1
@@ -45,14 +48,14 @@ public final class LiveSpeechHelper {
                 if !text.isEmpty {
                     let out = "TEXT:\(text)\n"
                     if let data = out.data(using: .utf8) {
-                        FileHandle.standardOutput.write(data)
+                        try? FileHandle.standardOutput.write(contentsOf: data)
                     }
                 }
             }
             if let error = error {
                 let nsErr = error as NSError
                 if nsErr.domain != "kAFAssistantErrorDomain" || nsErr.code != 203 {
-                    // fputs("[Helper] Recognition error: \(error.localizedDescription)\n", stderr)
+                    // 通常の認識終了・無音は無視
                 }
             }
         }
@@ -60,7 +63,7 @@ public final class LiveSpeechHelper {
         guard let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: sampleRate,
-            channels: AVAudioChannelCount(channels),
+            channels: AVAudioChannelCount(max(1, channels)),
             interleaved: false
         ) else {
             fputs("[Helper] Invalid audio format\n", stderr)
@@ -71,27 +74,47 @@ public final class LiveSpeechHelper {
         stdinHandle.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
-                // EOF: 親プロセスがパイプを閉じた
+                // EOF: 親プロセスがパイプを閉じた ➔ 音声終了・ハンドラ解除・正常終了
+                handle.readabilityHandler = nil
                 request.endAudio()
+                task.cancel()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    exit(0)
+                }
                 return
             }
 
             let bytesPerFrame = format.streamDescription.pointee.mBytesPerFrame
             guard bytesPerFrame > 0 else { return }
             let frameCount = UInt32(data.count) / bytesPerFrame
-            if frameCount > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) {
-                buffer.frameLength = frameCount
-                data.withUnsafeBytes { rawPtr in
-                    if let base = rawPtr.baseAddress {
-                        memcpy(buffer.floatChannelData![0], base, Int(data.count))
-                    }
-                }
-                request.append(buffer)
+            guard frameCount > 0 else { return }
+
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
+            buffer.frameLength = frameCount
+
+            data.withUnsafeBytes { rawBuffer in
+                guard let baseAddress = rawBuffer.baseAddress,
+                      let channelData = buffer.floatChannelData else { return }
+                // バッファ容量を超えない正確なバイト数をコピー（バッファオーバーラン防止）
+                let copyByteCount = Int(frameCount * bytesPerFrame)
+                memcpy(channelData[0], baseAddress, copyByteCount)
             }
+            request.append(buffer)
         }
 
-        // 親プロセスが終了したら自動終了するためのシグナル・ループ
+        // 親プロセスがクラッシュ等で突然死した場合のセーフティ（定期的に親の存在を監視）
+        let ppid = getppid()
+        let watchdogTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .background))
+        watchdogTimer.schedule(deadline: .now() + 2.0, repeating: 2.0)
+        watchdogTimer.setEventHandler {
+            if getppid() != ppid || getppid() <= 1 {
+                exit(0)
+            }
+        }
+        watchdogTimer.resume()
+
         RunLoop.main.run()
         _ = task
+        _ = watchdogTimer
     }
 }

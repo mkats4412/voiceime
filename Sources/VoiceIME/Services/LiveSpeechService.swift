@@ -23,10 +23,14 @@ public final class LiveSpeechService: ObservableObject {
     private var latestJaText: String = ""
     private var latestEnText: String = ""
 
+    // オーディオレンダースレッドをブロックさせないための専用書き込みシリアルキュー
+    private let helperAudioQueue = DispatchQueue(label: "com.voiceime.livespeech.helperaudio", qos: .userInteractive)
+
     private var onTextUpdate: ((String) -> Void)?
 
     private init() {
-        // 起動時ブロッキングを防ぐため、初回録音時に非同期で権限要求を行う
+        // パイプ破断時の SIGPIPE による異常クラッシュを防止
+        signal(SIGPIPE, SIG_IGN)
     }
 
     /// 音声認識の権限をリクエスト
@@ -122,17 +126,26 @@ public final class LiveSpeechService: ObservableObject {
             startEnglishHelperProcess(executablePath: execPath, format: recordingFormat)
         }
 
-        // マイク入力バッファの取得と配信
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            guard let self = self else { return }
-            // 1. 親プロセスの認識器へバッファ供給
-            self.recognitionRequest?.append(buffer)
+        // キャプチャ用に現在の helperStdinPipe と isDualMode をローカルに束縛
+        let currentHelperPipe = self.helperStdinPipe
+        let dualModeActive = self.isDualMode
+        let audioQueue = self.helperAudioQueue
 
-            // 2. 英語ヘルパープロセスの stdin へ PCM Float32 データをパイプ送信
-            if self.isDualMode, let pipe = self.helperStdinPipe, let channelData = buffer.floatChannelData {
+        // マイク入力バッファの取得と配信
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self, weak request] buffer, _ in
+            guard self != nil else { return }
+            // 1. 親プロセスの認識器へバッファ供給（メインオーディオタップスレッド）
+            request?.append(buffer)
+
+            // 2. 英語ヘルパープロセスの stdin へ PCM Float32 データを非同期シリアルキューで送信
+            // CoreAudio のリアルタイムスレッドをブロッキング I/O から完全に保護
+            if dualModeActive, let pipe = currentHelperPipe,
+               let channelData = buffer.floatChannelData, buffer.frameLength > 0 {
                 let byteCount = Int(buffer.frameLength) * MemoryLayout<Float>.size
                 let data = Data(bytes: channelData[0], count: byteCount)
-                try? pipe.fileHandleForWriting.write(contentsOf: data)
+                audioQueue.async {
+                    try? pipe.fileHandleForWriting.write(contentsOf: data)
+                }
             }
         }
 
@@ -154,7 +167,7 @@ public final class LiveSpeechService: ObservableObject {
             "--live-speech-helper",
             "--locale", "en-US",
             "--sample-rate", "\(format.sampleRate)",
-            "--channels", "\(format.channelCount)"
+            "--channels", "\(max(1, format.channelCount))"
         ]
 
         let inPipe = Pipe()
@@ -188,6 +201,9 @@ public final class LiveSpeechService: ObservableObject {
             NSLog("[VoiceIME] 🚀 英語認識ヘルパー子プロセス起動完了 (PID: %d)", process.processIdentifier)
         } catch {
             NSLog("[VoiceIME] ⚠️ 英語認識ヘルパー起動失敗: %@", error.localizedDescription)
+            self.helperStdinPipe = nil
+            self.helperStdoutPipe = nil
+            self.helperProcess = nil
         }
     }
 
@@ -222,13 +238,20 @@ public final class LiveSpeechService: ObservableObject {
         var latin = 0
 
         for scalar in text.unicodeScalars {
+            // ひらがな: 3040〜309F
             if (0x3040...0x309F).contains(scalar.value) {
                 hiragana += 1
-            } else if (0x30A0...0x30FF).contains(scalar.value) {
+            }
+            // 全角カタカナ: 30A0〜30FF または 半角カタカナ: FF66〜FF9F
+            else if (0x30A0...0x30FF).contains(scalar.value) || (0xFF66...0xFF9F).contains(scalar.value) {
                 katakana += 1
-            } else if (0x4E00...0x9FAF).contains(scalar.value) {
+            }
+            // 漢字（CJK統合漢字）: 4E00〜9FAF
+            else if (0x4E00...0x9FAF).contains(scalar.value) {
                 kanji += 1
-            } else if CharacterSet.letters.contains(scalar) && scalar.value < 0x200 {
+            }
+            // ASCII ラテン文字: A-Z, a-z
+            else if (0x41...0x5A).contains(scalar.value) || (0x61...0x7A).contains(scalar.value) {
                 latin += 1
             }
         }
@@ -289,16 +312,22 @@ public final class LiveSpeechService: ObservableObject {
         return cleaned
     }
 
-    /// 自然な英単語フレーズ（アルファベットと英語標準記号で構成された有効な英文）かどうかを判定
+    /// 自然な英単語フレーズ（ASCIIアルファベットと英語標準記号で構成された有効な英文）かどうかを判定
     nonisolated public static func isValidEnglishPhrase(_ text: String) -> Bool {
         let cleaned = cleanTranscriptionText(text)
         guard !cleaned.isEmpty else { return false }
 
-        // アルファベットと標準的な英語記号のみかチェック
-        let allowed = CharacterSet.letters.union(.whitespaces).union(CharacterSet(charactersIn: "',.-?!"))
-        guard cleaned.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+        // ASCIIアルファベットと英語標準記号のみに厳格限定（日本語Unicode文字の混入を完全遮断）
+        let englishAllowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ',.-?! ")
+        guard cleaned.unicodeScalars.allSatisfy({ englishAllowed.contains($0) }) else {
             return false
         }
+
+        // 少なくとも1文字以上の英字を含んでいること
+        let hasLatinLetter = cleaned.unicodeScalars.contains { scalar in
+            (0x41...0x5A).contains(scalar.value) || (0x61...0x7A).contains(scalar.value)
+        }
+        guard hasLatinLetter else { return false }
 
         let words = cleaned.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
         guard !words.isEmpty else { return false }
@@ -341,10 +370,12 @@ public final class LiveSpeechService: ObservableObject {
     /// リアルタイム音声認識を停止
     public func stopLiveRecognition() {
         if isRunning || audioEngine != nil || helperProcess != nil {
+            // 1. オーディオ入力の停止とタップ解除
             audioEngine?.stop()
             audioEngine?.inputNode.removeTap(onBus: 0)
             audioEngine = nil
 
+            // 2. 音声認識リクエストの終了
             recognitionRequest?.endAudio()
             recognitionRequest = nil
 
@@ -353,7 +384,7 @@ public final class LiveSpeechService: ObservableObject {
 
             speechRecognizer = nil
 
-            // 英語ヘルパープロセスの安全な終了
+            // 3. 英語ヘルパープロセスの安全な終了とリソース解放
             if let inPipe = helperStdinPipe {
                 try? inPipe.fileHandleForWriting.close()
                 helperStdinPipe = nil
@@ -362,8 +393,14 @@ public final class LiveSpeechService: ObservableObject {
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 helperStdoutPipe = nil
             }
-            if let process = helperProcess, process.isRunning {
-                process.terminate()
+            if let process = helperProcess {
+                if process.isRunning {
+                    process.terminate()
+                    // ゾンビプロセス化を防ぐためバックグラウンドで回収待ち
+                    DispatchQueue.global(qos: .utility).async {
+                        process.waitUntilExit()
+                    }
+                }
                 helperProcess = nil
             }
 
