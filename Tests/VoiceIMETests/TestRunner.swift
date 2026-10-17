@@ -53,6 +53,14 @@ struct TestRunner {
         assert(service.apply(text: "ひらきシングルクォート単語シングルクォートとじ", rules: rules) == "'単語'")
         assert(service.apply(text: "Open single quotecharClose single quote", rules: rules) == "'char'")
 
+        // 7. 初期ルール (defaultDictionaryRules) に全記号ルールが最初から登録・有効化されていることを検証
+        let defaultRules = AppSettings.defaultDictionaryRules
+        for symbol in AppSettings.symbolDictionaryRules {
+            let found = defaultRules.first(where: { $0.pattern == symbol.pattern })
+            assert(found != nil, "Default rules must include symbol pattern: \(symbol.pattern)")
+            assert(found!.isEnabled == true, "Symbol rule must be enabled by default: \(symbol.pattern)")
+        }
+
         print("  -> Symbol Dictionary Rules passed!")
     }
 
