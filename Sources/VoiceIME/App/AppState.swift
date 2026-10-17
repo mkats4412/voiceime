@@ -1051,9 +1051,9 @@ public final class AppState: ObservableObject {
                 )
                 self.lastProcessedText = processedText
 
-                // プレビューウィンドウの内容も最新の確定テキストに同期
+                // プレビューウィンドウの内容も最新の確定テキストに同期（ペーストされる文字列と完全に一致）
                 if self.settings.floatingPreviewEnabled {
-                    FloatingPreviewController.shared.updateLiveText(processedText)
+                    FloatingPreviewController.shared.updateConfirmedText(processedText)
                 }
 
                 // ==========================================

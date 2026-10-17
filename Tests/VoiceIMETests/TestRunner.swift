@@ -463,8 +463,9 @@ struct TestRunner {
         print("  -> AudioAnalysisService passed!")
     }
 
+    @MainActor
     static func testFloatingPreviewSettings() {
-        print("[TEST] FloatingPreview Settings...")
+        print("[TEST] FloatingPreview Settings & Confirmed Text Sync...")
         let settings = AppSettings.shared
 
         // 初期値・型チェック
@@ -491,7 +492,29 @@ struct TestRunner {
         settings.autoPasteEnabled = origAuto
         settings.floatingPreviewDuration = origDuration
 
-        print("  -> FloatingPreview Settings passed!")
+        // ウィンドウ確定テキスト同期の検証:
+        // 録音中（カタカナ表示）から処理中（processing）を経て確定テキスト（英語）が届いた時、
+        // プレビューウィンドウの currentText が確実に確定成果物（did you finish it?）と一致すること
+        let controller = FloatingPreviewController.shared
+        controller.showLiveRecording()
+        controller.updateLiveText("ディド ユー フィニッシュ イット")
+        assert(controller.currentText == "ディド ユー フィニッシュ イット")
+
+        controller.setProcessing()
+        assert(controller.phase == .processing)
+
+        // updateLiveText は processing 中は無視される仕様であること
+        controller.updateLiveText("無視されるテキスト")
+        assert(controller.currentText == "ディド ユー フィニッシュ イット")
+
+        // updateConfirmedText は processing 中でも確実に確定テキストに同期すること
+        controller.updateConfirmedText("did you finish it?")
+        assert(controller.currentText == "did you finish it?", "Confirmed text must match final artifact exactly")
+        assert(controller.phase == .ready, "Phase must become .ready upon confirmed text sync")
+
+        controller.hide()
+
+        print("  -> FloatingPreview Settings & Confirmed Text Sync passed!")
     }
 
     static func testLivePunctuationFormatting() {

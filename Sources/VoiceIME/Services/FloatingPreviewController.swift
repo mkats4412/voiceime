@@ -110,6 +110,20 @@ public final class FloatingPreviewController: ObservableObject {
         self.currentText = text
     }
 
+    /// 確定テキストの同期・更新（推敲・辞書適用後の最終確定成果物を即座に反映）
+    public func updateConfirmedText(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        self.currentText = text
+        self.phase = .ready
+        self.copySuccess = false
+
+        if isVisible {
+            updatePanelPosition()
+            registerHotkeys()
+        }
+        NSLog("[VoiceIME] 💬 フローティングプレビュー確定テキスト同期: [%@]", text)
+    }
+
     /// 録音停止・AI推敲中へのステータス変更
     public func setProcessing(mode: FloatingPreviewMode? = nil) {
         if let mode = mode {
