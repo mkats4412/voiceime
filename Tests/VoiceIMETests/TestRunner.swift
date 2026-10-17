@@ -16,14 +16,14 @@ struct TestRunner {
         testAudioAnalysisService()
         testFloatingPreviewSettings()
         testLivePunctuationFormatting()
-        testDualLiveSpeechRecognition()
+        testLiveSpeechPhoneticTransliteration()
         testQuickAskAndPasteShortcuts()
 
         print("=== All Tests Passed Successfully! ===")
     }
 
-    static func testDualLiveSpeechRecognition() {
-        print("[TEST] Dual Live Speech Recognition & Phonetic Transliteration...")
+    static func testLiveSpeechPhoneticTransliteration() {
+        print("[TEST] Live Speech & KatakanaEnglishConverter...")
 
         // 1. カタカナ音訳判定: 英語発話が日本語認識でカタカナになった場合の検知
         assert(LiveSpeechService.isPhoneticEnglishTransliteration("ディド ユー フィニッシュ イット") == true)
@@ -35,31 +35,32 @@ struct TestRunner {
         assert(LiveSpeechService.isPhoneticEnglishTransliteration("本日の作業は完了しました") == false)
         assert(LiveSpeechService.isPhoneticEnglishTransliteration("お疲れ様です") == false)
         assert(LiveSpeechService.isPhoneticEnglishTransliteration("どうでしょうか") == false)
+        assert(LiveSpeechService.isPhoneticEnglishTransliteration("こんにちは") == false)
+
         // 3. Dictate プレフィックスのクリーンアップ
         assert(LiveSpeechService.cleanTranscriptionText("Dictate konnichiwa") == "konnichiwa")
         assert(LiveSpeechService.cleanTranscriptionText("Dictate did you finish it") == "did you finish it")
         assert(LiveSpeechService.cleanTranscriptionText("Dictate") == "")
         assert(LiveSpeechService.cleanTranscriptionText("hello") == "hello")
 
-        // 4. ローマ字日本語の検知（英語認識器の誤解釈防止）
-        assert(LiveSpeechService.containsRomajiJapanese("Dictate konnichiwa") == true)
-        assert(LiveSpeechService.containsRomajiJapanese("konnichiwa") == true)
-        assert(LiveSpeechService.containsRomajiJapanese("arigatou") == true)
-        assert(LiveSpeechService.containsRomajiJapanese("did you finish it") == false)
-        assert(LiveSpeechService.containsRomajiJapanese("hello world") == false)
+        // 4. KatakanaEnglishConverter によるカタカナ英語のリアルタイム英文変換
+        let converter = KatakanaEnglishConverter.shared
+        let out1 = converter.convertToEnglish("ディド ユー フィニッシュ イット")
+        assert(out1 == "Did you finish it?", "Expected 'Did you finish it?', got '\(out1)'")
 
-        // 5. 有効な英文フレーズの判定
-        assert(LiveSpeechService.isValidEnglishPhrase("did you finish it?") == true)
-        assert(LiveSpeechService.isValidEnglishPhrase("Hello, world!") == true)
-        assert(LiveSpeechService.isValidEnglishPhrase("") == false)
-        assert(LiveSpeechService.isValidEnglishPhrase("Dictate") == false)
+        let out2 = converter.convertToEnglish("ディドユーフィニッシュイット")
+        assert(out2 == "Did you finish it?", "Expected 'Did you finish it?', got '\(out2)'")
 
-        // 6. 単語数によるノイズ防御（"Kak" や "Can" などの単発ノイズは3単語未満のため ja 未着時には除外される）
-        let singleWordNoise = "Kak"
-        let words = singleWordNoise.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-        assert(words.count < 3, "Single word noise like Kak must be rejected when ja is empty")
+        let out3 = converter.convertToEnglish("ハロー ワールド")
+        assert(out3 == "Hello world", "Expected 'Hello world', got '\(out3)'")
 
-        print("  -> Dual Live Speech Recognition passed!")
+        let out4 = converter.convertToEnglish("サンキュー ベリー マッチ")
+        assert(out4 == "Thank you very much", "Expected 'Thank you very much', got '\(out4)'")
+
+        let out5 = converter.convertToEnglish("アイ ハブ ア ペン")
+        assert(out5 == "I have a pen", "Expected 'I have a pen', got '\(out5)'")
+
+        print("  -> Live Speech & KatakanaEnglishConverter passed!")
     }
 
     static func testSymbolDictionaryRules() {
