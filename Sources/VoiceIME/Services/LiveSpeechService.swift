@@ -176,13 +176,15 @@ public final class LiveSpeechService: ObservableObject {
             }
         } else {
             // 2. ja がまだ空の初期段階:
-            // 英語側が単なるローマ字（"konnichiwa" 等）やノイズでなく、明確な本物の英語フレーズの場合のみ英語を採用
-            // （日本語発話の初動で英語側のローマ字誤認「Dictate konnichiwa」等がチラつくのを完全に遮断）
-            if Self.isValidEnglishPhrase(en) && !Self.containsRomajiJapanese(en) {
+            // 英語エンジンが日本語の音声出だし（「こん」「あっ」等）を "Kak" や "Can" 等の英単語に誤認する現象を完全に遮断。
+            // ja が空の間は、スペース区切りで3単語以上の明確な完成英文フレーズ（例: "did you finish it"）でない限り
+            // 日本語エンジンの初動テキスト（漢字・ひらがな vs カタカナ音訳）が届くまで表示を待機する。
+            let words = en.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+            if words.count >= 3 && Self.isValidEnglishPhrase(en) && !Self.containsRomajiJapanese(en) {
                 chosenText = en
                 isJp = false
             } else {
-                // 日本語エンジンの初動テキストが届くまで待機
+                // 日本語エンジンの初動テキストが届くまで待機（"Kak" 等の誤表示を完全防止）
                 return
             }
         }

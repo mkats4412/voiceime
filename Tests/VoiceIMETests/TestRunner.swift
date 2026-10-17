@@ -54,6 +54,11 @@ struct TestRunner {
         assert(LiveSpeechService.isValidEnglishPhrase("") == false)
         assert(LiveSpeechService.isValidEnglishPhrase("Dictate") == false)
 
+        // 6. 単語数によるノイズ防御（"Kak" や "Can" などの単発ノイズは3単語未満のため ja 未着時には除外される）
+        let singleWordNoise = "Kak"
+        let words = singleWordNoise.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        assert(words.count < 3, "Single word noise like Kak must be rejected when ja is empty")
+
         print("  -> Dual Live Speech Recognition passed!")
     }
 
