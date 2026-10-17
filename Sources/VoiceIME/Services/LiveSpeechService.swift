@@ -144,39 +144,46 @@ public final class LiveSpeechService: ObservableObject {
     private func handleTranscriptionUpdate() {
         if !isDualRecognition {
             // 単一言語モード
-            let text = speechRecognizerJa != nil ? latestJaText : latestEnText
+            let rawText = speechRecognizerJa != nil ? latestJaText : latestEnText
+            let cleanText = Self.cleanTranscriptionText(rawText)
             let isJp = speechRecognizerJa != nil
             self.detectedLanguageIsJapanese = isJp
-            let formatted = Self.formatLivePunctuation(text: text, isJapanese: isJp)
+            let formatted = Self.formatLivePunctuation(text: cleanText, isJapanese: isJp)
             self.partialText = formatted
             self.onTextUpdate?(formatted)
             return
         }
 
-        // 日英デュアル認識モード: 発話内容からどちらの認識結果を採用するか動的に切り替え
-        let ja = latestJaText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let en = latestEnText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 日英デュアル認識モード:
+        // 日本語（ja-JP）を基本とし、英語発話（カタカナ音訳）が検知された場合のみ英語（en-US）を採用
+        let ja = Self.cleanTranscriptionText(latestJaText)
+        let en = Self.cleanTranscriptionText(latestEnText)
 
         guard !ja.isEmpty || !en.isEmpty else { return }
 
         let chosenText: String
         let isJp: Bool
 
-        if ja.isEmpty {
-            chosenText = en
-            isJp = false
-        } else if en.isEmpty {
-            chosenText = ja
-            isJp = true
-        } else {
-            // 両方ある場合の判定:
-            // 日本語認識側がカタカナ音訳（英語発話のカタカナ化）かつ英語認識側に有効テキストがある場合は英語を採用
-            if Self.isPhoneticEnglishTransliteration(ja) && !en.isEmpty {
+        if !ja.isEmpty {
+            // 1. 日本語認識結果が存在する場合:
+            // 日本語側がカタカナ音訳（英語発話を無理やりカタカナ化したもの）かつ英語側に有効な英文がある場合は英語
+            if Self.isPhoneticEnglishTransliteration(ja) && Self.isValidEnglishPhrase(en) && !Self.containsRomajiJapanese(en) {
                 chosenText = en
                 isJp = false
             } else {
                 chosenText = ja
                 isJp = true
+            }
+        } else {
+            // 2. ja がまだ空の初期段階:
+            // 英語側が単なるローマ字（"konnichiwa" 等）やノイズでなく、明確な本物の英語フレーズの場合のみ英語を採用
+            // （日本語発話の初動で英語側のローマ字誤認「Dictate konnichiwa」等がチラつくのを完全に遮断）
+            if Self.isValidEnglishPhrase(en) && !Self.containsRomajiJapanese(en) {
+                chosenText = en
+                isJp = false
+            } else {
+                // 日本語エンジンの初動テキストが届くまで待機
+                return
             }
         }
 
@@ -184,6 +191,55 @@ public final class LiveSpeechService: ObservableObject {
         let formatted = Self.formatLivePunctuation(text: chosenText, isJapanese: isJp)
         self.partialText = formatted
         self.onTextUpdate?(formatted)
+    }
+
+    /// 音声認識結果のクリーンアップ（"Dictate " プレフィックスの除去等）
+    nonisolated public static func cleanTranscriptionText(_ text: String) -> String {
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.lowercased().starts(with: "dictate ") {
+            cleaned = String(cleaned.dropFirst(8)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if cleaned.lowercased() == "dictate" {
+            cleaned = ""
+        }
+        return cleaned
+    }
+
+    /// 自然な英単語フレーズ（アルファベットで構成された有効な英文）かどうかを判定
+    nonisolated public static func isValidEnglishPhrase(_ text: String) -> Bool {
+        let cleaned = cleanTranscriptionText(text)
+        guard !cleaned.isEmpty else { return false }
+
+        // アルファベットと標準的な英語記号のみかチェック
+        let allowed = CharacterSet.letters.union(.whitespaces).union(CharacterSet(charactersIn: "',.-?!"))
+        guard cleaned.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+            return false
+        }
+
+        let words = cleaned.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        guard !words.isEmpty else { return false }
+
+        return true
+    }
+
+    /// 英語認識器が日本語の音を聞いた際に誤って出力する代表的なローマ字単語を検知
+    nonisolated public static func containsRomajiJapanese(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let romajiKeywords = [
+            "konnichiwa", "konnichwa", "konichiwa",
+            "arigato", "arigatou",
+            "ohayo", "ohayou",
+            "sayonara", "sayounara",
+            "kudasai", "onegaishimasu",
+            "otsukare", "otsukaresama",
+            "desu", "masu", "mashita", "deshita",
+            "hai", "iie", "chotto", "sugoi", "deki"
+        ]
+        for kw in romajiKeywords {
+            if lower.contains(kw) {
+                return true
+            }
+        }
+        return false
     }
 
     /// 日本語エンジンが英語の発話を無理やりカタカナで音訳している状態（例: 「ディド ユー フィニッシュ イット」）を判定

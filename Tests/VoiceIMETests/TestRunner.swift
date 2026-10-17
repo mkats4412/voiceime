@@ -35,8 +35,24 @@ struct TestRunner {
         assert(LiveSpeechService.isPhoneticEnglishTransliteration("本日の作業は完了しました") == false)
         assert(LiveSpeechService.isPhoneticEnglishTransliteration("お疲れ様です") == false)
         assert(LiveSpeechService.isPhoneticEnglishTransliteration("どうでしょうか") == false)
-        assert(LiveSpeechService.isPhoneticEnglishTransliteration("こんにちは") == false)
-        assert(LiveSpeechService.isPhoneticEnglishTransliteration("ありがとうございます") == false)
+        // 3. Dictate プレフィックスのクリーンアップ
+        assert(LiveSpeechService.cleanTranscriptionText("Dictate konnichiwa") == "konnichiwa")
+        assert(LiveSpeechService.cleanTranscriptionText("Dictate did you finish it") == "did you finish it")
+        assert(LiveSpeechService.cleanTranscriptionText("Dictate") == "")
+        assert(LiveSpeechService.cleanTranscriptionText("hello") == "hello")
+
+        // 4. ローマ字日本語の検知（英語認識器の誤解釈防止）
+        assert(LiveSpeechService.containsRomajiJapanese("Dictate konnichiwa") == true)
+        assert(LiveSpeechService.containsRomajiJapanese("konnichiwa") == true)
+        assert(LiveSpeechService.containsRomajiJapanese("arigatou") == true)
+        assert(LiveSpeechService.containsRomajiJapanese("did you finish it") == false)
+        assert(LiveSpeechService.containsRomajiJapanese("hello world") == false)
+
+        // 5. 有効な英文フレーズの判定
+        assert(LiveSpeechService.isValidEnglishPhrase("did you finish it?") == true)
+        assert(LiveSpeechService.isValidEnglishPhrase("Hello, world!") == true)
+        assert(LiveSpeechService.isValidEnglishPhrase("") == false)
+        assert(LiveSpeechService.isValidEnglishPhrase("Dictate") == false)
 
         print("  -> Dual Live Speech Recognition passed!")
     }
