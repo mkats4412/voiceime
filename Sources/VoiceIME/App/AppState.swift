@@ -540,8 +540,15 @@ public final class AppState: ObservableObject {
         maxRecordingTimer = nil
 
         // リアルタイムプレビューで最後に表示されていたテキストを取得・句読点補正を確定
+        let isJapanese: Bool
+        if settings.language == "ja" {
+            isJapanese = true
+        } else if settings.language.lowercased().starts(with: "en") {
+            isJapanese = false
+        } else {
+            isJapanese = LiveSpeechService.shared.detectedLanguageIsJapanese
+        }
         let rawLive = LiveSpeechService.shared.partialText
-        let isJapanese = (settings.language.isEmpty || settings.language.lowercased().starts(with: "ja"))
         let livePreviewText = PunctuationService.shared.format(text: rawLive, isJapanese: isJapanese)
 
         // プレビューのテキストを最新の句読点付きに更新

@@ -16,9 +16,29 @@ struct TestRunner {
         testAudioAnalysisService()
         testFloatingPreviewSettings()
         testLivePunctuationFormatting()
+        testDualLiveSpeechRecognition()
         testQuickAskAndPasteShortcuts()
 
         print("=== All Tests Passed Successfully! ===")
+    }
+
+    static func testDualLiveSpeechRecognition() {
+        print("[TEST] Dual Live Speech Recognition & Phonetic Transliteration...")
+
+        // 1. カタカナ音訳判定: 英語発話が日本語認識でカタカナになった場合の検知
+        assert(LiveSpeechService.isPhoneticEnglishTransliteration("ディド ユー フィニッシュ イット") == true)
+        assert(LiveSpeechService.isPhoneticEnglishTransliteration("ハロー ワールド") == true)
+        assert(LiveSpeechService.isPhoneticEnglishTransliteration("サンキュー") == true)
+        assert(LiveSpeechService.isPhoneticEnglishTransliteration("アイ ハブ ア ペン") == true)
+
+        // 2. 通常の日本語文（漢字・ひらがな含む）は音訳と誤認しないこと
+        assert(LiveSpeechService.isPhoneticEnglishTransliteration("本日の作業は完了しました") == false)
+        assert(LiveSpeechService.isPhoneticEnglishTransliteration("お疲れ様です") == false)
+        assert(LiveSpeechService.isPhoneticEnglishTransliteration("どうでしょうか") == false)
+        assert(LiveSpeechService.isPhoneticEnglishTransliteration("こんにちは") == false)
+        assert(LiveSpeechService.isPhoneticEnglishTransliteration("ありがとうございます") == false)
+
+        print("  -> Dual Live Speech Recognition passed!")
     }
 
     static func testSymbolDictionaryRules() {

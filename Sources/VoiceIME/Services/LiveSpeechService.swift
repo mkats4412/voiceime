@@ -8,11 +8,19 @@ public final class LiveSpeechService: ObservableObject {
 
     @Published public private(set) var isRunning: Bool = false
     @Published public private(set) var partialText: String = ""
+    @Published public private(set) var detectedLanguageIsJapanese: Bool = true
 
     private var audioEngine: AVAudioEngine?
-    private var speechRecognizer: SFSpeechRecognizer?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
+    private var speechRecognizerJa: SFSpeechRecognizer?
+    private var speechRecognizerEn: SFSpeechRecognizer?
+    private var recognitionRequestJa: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionRequestEn: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTaskJa: SFSpeechRecognitionTask?
+    private var recognitionTaskEn: SFSpeechRecognitionTask?
+
+    private var latestJaText: String = ""
+    private var latestEnText: String = ""
+    private var isDualRecognition: Bool = false
 
     private var onTextUpdate: ((String) -> Void)?
 
@@ -29,24 +37,22 @@ public final class LiveSpeechService: ObservableObject {
 
     /// リアルタイム音声認識を開始
     public func startLiveRecognition(
-        languageCode: String = "ja",
+        languageCode: String = "",
         contextualStrings: [String] = [],
         onUpdate: @escaping (String) -> Void
     ) {
         stopLiveRecognition()
 
-        let isJapanese = !languageCode.lowercased().starts(with: "en")
-        let localeIdentifier = isJapanese ? "ja-JP" : "en-US"
-        let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier))
+        let trimmedLang = languageCode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let isAuto = trimmedLang.isEmpty || trimmedLang == "auto"
+        let isExplicitEnglish = trimmedLang.starts(with: "en")
 
-        guard let recognizer = recognizer, recognizer.isAvailable else {
-            NSLog("[VoiceIME] ⚠️ SFSpeechRecognizer が利用できません (言語: %@)", localeIdentifier)
-            return
-        }
-
-        self.speechRecognizer = recognizer
         self.onTextUpdate = onUpdate
         self.partialText = ""
+        self.latestJaText = ""
+        self.latestEnText = ""
+        self.detectedLanguageIsJapanese = !isExplicitEnglish
+        self.isDualRecognition = isAuto
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
@@ -58,65 +64,164 @@ public final class LiveSpeechService: ObservableObject {
             return
         }
 
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-
-        // ディクテーションモード（書き取り）を指定して発話内容をできる限り忠実に拾う
-        request.taskHint = .dictation
-
-        // 口語のつなぎ言葉や辞書登録語をコンテキストに追加して認識精度を向上
-        if !contextualStrings.isEmpty {
-            request.contextualStrings = contextualStrings
-        }
-
-        // 句読点（。、！？）の自動付与を有効化 (macOS 13.0+)
-        if #available(macOS 13.0, *) {
-            request.addsPunctuation = true
-        }
-
-        // オンデバイス認識が可能なら優先して低遅延化
-        if #available(macOS 10.15, *) {
-            if recognizer.supportsOnDeviceRecognition {
-                request.requiresOnDeviceRecognition = false // 精度向上のため柔軟に設定
-            }
-        }
-
-        self.recognitionRequest = request
-        self.audioEngine = engine
-
-        self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            Task { @MainActor [weak self] in
-                guard let self = self, self.isRunning else { return }
-
-                if let result = result {
-                    let rawText = result.bestTranscription.formattedString
-                    // リアルタイム句読点補正および辞書置換を適用
-                    let formattedText = Self.formatLivePunctuation(text: rawText, isJapanese: isJapanese)
-                    self.partialText = formattedText
-                    self.onTextUpdate?(formattedText)
+        // 1. 日本語認識器の初期化（自動または日本語明示指定時）
+        if isAuto || !isExplicitEnglish {
+            if let recognizerJa = SFSpeechRecognizer(locale: Locale(identifier: "ja-JP")), recognizerJa.isAvailable {
+                self.speechRecognizerJa = recognizerJa
+                let reqJa = SFSpeechAudioBufferRecognitionRequest()
+                reqJa.shouldReportPartialResults = true
+                reqJa.taskHint = .dictation
+                if !contextualStrings.isEmpty { reqJa.contextualStrings = contextualStrings }
+                if #available(macOS 13.0, *) { reqJa.addsPunctuation = true }
+                if #available(macOS 10.15, *), recognizerJa.supportsOnDeviceRecognition {
+                    reqJa.requiresOnDeviceRecognition = false
                 }
+                self.recognitionRequestJa = reqJa
 
-                if let error = error {
-                    let nsError = error as NSError
-                    if nsError.domain != "kAFAssistantErrorDomain" || nsError.code != 203 {
-                        NSLog("[VoiceIME] ℹ️ SFSpeechRecognitionTask 停止/通知: %@", error.localizedDescription)
+                self.recognitionTaskJa = recognizerJa.recognitionTask(with: reqJa) { [weak self] result, error in
+                    Task { @MainActor [weak self] in
+                        guard let self = self, self.isRunning else { return }
+                        if let result = result {
+                            self.latestJaText = result.bestTranscription.formattedString
+                            self.handleTranscriptionUpdate()
+                        }
                     }
                 }
             }
         }
 
+        // 2. 英語認識器の初期化（自動または英語明示指定時）
+        if isAuto || isExplicitEnglish {
+            if let recognizerEn = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), recognizerEn.isAvailable {
+                self.speechRecognizerEn = recognizerEn
+                let reqEn = SFSpeechAudioBufferRecognitionRequest()
+                reqEn.shouldReportPartialResults = true
+                reqEn.taskHint = .dictation
+                if !contextualStrings.isEmpty { reqEn.contextualStrings = contextualStrings }
+                if #available(macOS 13.0, *) { reqEn.addsPunctuation = true }
+                if #available(macOS 10.15, *), recognizerEn.supportsOnDeviceRecognition {
+                    reqEn.requiresOnDeviceRecognition = false
+                }
+                self.recognitionRequestEn = reqEn
+
+                self.recognitionTaskEn = recognizerEn.recognitionTask(with: reqEn) { [weak self] result, error in
+                    Task { @MainActor [weak self] in
+                        guard let self = self, self.isRunning else { return }
+                        if let result = result {
+                            self.latestEnText = result.bestTranscription.formattedString
+                            self.handleTranscriptionUpdate()
+                        }
+                    }
+                }
+            }
+        }
+
+        guard self.recognitionRequestJa != nil || self.recognitionRequestEn != nil else {
+            NSLog("[VoiceIME] ⚠️ 有効な SFSpeechRecognizer がありません")
+            return
+        }
+
+        self.audioEngine = engine
+
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
+            guard let self = self else { return }
+            self.recognitionRequestJa?.append(buffer)
+            self.recognitionRequestEn?.append(buffer)
         }
 
         do {
             try engine.start()
             self.isRunning = true
-            NSLog("[VoiceIME] 🎙️ リアルタイム音声認識エンジン開始 (%@, addsPunctuation: true)", localeIdentifier)
+            let modeDesc = isAuto ? "日英デュアル自動認識 (ja-JP & en-US)" : (isExplicitEnglish ? "英語固定 (en-US)" : "日本語固定 (ja-JP)")
+            NSLog("[VoiceIME] 🎙️ リアルタイム音声認識エンジン開始: %@", modeDesc)
         } catch {
             NSLog("[VoiceIME] ⚠️ AVAudioEngine 開始失敗: %@", error.localizedDescription)
             stopLiveRecognition()
         }
+    }
+
+    /// 部分認識結果が更新された際の統合・言語自動選択
+    private func handleTranscriptionUpdate() {
+        if !isDualRecognition {
+            // 単一言語モード
+            let text = speechRecognizerJa != nil ? latestJaText : latestEnText
+            let isJp = speechRecognizerJa != nil
+            self.detectedLanguageIsJapanese = isJp
+            let formatted = Self.formatLivePunctuation(text: text, isJapanese: isJp)
+            self.partialText = formatted
+            self.onTextUpdate?(formatted)
+            return
+        }
+
+        // 日英デュアル認識モード: 発話内容からどちらの認識結果を採用するか動的に切り替え
+        let ja = latestJaText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let en = latestEnText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !ja.isEmpty || !en.isEmpty else { return }
+
+        let chosenText: String
+        let isJp: Bool
+
+        if ja.isEmpty {
+            chosenText = en
+            isJp = false
+        } else if en.isEmpty {
+            chosenText = ja
+            isJp = true
+        } else {
+            // 両方ある場合の判定:
+            // 日本語認識側がカタカナ音訳（英語発話のカタカナ化）かつ英語認識側に有効テキストがある場合は英語を採用
+            if Self.isPhoneticEnglishTransliteration(ja) && !en.isEmpty {
+                chosenText = en
+                isJp = false
+            } else {
+                chosenText = ja
+                isJp = true
+            }
+        }
+
+        self.detectedLanguageIsJapanese = isJp
+        let formatted = Self.formatLivePunctuation(text: chosenText, isJapanese: isJp)
+        self.partialText = formatted
+        self.onTextUpdate?(formatted)
+    }
+
+    /// 日本語エンジンが英語の発話を無理やりカタカナで音訳している状態（例: 「ディド ユー フィニッシュ イット」）を判定
+    nonisolated public static func isPhoneticEnglishTransliteration(_ text: String) -> Bool {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return false }
+
+        var kanjiCount = 0
+        var hiraganaCount = 0
+        var katakanaCount = 0
+
+        for scalar in cleaned.unicodeScalars {
+            // ひらがな: 3040〜309F
+            if (0x3040...0x309F).contains(scalar.value) {
+                hiraganaCount += 1
+            }
+            // カタカナ: 30A0〜30FF
+            else if (0x30A0...0x30FF).contains(scalar.value) {
+                katakanaCount += 1
+            }
+            // 漢字: 4E00〜9FAF
+            else if (0x4E00...0x9FAF).contains(scalar.value) {
+                kanjiCount += 1
+            }
+        }
+
+        // 漢字が1文字でもあれば通常の日本語
+        if kanjiCount > 0 { return false }
+
+        // ひらがなが2文字以上あれば通常の日本語文（「です」「ます」など）
+        if hiraganaCount >= 2 { return false }
+
+        // カタカナが主体で、ひらがながほぼ無い場合は英語のカタカナ音訳とみなす
+        if katakanaCount > 0 && hiraganaCount <= 1 {
+            return true
+        }
+
+        return false
     }
 
     /// リアルタイム音声認識を停止
@@ -126,12 +231,21 @@ public final class LiveSpeechService: ObservableObject {
             audioEngine?.inputNode.removeTap(onBus: 0)
             audioEngine = nil
 
-            recognitionRequest?.endAudio()
-            recognitionRequest = nil
+            recognitionRequestJa?.endAudio()
+            recognitionRequestJa = nil
+            recognitionTaskJa?.cancel()
+            recognitionTaskJa = nil
 
-            recognitionTask?.cancel()
-            recognitionTask = nil
+            recognitionRequestEn?.endAudio()
+            recognitionRequestEn = nil
+            recognitionTaskEn?.cancel()
+            recognitionTaskEn = nil
 
+            speechRecognizerJa = nil
+            speechRecognizerEn = nil
+
+            latestJaText = ""
+            latestEnText = ""
             isRunning = false
             onTextUpdate = nil
             NSLog("[VoiceIME] ⏹️ リアルタイム音声認識エンジン停止")
