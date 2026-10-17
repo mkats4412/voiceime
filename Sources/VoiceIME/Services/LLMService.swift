@@ -84,7 +84,8 @@ public final class LLMService {
         model: String,
         promptHint: String? = nil,
         style: RefinementStyle = .casual,
-        livePreviewText: String? = nil
+        livePreviewText: String? = nil,
+        isCustom: Bool = false
     ) async throws -> String {
         let trimmedInput = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInput.isEmpty else { return "" }
@@ -93,8 +94,11 @@ public final class LLMService {
             throw LLMError.invalidURL(baseURL)
         }
 
-        guard let apiKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !apiKey.isEmpty else {
-            throw LLMError.missingAPIKey
+        let cleanApiKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !isCustom {
+            guard let key = cleanApiKey, !key.isEmpty else {
+                throw LLMError.missingAPIKey
+            }
         }
 
         let systemPrompt = generateSystemPrompt(style: style, promptHint: promptHint, livePreviewText: livePreviewText)
@@ -108,75 +112,272 @@ public final class LLMService {
         \(trimmedInput)
         """
 
-        let payload: [String: Any] = [
-            "model": model,
-            "messages": [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": userPrompt]
-            ],
-            "temperature": 0.0,
-            "max_tokens": 512
-        ]
+        // Sarashina API (api.sarashina.ai) 等の厳格なスキーマ検証APIでは max_tokens が禁止 (disallowed) で max_completion_tokens を使用
+        let initialUseMaxCompletionTokens = baseURL.contains("sarashina.ai")
 
-        let httpBody: Data
-        do {
-            httpBody = try JSONSerialization.data(withJSONObject: payload)
-        } catch {
-            throw LLMError.parsingError(error)
-        }
+        func sendRequest(useMaxCompletionTokens: Bool) async throws -> String {
+            var payload: [String: Any] = [
+                "model": model,
+                "messages": [
+                    ["role": "system", "content": systemPrompt],
+                    ["role": "user", "content": userPrompt]
+                ],
+                "temperature": 0.0
+            ]
+            if useMaxCompletionTokens {
+                payload["max_completion_tokens"] = 512
+            } else {
+                payload["max_tokens"] = 512
+            }
 
-        var request = URLRequest(url: endpointURL)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 8.0
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = httpBody
+            let httpBody: Data
+            do {
+                httpBody = try JSONSerialization.data(withJSONObject: payload)
+            } catch {
+                throw LLMError.parsingError(error)
+            }
 
-        var (data, response): (Data, URLResponse)
-        do {
-            (data, response) = try await URLSession.shared.data(for: request)
-        } catch {
-            // Keep-Alive アイドル切断（-1005: networkConnectionLost）の即時1回自動リトライ
-            if let urlErr = error as? URLError, urlErr.code == .networkConnectionLost {
-                NSLog("[VoiceIME] ⚠️ Keep-Alive切断(-1005)を検知。新規接続で即時再試行します...")
-                do {
-                    (data, response) = try await URLSession.shared.data(for: request)
-                } catch {
+            var request = URLRequest(url: endpointURL)
+            request.httpMethod = "POST"
+            request.timeoutInterval = isCustom ? 15.0 : 8.0
+            if let key = cleanApiKey, !key.isEmpty {
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            }
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = httpBody
+
+            var (data, response): (Data, URLResponse)
+            do {
+                (data, response) = try await URLSession.shared.data(for: request)
+            } catch {
+                // Keep-Alive アイドル切断（-1005: networkConnectionLost）の即時1回自動リトライ
+                if let urlErr = error as? URLError, urlErr.code == .networkConnectionLost {
+                    NSLog("[VoiceIME] ⚠️ Keep-Alive切断(-1005)を検知。新規接続で即時再試行します...")
+                    do {
+                        (data, response) = try await URLSession.shared.data(for: request)
+                    } catch {
+                        throw LLMError.networkError(error)
+                    }
+                } else {
                     throw LLMError.networkError(error)
                 }
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw LLMError.invalidResponse
+            }
+
+            if !(200...299).contains(httpResponse.statusCode) {
+                let errorMsg = parseErrorMessage(from: data) ?? "Unknown error"
+
+                // 400 Bad Request かつパラメータ不一致（disallowed / max_tokens / Invalid JSON）の場合、
+                // max_completion_tokens に切り替えて1回だけ自動再試行
+                if httpResponse.statusCode == 400 && !useMaxCompletionTokens {
+                    let lower = errorMsg.lowercased()
+                    if lower.contains("disallow") || lower.contains("invalid json") || lower.contains("max_tokens") || lower.contains("max_completion_tokens") {
+                        NSLog("[VoiceIME] ⚠️ 400エラー検知 (%@)。max_completion_tokens に切り替えて再試行します...", errorMsg)
+                        return try await sendRequest(useMaxCompletionTokens: true)
+                    }
+                }
+
+                throw LLMError.serverError(statusCode: httpResponse.statusCode, message: errorMsg)
+            }
+
+            do {
+                let decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
+                if let content = decoded.choices.first?.message.content {
+                    return sanitizeLLMOutput(content, fallback: trimmedInput)
+                }
+                return trimmedInput
+            } catch {
+                throw LLMError.parsingError(error)
+            }
+        }
+
+        return try await sendRequest(useMaxCompletionTokens: initialUseMaxCompletionTokens)
+    }
+
+    private struct ChatCompletionResponse: Decodable {
+        struct Choice: Decodable {
+            struct Message: Decodable {
+                let content: String?
+            }
+            let message: Message
+        }
+        let choices: [Choice]
+    }
+
+    public struct ChatMessage: Equatable {
+        public let role: String
+        public let content: String
+
+        public init(role: String, content: String) {
+            self.role = role
+            self.content = content
+        }
+    }
+
+    /// AIクイック質問専用の極小システムプロンプト
+    public static let quickAskSystemPrompt = """
+    あなたは超簡潔・極小出力のAI辞書・質問応答アシスタントです。
+    ユーザーの質問に対して、必要最小限の【答えそのもの】だけを返してください。
+
+    【絶対厳守ルール】
+    1. 出力は最大100文字以内、可能な限り単語・数値・フレーズ単位の【最小表現】にすること。
+    2. 挨拶（こんにちは等）、前置き（答えは〜、それは〜）、相槌、解説、補足説明は一切出力禁止。
+    3. 「〜です」「〜ます」「〜になります」「〜でしょう」などの丁寧語・語尾はすべて削り、答えの体言（名詞・数値・単語）のみを出力すること。
+       - 例: 「ゴミの英語のスペルは?」 ➔ trash
+       - 例: 「1 + 3 は?」 ➔ 4
+       - 例: 「日本の首都は?」 ➔ 東京
+       - 例: 「ありがとうのフランス語は?」 ➔ Merci
+       - 例: 「1キロは何メートル?」 ➔ 1000m
+    4. 今日の天気、リアルタイムニュース、最新株価など、Web検索や外部参照が必要で手元に確実な答えを持っていない場合は、必ず以下のように角括弧付きで返してください:
+       [答えを持っていません。]
+    5. 「」や""などの引用符や、Markdown装飾（**太字**など）は付けず、純粋な答えの文字列のみを出力すること。
+    """
+
+    /// AIクイック質問（簡単な単語スペルや計算などを100文字以内で極小出力）
+    public func quickAsk(
+        question: String,
+        history: [ChatMessage] = [],
+        baseURL: String,
+        apiKey: String?,
+        model: String,
+        isCustom: Bool = false
+    ) async throws -> String {
+        let trimmedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuestion.isEmpty else { return "" }
+
+        guard let endpointURL = constructChatURL(from: baseURL) else {
+            throw LLMError.invalidURL(baseURL)
+        }
+
+        let cleanApiKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !isCustom {
+            guard let key = cleanApiKey, !key.isEmpty else {
+                throw LLMError.missingAPIKey
+            }
+        }
+
+        var messages: [[String: String]] = [
+            ["role": "system", "content": Self.quickAskSystemPrompt]
+        ]
+        for msg in history {
+            messages.append(["role": msg.role, "content": msg.content])
+        }
+        messages.append(["role": "user", "content": trimmedQuestion])
+
+        let initialUseMaxCompletionTokens = baseURL.contains("sarashina.ai")
+
+        func sendRequest(useMaxCompletionTokens: Bool) async throws -> String {
+            var payload: [String: Any] = [
+                "model": model,
+                "messages": messages,
+                "temperature": 0.0
+            ]
+            if useMaxCompletionTokens {
+                payload["max_completion_tokens"] = 256
             } else {
+                payload["max_tokens"] = 256
+            }
+
+            let httpBody: Data
+            do {
+                httpBody = try JSONSerialization.data(withJSONObject: payload)
+            } catch {
+                throw LLMError.parsingError(error)
+            }
+
+            var request = URLRequest(url: endpointURL)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if let key = cleanApiKey, !key.isEmpty {
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            }
+            request.httpBody = httpBody
+            request.timeoutInterval = 15.0
+
+            let (data, response): (Data, URLResponse)
+            do {
+                (data, response) = try await URLSession.shared.data(for: request)
+            } catch {
                 throw LLMError.networkError(error)
             }
-        }
 
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw LLMError.invalidResponse
-        }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw LLMError.invalidResponse
+            }
 
-        if !(200...299).contains(httpResponse.statusCode) {
-            let errorMsg = parseErrorMessage(from: data) ?? "Unknown error"
-            throw LLMError.serverError(statusCode: httpResponse.statusCode, message: errorMsg)
-        }
-
-        do {
-            struct ChatCompletionResponse: Decodable {
-                struct Choice: Decodable {
-                    struct Message: Decodable {
-                        let content: String?
+            if httpResponse.statusCode != 200 {
+                if httpResponse.statusCode == 400 && !useMaxCompletionTokens {
+                    let errMsg = parseErrorMessage(from: data) ?? ""
+                    if errMsg.contains("disallow") || errMsg.contains("max_tokens") || errMsg.contains("Invalid JSON") {
+                        return try await sendRequest(useMaxCompletionTokens: true)
                     }
-                    let message: Message
                 }
-                let choices: [Choice]
+                let errorMsg = parseErrorMessage(from: data) ?? "HTTP \(httpResponse.statusCode)"
+                throw LLMError.serverError(statusCode: httpResponse.statusCode, message: errorMsg)
             }
 
-            let decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
-            if let content = decoded.choices.first?.message.content {
-                return sanitizeLLMOutput(content, fallback: trimmedInput)
+            do {
+                let decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
+                if let content = decoded.choices.first?.message.content {
+                    return sanitizeQuickAskOutput(content)
+                }
+                return "[答えを持っていません。]"
+            } catch {
+                throw LLMError.parsingError(error)
             }
-            return trimmedInput
-        } catch {
-            throw LLMError.parsingError(error)
         }
+
+        return try await sendRequest(useMaxCompletionTokens: initialUseMaxCompletionTokens)
+    }
+
+    /// クイック質問の出力を極小化・サニタイズ
+    public func sanitizeQuickAskOutput(_ rawText: String) -> String {
+        var text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return "[答えを持っていません。]" }
+
+        // 前置きラベルの除去
+        let prefixes = [
+            "答え：", "答え:", "回答：", "回答:", "結果：", "結果:",
+            "Answer:", "A:", "Ans:", "Output:"
+        ]
+        for prefix in prefixes {
+            if text.hasPrefix(prefix) {
+                text = String(text.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        // 全体を囲む引用符の除去
+        if text.count >= 2 && ((text.hasPrefix("「") && text.hasSuffix("」")) ||
+           (text.hasPrefix("『") && text.hasSuffix("』")) ||
+           (text.hasPrefix("\"") && text.hasSuffix("\"")) ||
+           (text.hasPrefix("'") && text.hasSuffix("'"))) {
+            text = String(text.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // 余計な丁寧文末（「〜です。」「〜です」「〜ます。」「〜ます」「〜になります。」「〜になります」）が末尾に残っている場合は除去
+        if text.hasSuffix("になります。") {
+            text = String(text.dropLast(6)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if text.hasSuffix("になります") {
+            text = String(text.dropLast(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if text.hasSuffix("です。") {
+            text = String(text.dropLast(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if text.hasSuffix("です") {
+            text = String(text.dropLast(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if text.hasSuffix("ます。") {
+            text = String(text.dropLast(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if text.hasSuffix("ます") {
+            text = String(text.dropLast(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // 100文字制限
+        if text.count > 100 {
+            text = String(text.prefix(100))
+        }
+
+        return text
     }
 
     /// LLMの出力から余分な前置きラベルや引用符を除去・サニタイズする
@@ -196,10 +397,10 @@ public final class LLMService {
         }
 
         // 全体を囲む引用符（「」、""、''）の除去
-        if (text.hasPrefix("「") && text.hasSuffix("」")) ||
+        if text.count >= 2 && ((text.hasPrefix("「") && text.hasSuffix("」")) ||
            (text.hasPrefix("『") && text.hasSuffix("』")) ||
            (text.hasPrefix("\"") && text.hasSuffix("\"")) ||
-           (text.hasPrefix("'") && text.hasSuffix("'")) {
+           (text.hasPrefix("'") && text.hasSuffix("'"))) {
             text = String(text.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
@@ -349,19 +550,23 @@ public final class LLMService {
               - × 「言及した」（過去形） ➔ 「言及しています」（進行形・敬体への改変は厳禁！）
               - ○ 「言及した」 ➔ 「言及した。」（発話された時制・活用をそのまま維持）
 
-            【★最重要規則 2: 語尾・終助詞・口語ニュアンスの完全維持】
-            - 話者が発声した語尾（「〜ね」「〜よ」「〜よね」「〜かな」「〜かしら」「〜だし」「〜じゃん」「〜だよ」「〜もん」「〜さ」等）、話し言葉の口調、終助詞は話者の表現意図そのものです。【絶対に削除・短縮・書き換え（断定や標準書き言葉への勝手な変換）をしてはなりません】。
+            【★最重要規則 2: 語尾・終助詞・口語ニュアンスの完全維持（えーっと等のつなぎ言葉も保持）】
+            - 話者が発声した語尾（「〜ね」「〜よ」「〜よね」「〜かな」「〜かしら」「〜だし」「〜じゃん」「〜だよ」「〜もん」「〜さ」等）、話し言葉の口調、終助詞、および自然なつなぎ言葉や呼びかけ（「えーっと」「あのー」「ええと」「うーん」「まあ」等）は話者の表現意図・会話のリズムそのものです。【口語モードではこれらを勝手に削除・短縮・書き換えしてはなりません】。
             - 語尾を短く切ったり、書き言葉に直すことは重大な誤作動とみなされます。
             - 【悪い例（厳禁）】:
               × 「〇〇でありませんね」 ➔ 「〇〇でありません」（語尾の「ね」を削るのは厳禁！）
               × 「これでいいんじゃない」 ➔ 「これで良いのではないでしょうか」（勝手に敬語や標準文にするのは厳禁！）
               × 「明日行くよ」 ➔ 「明日行きます」（口語の語尾を変えるのは厳禁！）
+              × 「えーっとどうしようかな」 ➔ 「どうしようかな」（口語モードで「えーっと」を勝手に削るのは厳禁！）
+              × 「あのーちょっといいですか」 ➔ 「ちょっといいですか」（呼びかけの「あのー」を削るのは厳禁！）
               × 「問題があるんですよね」 ➔ 「問題があるんです。よね」（終助詞の直前に勝手に句点「。」を挟んで分断するのは厳禁！）
               × 「どうでしょうかねぇ」 ➔ 「どうでしょうか？ね？」「どうでしょうか？ねぇ」（疑問表現と終助詞の間に「？」を挟んで分断するのは厳禁！）
             - 【良い例（遵守）】:
               ○ 「〇〇でありませんね」 ➔ 「〇〇でありませんね。」（語尾を1文字も削らず句点を補う）
               ○ 「これでいいんじゃない」 ➔ 「これでいいんじゃない？」（疑問符を付与）
               ○ 「明日行くよ」 ➔ 「明日行くよ。」
+              ○ 「えーっとどうしようかな」 ➔ 「えーっと、どうしようかなぁ。」（「えーっと」を残し、読点を補う）
+              ○ 「あのーちょっといいですか」 ➔ 「あのー、ちょっといいですか？」（呼びかけを残す）
               ○ 「問題があるんですよね」 ➔ 「問題があるんですよね。」（「ですよね」を分断せず末尾に句点を補う）
               ○ 「どうでしょうかねぇ」 ➔ 「どうでしょうかねぇ？」（疑問表現＋終助詞を一体として末尾に「？」を付与する）
 
@@ -370,8 +575,8 @@ public final class LLMService {
             - 音声認識された文言の意味が通っている場合、語句の言い換えや余計な言葉の挿入（例:「前進した場合を条件に」を「前進した場合、より条件に」に変えるなど）を絶対に行ってはなりません。
             - 修正対象はあくまで以下のみに限定されます:
               - 音声認識の聞き間違いや同音異義語の漢字変換ミス（例:「マイコのテスト」➔「マイクのテスト」）
-              - 不要な言い淀み・フィラー（「えーと」「あのー」等）の除去
-              - 適切な句読点（、。）や約物の補完
+              - 適切な句読点（、。）や約物の補完（例:「えーっとこれは」➔「えーっと、これは」）
+              - 異様に長すぎる引き伸ばし音の整音（例:「えーーーーっと」➔「えーっと」）
 
             【補正ルール（口語モード）】
             1. 言語と約物の整合性（英語・多言語の厳格維持）:
@@ -385,8 +590,9 @@ public final class LLMService {
             2. 聞き間違い・固有名詞の修復:
                - 全体の文脈を考慮し、音声認識の聞き間違いや音の混同（母音ズレ・同音異義語等）を正しい固有名詞・人名・用語に整える（例: 「マイコのテスト」➔「マイクのテスト」）。
                - 同一文脈内での表記揺れがあれば正しい実在名称に統一する。
-            3. フィラーの除去:
-               - 「えー」「あのー」「えっと」「そのー」などの不要な言い淀み（フィラー）のみを削除する。
+            3. つなぎ言葉・口語表現の維持:
+               - 「えーっと」「あのー」「ええと」「うーん」「まあ」などのつなぎ言葉・呼びかけは削除せず、自然な読点「、」を補ってそのまま残す（例: 「えーっとこれは」➔「えーっと、これは」）。
+               - 異様に長すぎる長音（「えーーーーっと」等）のみ、自然な表記（「えーっと」）に整える。
             4. 文末表現と約物（日本語文の場合）:
                - 疑問・質問・確認の文末（「ですか」「ますか」「でしょうか」「どうですか」「〜かな」「〜よね」等）の文末には疑問符「？」を付与する。
                - 挨拶表現（「こんにちは」「おはようございます」「お疲れ様です」等）の直後に次の文が続く場合は、読点「、」にする。

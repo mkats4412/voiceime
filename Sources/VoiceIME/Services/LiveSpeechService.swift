@@ -30,6 +30,7 @@ public final class LiveSpeechService: ObservableObject {
     /// リアルタイム音声認識を開始
     public func startLiveRecognition(
         languageCode: String = "ja",
+        contextualStrings: [String] = [],
         onUpdate: @escaping (String) -> Void
     ) {
         stopLiveRecognition()
@@ -59,6 +60,14 @@ public final class LiveSpeechService: ObservableObject {
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
+
+        // ディクテーションモード（書き取り）を指定して発話内容をできる限り忠実に拾う
+        request.taskHint = .dictation
+
+        // 口語のつなぎ言葉や辞書登録語をコンテキストに追加して認識精度を向上
+        if !contextualStrings.isEmpty {
+            request.contextualStrings = contextualStrings
+        }
 
         // 句読点（。、！？）の自動付与を有効化 (macOS 13.0+)
         if #available(macOS 13.0, *) {

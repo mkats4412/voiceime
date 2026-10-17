@@ -368,6 +368,7 @@ public struct MenuBarView: View {
         switch provider {
         case .groq: return .orange
         case .openai: return .green
+        case .custom: return .purple
         }
     }
 

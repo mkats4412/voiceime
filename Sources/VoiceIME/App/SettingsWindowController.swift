@@ -42,7 +42,6 @@ public final class SettingsWindowController: NSObject, NSWindowDelegate {
         let defaultSize = NSSize(width: windowWidth, height: windowHeight)
         newWindow.setContentSize(defaultSize)
         newWindow.minSize = NSSize(width: 560, height: 580)
-        newWindow.showsResizeIndicator = true
         newWindow.center()
         newWindow.isReleasedWhenClosed = false
         newWindow.delegate = self

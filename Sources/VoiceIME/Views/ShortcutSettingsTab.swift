@@ -24,6 +24,24 @@ public struct ShortcutSettingsTab: View {
         ShortcutPreset(name: "Cmd + Shift + D", display: "⌘⇧D", keyCode: UInt32(kVK_ANSI_D), modifiers: UInt32(cmdKey | shiftKey)),
     ]
 
+    private let quickAskPresets: [ShortcutPreset] = [
+        ShortcutPreset(name: "Ctrl + Shift + Space (デフォルト)", display: "⌃⇧Space", keyCode: UInt32(kVK_Space), modifiers: UInt32(controlKey | shiftKey)),
+        ShortcutPreset(name: "Cmd + Shift + Space", display: "⌘⇧Space", keyCode: UInt32(kVK_Space), modifiers: UInt32(cmdKey | shiftKey)),
+        ShortcutPreset(name: "Ctrl + Option + Space", display: "⌃⌥Space", keyCode: UInt32(kVK_Space), modifiers: UInt32(controlKey | optionKey)),
+        ShortcutPreset(name: "Cmd + Option + Space", display: "⌘⌥Space", keyCode: UInt32(kVK_Space), modifiers: UInt32(cmdKey | optionKey)),
+        ShortcutPreset(name: "Option + Space", display: "⌥Space", keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey)),
+        ShortcutPreset(name: "Ctrl + Shift + Q", display: "⌃⇧Q", keyCode: UInt32(kVK_ANSI_Q), modifiers: UInt32(controlKey | shiftKey)),
+    ]
+
+    private let pastePresets: [ShortcutPreset] = [
+        ShortcutPreset(name: "Cmd + Enter (デフォルト)", display: "⌘↩", keyCode: UInt32(kVK_Return), modifiers: UInt32(cmdKey)),
+        ShortcutPreset(name: "Enter のみ", display: "↩", keyCode: UInt32(kVK_Return), modifiers: 0),
+        ShortcutPreset(name: "Shift + Enter", display: "⇧↩", keyCode: UInt32(kVK_Return), modifiers: UInt32(shiftKey)),
+        ShortcutPreset(name: "Ctrl + Enter", display: "⌃↩", keyCode: UInt32(kVK_Return), modifiers: UInt32(controlKey)),
+        ShortcutPreset(name: "Option + Enter", display: "⌥↩", keyCode: UInt32(kVK_Return), modifiers: UInt32(optionKey)),
+        ShortcutPreset(name: "Cmd + Shift + V", display: "⌘⇧V", keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(cmdKey | shiftKey)),
+    ]
+
     public init() {}
 
     public var body: some View {
@@ -140,6 +158,73 @@ public struct ShortcutSettingsTab: View {
                             .fill(Color(NSColor.controlBackgroundColor))
                     )
 
+                    // AI クイック質問ショートカット (英単語スペルや計算などをAIに最小文字数で質問)
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text("AI クイック質問ショートカット")
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                    Text("新機能")
+                                        .font(.caption2)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.purple)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(Color.purple.opacity(0.12))
+                                        .cornerRadius(4)
+                                }
+                                Text("英単語のスペル確認や計算などをAIに超簡潔に質問します。修飾キー（⌃⇧）を押したまま再度Spaceを押すと、前の会話を維持して続けて質問・修正できます。")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Spacer()
+
+                            Text(settings.quickAskHotkeyDisplayString)
+                                .font(.system(.title3, design: .monospaced))
+                                .fontWeight(.bold)
+                                .foregroundColor(.purple)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 5)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color.purple.opacity(0.12))
+                                )
+                        }
+
+                        HStack {
+                            Text("キーの選択:")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            Picker("", selection: Binding(
+                                get: { settings.quickAskHotkeyDisplayString },
+                                set: { newDisplay in
+                                    if let preset = quickAskPresets.first(where: { $0.display == newDisplay }) {
+                                        appState.updateQuickAskHotkey(
+                                            keyCode: preset.keyCode,
+                                            modifiers: preset.modifiers,
+                                            displayString: preset.display
+                                        )
+                                    }
+                                }
+                            )) {
+                                ForEach(quickAskPresets) { preset in
+                                    Text("\(preset.name) (\(preset.display))").tag(preset.display)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
+                        }
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                    )
+
                     // 録音・入力のトリガー動作 (Push-to-Talk vs Toggle)
                     VStack(alignment: .leading, spacing: 6) {
                         Text("録音・入力の動作モード:")
@@ -203,7 +288,7 @@ public struct ShortcutSettingsTab: View {
                             .font(.headline)
                         Spacer()
                         if settings.floatingPreviewEnabled {
-                            Text("⌘ + Enter で入力")
+                            Text("\(settings.pasteShortcutDisplayString) で入力")
                                 .font(.caption2)
                                 .fontWeight(.bold)
                                 .foregroundColor(.accentColor)
@@ -222,7 +307,7 @@ public struct ShortcutSettingsTab: View {
                                 Text("画面下部にプレビュー・保留ウィンドウを表示する")
                                     .font(.subheadline)
                                     .fontWeight(.medium)
-                                Text("入力先フィールドを選択し忘れていても安心。生成されたテキストを画面中央下部に保持し、入力先をクリックしてから【⌘ + Enter】で即座に入力できます。")
+                                Text("入力先フィールドを選択し忘れていても安心。生成されたテキストを画面中央下部に保持し、入力先をクリックしてから【\(settings.pasteShortcutDisplayString)】で即座に入力できます。")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
@@ -231,12 +316,46 @@ public struct ShortcutSettingsTab: View {
                         if settings.floatingPreviewEnabled {
                             Divider()
 
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("テキスト挿入（ペースト）キー:")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                    Text("保留ウィンドウの内容を入力欄にペーストするキー")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Spacer()
+
+                                Picker("", selection: Binding(
+                                    get: { settings.pasteShortcutDisplayString },
+                                    set: { newDisplay in
+                                        if let preset = pastePresets.first(where: { $0.display == newDisplay }) {
+                                            appState.updatePasteShortcut(
+                                                keyCode: preset.keyCode,
+                                                modifiers: preset.modifiers,
+                                                displayString: preset.display
+                                            )
+                                        }
+                                    }
+                                )) {
+                                    ForEach(pastePresets) { preset in
+                                        Text("\(preset.name) (\(preset.display))").tag(preset.display)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .labelsHidden()
+                            }
+
+                            Divider()
+
                             Toggle(isOn: $settings.autoPasteEnabled) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("音声入力完了時に直接自動ペーストも行う")
                                         .font(.subheadline)
                                         .fontWeight(.medium)
-                                    Text("オンにすると、フォーカス中のアプリに即時入力しつつ再入力・確認用としてウィンドウを残します。オフにすると、⌘+Enterを押すまで自動入力されなくなります。")
+                                    Text("オンにすると、フォーカス中のアプリに即時入力しつつ再入力・確認用としてウィンドウを残します。オフにすると、\(settings.pasteShortcutDisplayString)を押すまで自動入力されなくなります。")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 }

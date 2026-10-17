@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import Carbon
 
 @main
 struct TestRunner {
@@ -13,6 +14,7 @@ struct TestRunner {
         testAudioAnalysisService()
         testFloatingPreviewSettings()
         testLivePunctuationFormatting()
+        testQuickAskAndPasteShortcuts()
 
         print("=== All Tests Passed Successfully! ===")
     }
@@ -221,7 +223,41 @@ struct TestRunner {
         assert(settings.refinementStyle == .casual, "RefinementStyle should be casual")
         settings.refinementStyle = originalStyle
 
-        print("  -> LLMService URL Construction, Sanitization, Punctuation Normalization, and Prompt Modes passed!")
+        // 8. カスタムLLM URL 構築テスト (Ollama, LM Studio 等)
+        let ollamaURL = llm.constructChatURL(from: "http://localhost:11434/v1")
+        assert(ollamaURL?.absoluteString == "http://localhost:11434/v1/chat/completions",
+               "Ollama custom URL mismatch: \(String(describing: ollamaURL))")
+
+        let lmStudioURL = llm.constructChatURL(from: "http://localhost:1234/v1/")
+        assert(lmStudioURL?.absoluteString == "http://localhost:1234/v1/chat/completions",
+               "LM Studio custom URL mismatch: \(String(describing: lmStudioURL))")
+
+        // 9. LLMProviderMode および effectiveLLMConfig 切り離し動作テスト
+        let originalLLMMode = settings.llmProviderMode
+        let originalSelectedProvider = settings.selectedProvider
+
+        settings.selectedProvider = .groq
+        settings.llmProviderMode = .sameAsSpeech
+        assert(settings.resolvedLLMProvider == .groq, "resolvedLLMProvider should match selectedProvider when sameAsSpeech")
+        assert(settings.effectiveLLMConfig.isCustom == false, "isCustom should be false for sameAsSpeech")
+        assert(settings.effectiveLLMConfig.modelName == settings.groqLLMModel, "modelName should match groqLLMModel")
+
+        settings.llmProviderMode = .openai
+        assert(settings.resolvedLLMProvider == .openai, "resolvedLLMProvider should be openai")
+        assert(settings.effectiveLLMConfig.isCustom == false, "isCustom should be false for openai")
+        assert(settings.effectiveLLMConfig.modelName == settings.openAILLMModel, "modelName should match openAILLMModel")
+
+        settings.llmProviderMode = .custom
+        assert(settings.resolvedLLMProvider == .custom, "resolvedLLMProvider should be custom")
+        assert(settings.effectiveLLMConfig.isCustom == true, "isCustom should be true for custom")
+        assert(settings.effectiveLLMConfig.baseURL == settings.customLLMBaseURL, "baseURL should match customLLMBaseURL")
+        assert(settings.effectiveLLMConfig.modelName == settings.customLLMModel, "modelName should match customLLMModel")
+
+        // 状態復元
+        settings.llmProviderMode = originalLLMMode
+        settings.selectedProvider = originalSelectedProvider
+
+        print("  -> LLMService URL Construction, Sanitization, Punctuation Normalization, Prompt Modes, and LLMProviderMode passed!")
     }
 
     static func testAudioAnalysisService() {
@@ -417,4 +453,69 @@ struct TestRunner {
 
         print("  -> Live Punctuation Formatting & PunctuationService passed!")
     }
+
+    static func testQuickAskAndPasteShortcuts() {
+        print("[TEST] Quick Ask & Paste Shortcuts...")
+
+        // 1. AppSettings のデフォルト値検証
+        let settings = AppSettings.shared
+        assert(settings.quickAskHotkeyCode == 49, "Default quickAskHotkeyCode should be Space (49)")
+        assert(settings.quickAskHotkeyModifiers == UInt32(controlKey | shiftKey), "Default quickAskHotkeyModifiers should be Ctrl+Shift (4608)")
+        assert(settings.quickAskHotkeyDisplayString == "⌃⇧Space", "Default quickAskHotkeyDisplayString should be ⌃⇧Space")
+
+        assert(settings.pasteShortcutKeyCode == 36, "Default pasteShortcutKeyCode should be Return (36)")
+        assert(settings.pasteShortcutModifiers == UInt32(cmdKey), "Default pasteShortcutModifiers should be Command (256)")
+        assert(settings.pasteShortcutDisplayString == "⌘↩", "Default pasteShortcutDisplayString should be ⌘↩")
+
+        // 会話モデル（クイック質問）のプロバイダー設定
+        assert(settings.quickAskProviderMode == .sameAsLLM, "Default quickAskProviderMode should be sameAsLLM")
+        assert(settings.groqQuickAskModel == "llama-3.3-70b-versatile", "Default groqQuickAskModel")
+        assert(settings.openAIQuickAskModel == "gpt-4o-mini", "Default openAIQuickAskModel")
+        assert(settings.customQuickAskModel == "llama3.2", "Default customQuickAskModel")
+
+        // sameAsLLM のときの有効設定
+        let cfgLLM = settings.effectiveQuickAskConfig
+        assert(cfgLLM.modelName == settings.currentLLMModelName, "sameAsLLM should match currentLLMModelName")
+
+        // groq モードに切り替えた場合の有効設定
+        settings.quickAskProviderMode = .groq
+        assert(settings.effectiveQuickAskConfig.modelName == "llama-3.3-70b-versatile")
+        assert(settings.effectiveQuickAskConfig.provider == .groq)
+
+        // openai モードに切り替えた場合の有効設定
+        settings.quickAskProviderMode = .openai
+        assert(settings.effectiveQuickAskConfig.modelName == "gpt-4o-mini")
+        assert(settings.effectiveQuickAskConfig.provider == .openai)
+
+        // custom モードに切り替えた場合の有効設定
+        settings.quickAskProviderMode = .custom
+        assert(settings.effectiveQuickAskConfig.modelName == "llama3.2")
+        assert(settings.effectiveQuickAskConfig.isCustom == true)
+
+        // 状態復元
+        settings.quickAskProviderMode = .sameAsLLM
+
+        // 2. LLMService のクイック質問出力サニタイズ検証
+        let llm = LLMService.shared
+        // 不要なラベルの除去
+        assert(llm.sanitizeQuickAskOutput("答え：trash") == "trash", "Prefix removal failed")
+        assert(llm.sanitizeQuickAskOutput("回答: 4") == "4", "Prefix removal failed")
+        assert(llm.sanitizeQuickAskOutput("Answer: Paris") == "Paris", "Prefix removal failed")
+
+        // 不要な丁寧語語尾（〜です、〜になります等）の除去
+        assert(llm.sanitizeQuickAskOutput("trashです。") == "trash", "Polite ending removal failed")
+        assert(llm.sanitizeQuickAskOutput("trashです") == "trash", "Polite ending removal failed")
+        assert(llm.sanitizeQuickAskOutput("4になります。") == "4", "Polite ending removal failed")
+
+        // 引用符の除去
+        assert(llm.sanitizeQuickAskOutput("「trash」") == "trash", "Quotes removal failed")
+        assert(llm.sanitizeQuickAskOutput("\"Paris\"") == "Paris", "Double quotes removal failed")
+
+        // 空白または答えなし
+        assert(llm.sanitizeQuickAskOutput("") == "[答えを持っていません。]", "Empty output fallback failed")
+        assert(llm.sanitizeQuickAskOutput("   ") == "[答えを持っていません。]", "Whitespace output fallback failed")
+
+        print("  -> Quick Ask & Paste Shortcuts passed!")
+    }
 }
+

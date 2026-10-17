@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import Carbon
 
 public enum RecordingPhase: Equatable {
     case idle
@@ -79,15 +80,68 @@ public final class AppState: ObservableObject {
     private var processingTask: Task<Void, Never>?
     private var processingTaskToken: UUID?
 
+    // MARK: - AI クイック質問 (Quick Ask) 状態管理
+    @Published public private(set) var isQuickAskActive: Bool = false
+    private var quickAskHistory: [LLMService.ChatMessage] = []
+    private var isQuickAskModifierHeld: Bool = false
+    private var modifierKeyMonitorLocal: Any?
+    private var modifierKeyMonitorGlobal: Any?
+
     private init() {
         setupHotkey()
-        // 起動時にKeychainアクセスを事前ウォームアップ（音声入力中のダイアログ遮断を防止）
-        keychain.warmUp()
+        setupModifierKeyMonitors()
+        // アプリ起動とAppKitランループの開始完了後に、Keychainアクセスの事前案内とウォームアップを実行
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.promptKeychainWarmupIfNeeded()
+        }
+    }
+
+    deinit {
+        if let m = modifierKeyMonitorLocal { NSEvent.removeMonitor(m) }
+        if let m = modifierKeyMonitorGlobal { NSEvent.removeMonitor(m) }
+    }
+
+    /// クイック質問用修飾キー（例: Ctrl+Shift）の押下・離脱を監視
+    private func setupModifierKeyMonitors() {
+        let handleFlagsChanged: (NSEvent) -> Void = { [weak self] event in
+            guard let self = self else { return }
+            let requiredCarbonMods = self.settings.quickAskHotkeyModifiers
+            let isHolding = self.matchesModifiers(event.modifierFlags, carbonModifiers: requiredCarbonMods)
+
+            // 修飾キーが完全に離された場合、次回は新しい会話としてリセット
+            if !isHolding {
+                self.isQuickAskModifierHeld = false
+            }
+        }
+
+        modifierKeyMonitorLocal = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            handleFlagsChanged(event)
+            return event
+        }
+
+        modifierKeyMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { event in
+            handleFlagsChanged(event)
+        }
+    }
+
+    private func matchesModifiers(_ flags: NSEvent.ModifierFlags, carbonModifiers: UInt32) -> Bool {
+        let hasCmd = carbonModifiers & UInt32(cmdKey) != 0
+        let hasShift = carbonModifiers & UInt32(shiftKey) != 0
+        let hasOpt = carbonModifiers & UInt32(optionKey) != 0
+        let hasCtrl = carbonModifiers & UInt32(controlKey) != 0
+
+        if hasCmd && !flags.contains(.command) { return false }
+        if hasShift && !flags.contains(.shift) { return false }
+        if hasOpt && !flags.contains(.option) { return false }
+        if hasCtrl && !flags.contains(.control) { return false }
+        return true
     }
 
     /// グローバルホットキーのセットアップ
     public func setupHotkey() {
+        // 1. 音声入力ホットキー
         hotkey.register(
+            type: .speechInput,
             keyCode: settings.hotkeyCode,
             modifiers: settings.hotkeyModifiers,
             onKeyDown: { [weak self] in
@@ -98,6 +152,23 @@ public final class AppState: ObservableObject {
             onKeyUp: { [weak self] in
                 Task { @MainActor in
                     self?.handleHotKeyUp()
+                }
+            }
+        )
+
+        // 2. AI クイック質問ホットキー
+        hotkey.register(
+            type: .quickAsk,
+            keyCode: settings.quickAskHotkeyCode,
+            modifiers: settings.quickAskHotkeyModifiers,
+            onKeyDown: { [weak self] in
+                Task { @MainActor in
+                    self?.handleQuickAskKeyDown()
+                }
+            },
+            onKeyUp: { [weak self] in
+                Task { @MainActor in
+                    self?.handleQuickAskKeyUp()
                 }
             }
         )
@@ -122,7 +193,7 @@ public final class AppState: ObservableObject {
     /// ホットキーが離されたときのハンドラ
     public func handleHotKeyUp() {
         if settings.triggerMode == .pushToTalk {
-            if phase == .recording {
+            if phase == .recording && !isQuickAskActive {
                 // 誤タップ（0.15秒未満）の誤動作ガード
                 if let startTime = recordingStartTime, Date().timeIntervalSince(startTime) < 0.15 {
                     cancelRecording()
@@ -130,14 +201,51 @@ public final class AppState: ObservableObject {
                 }
                 // キーを離した瞬間に視覚的フィードバック（処理中アニメーション）を即座に開始
                 if settings.floatingPreviewEnabled {
-                    FloatingPreviewController.shared.setProcessing()
+                    FloatingPreviewController.shared.setProcessing(mode: .speechInput)
                 }
                 // 発話末尾の単語・語尾・余韻（「〜と言及した」「〜ですよね」等）がマイクバッファから欠落するのを防ぐため、
                 // キー離脱から約220ms遅延させて録音を停止する
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [weak self] in
-                    guard let self = self, self.phase == .recording else { return }
+                    guard let self = self, self.phase == .recording, !self.isQuickAskActive else { return }
                     self.stopRecordingAndTranscribe()
                 }
+            }
+        }
+    }
+
+    /// AIクイック質問ホットキー押下時
+    public func handleQuickAskKeyDown() {
+        // 修飾キーが前回の回答時から維持されているか判定
+        let currentlyHolding = matchesModifiers(NSEvent.modifierFlags, carbonModifiers: settings.quickAskHotkeyModifiers)
+        if !isQuickAskModifierHeld || !currentlyHolding {
+            // 修飾キーが一旦離されていたので、新しい会話としてリセット
+            quickAskHistory.removeAll()
+            NSLog("[VoiceIME] 🟣 AIクイック質問: 新規セッション開始 (会話履歴リセット)")
+        } else {
+            NSLog("[VoiceIME] 🟣 AIクイック質問: 連続セッション継続 (履歴数: %d)", quickAskHistory.count)
+        }
+        isQuickAskModifierHeld = true
+
+        if phase == .idle || isErrorPhase() {
+            startQuickAskRecording()
+        }
+    }
+
+    /// AIクイック質問ホットキー離脱時
+    public func handleQuickAskKeyUp() {
+        if isQuickAskActive && phase == .recording {
+            // 誤タップガード
+            if let startTime = recordingStartTime, Date().timeIntervalSince(startTime) < 0.15 {
+                cancelRecording()
+                return
+            }
+
+            FloatingPreviewController.shared.setProcessing(mode: .quickAsk)
+
+            // 音声末尾の欠落防止のため約200ms遅延して停止・質問処理
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
+                guard let self = self, self.isQuickAskActive, self.phase == .recording else { return }
+                self.stopQuickAskAndProcess()
             }
         }
     }
@@ -148,6 +256,22 @@ public final class AppState: ObservableObject {
         settings.hotkeyModifiers = modifiers
         settings.hotkeyDisplayString = displayString
         setupHotkey()
+    }
+
+    /// クイック質問ホットキー設定変更時
+    public func updateQuickAskHotkey(keyCode: UInt32, modifiers: UInt32, displayString: String) {
+        settings.quickAskHotkeyCode = keyCode
+        settings.quickAskHotkeyModifiers = modifiers
+        settings.quickAskHotkeyDisplayString = displayString
+        setupHotkey()
+    }
+
+    /// プレビューペーストショートカット設定変更時
+    public func updatePasteShortcut(keyCode: UInt32, modifiers: UInt32, displayString: String) {
+        settings.pasteShortcutKeyCode = keyCode
+        settings.pasteShortcutModifiers = modifiers
+        settings.pasteShortcutDisplayString = displayString
+        FloatingPreviewController.shared.reloadHotkeys()
     }
 
     /// 録音のトグル（開始 / 終了と文字起こし）
@@ -170,6 +294,181 @@ public final class AppState: ObservableObject {
             phase = .idle
             statusMessage = "準備完了"
             errorMessage = nil
+        }
+    }
+
+    // MARK: - AI クイック質問 (Quick Ask) 録音・処理フロー
+
+    /// AIクイック質問の録音開始
+    public func startQuickAskRecording() {
+        MicrophoneLevelTester.shared.stopTesting()
+        FloatingPreviewController.shared.hide()
+
+        permissions.checkPermissions()
+        guard permissions.isMicrophoneAuthorized else {
+            phase = .error("マイクへのアクセス権限が必要です。")
+            statusMessage = "マイク権限エラー"
+            permissions.requestMicrophoneAccess()
+            return
+        }
+
+        do {
+            _ = try recorder.startRecording()
+            isQuickAskActive = true
+            phase = .recording
+            statusMessage = "AI質問中... (キーを離すと回答)"
+            errorMessage = nil
+            recordingStartTime = Date()
+            NSLog("[VoiceIME] 🟣 AIクイック質問 録音開始")
+
+            FloatingPreviewController.shared.showLiveRecording(mode: .quickAsk)
+            LiveSpeechService.shared.startLiveRecognition(languageCode: settings.language) { text in
+                FloatingPreviewController.shared.updateLiveText(text)
+            }
+
+            maxRecordingTimer?.invalidate()
+            maxRecordingTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: false) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    if self?.isQuickAskActive == true && self?.phase == .recording {
+                        self?.stopQuickAskAndProcess()
+                    }
+                }
+            }
+        } catch {
+            isQuickAskActive = false
+            phase = .error(error.localizedDescription)
+            statusMessage = "録音開始に失敗しました。"
+            errorMessage = error.localizedDescription
+            NSLog("[VoiceIME] ❌ クイック質問 録音開始失敗: %@", error.localizedDescription)
+        }
+    }
+
+    /// AIクイック質問の録音停止・認識・回答生成処理
+    public func stopQuickAskAndProcess() {
+        maxRecordingTimer?.invalidate()
+        maxRecordingTimer = nil
+
+        LiveSpeechService.shared.stopLiveRecognition()
+        FloatingPreviewController.shared.setProcessing(mode: .quickAsk)
+
+        guard let audioURL = recorder.stopRecording() else {
+            isQuickAskActive = false
+            phase = .idle
+            statusMessage = "録音データがありません。"
+            FloatingPreviewController.shared.hide()
+            return
+        }
+
+        // 音声しきい値判定
+        var targetAudioURL = audioURL
+        if settings.audioThresholdEnabled {
+            let metrics = AudioAnalysisService.shared.analyze(
+                audioFileURL: audioURL,
+                thresholdDB: settings.audioThresholdDB
+            )
+            if !metrics.hasSpeech {
+                try? FileManager.default.removeItem(at: audioURL)
+                self.isQuickAskActive = false
+                self.phase = .idle
+                self.statusMessage = "小さな音を検知したため無視しました"
+                FloatingPreviewController.shared.hide()
+                return
+            }
+
+            if settings.audioTrimmingEnabled,
+               let trimmedURL = AudioAnalysisService.shared.trimLeadingTrailingNoise(
+                   audioFileURL: audioURL,
+                   thresholdDB: settings.audioThresholdDB
+               ) {
+                try? FileManager.default.removeItem(at: audioURL)
+                targetAudioURL = trimmedURL
+            }
+        }
+
+        phase = .refining
+        statusMessage = "AI回答生成中..."
+
+        let currentProvider = settings.selectedProvider
+        let currentConfig = settings.config(for: currentProvider)
+        let quickAskConfig = settings.effectiveQuickAskConfig
+        let quickAskApiKey = keychain.loadAPIKey(for: quickAskConfig.provider)
+        let apiKey = keychain.loadAPIKey(for: currentProvider)
+        let language = settings.language.isEmpty ? nil : settings.language
+
+        processingTask?.cancel()
+        let taskToken = UUID()
+        processingTaskToken = taskToken
+        processingTask = Task { @MainActor [weak self] in
+            guard let self = self else {
+                try? FileManager.default.removeItem(at: targetAudioURL)
+                return
+            }
+            defer {
+                try? FileManager.default.removeItem(at: targetAudioURL)
+                if self.processingTaskToken == taskToken {
+                    self.processingTask = nil
+                    self.processingTaskToken = nil
+                }
+            }
+
+            do {
+                // 1. 音声認識で質問内容を取得
+                let questionText = try await self.api.transcribe(
+                    audioFileURL: targetAudioURL,
+                    baseURL: currentConfig.baseURL,
+                    apiKey: apiKey,
+                    model: currentConfig.modelName,
+                    mode: .transcriptions,
+                    prompt: "質問です。日本語で質問します。",
+                    language: language
+                )
+                let trimmedQuestion = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmedQuestion.isEmpty else {
+                    self.isQuickAskActive = false
+                    self.phase = .idle
+                    self.statusMessage = "質問が聞き取れませんでした。"
+                    FloatingPreviewController.shared.hide()
+                    return
+                }
+
+                NSLog("[VoiceIME] 🟣 AIクイック質問 認識結果: [%@] 送信先: [%@] モデル: [%@]", trimmedQuestion, quickAskConfig.baseURL, quickAskConfig.modelName)
+
+                // 2. AIへ質問送信
+                let answer = try await self.llm.quickAsk(
+                    question: trimmedQuestion,
+                    history: self.quickAskHistory,
+                    baseURL: quickAskConfig.baseURL,
+                    apiKey: quickAskApiKey,
+                    model: quickAskConfig.modelName,
+                    isCustom: quickAskConfig.isCustom
+                )
+
+                // 3. 会話履歴を更新（連続質問用）
+                self.quickAskHistory.append(LLMService.ChatMessage(role: "user", content: trimmedQuestion))
+                self.quickAskHistory.append(LLMService.ChatMessage(role: "assistant", content: answer))
+                while self.quickAskHistory.count > 20 {
+                    self.quickAskHistory.removeFirst()
+                }
+
+                self.lastProcessedText = answer
+                self.phase = .idle
+                self.statusMessage = "AI回答完了: \(answer)"
+
+                // 4. 重要: ユーザー要望「質問を削除し、答えだけにしてほしい」
+                let notice = "\(self.settings.pasteShortcutDisplayString) で挿入 / \(self.settings.quickAskHotkeyDisplayString) で続けて質問"
+                FloatingPreviewController.shared.show(text: answer, notice: notice, mode: .quickAsk)
+
+                // 一時クリップボードにもセット（即座に手動⌘Vも可能）
+                FloatingPreviewController.shared.setTemporaryClipboard(text: answer, duration: 45.0)
+
+                NSLog("[VoiceIME] 🟣 AIクイック回答完了: [%@]", answer)
+            } catch {
+                self.isQuickAskActive = false
+                self.phase = .idle
+                self.statusMessage = "AI質問エラー: \(error.localizedDescription)"
+                FloatingPreviewController.shared.show(text: "[回答エラー: \(error.localizedDescription)]", notice: "Esc で閉じる", mode: .quickAsk)
+                NSLog("[VoiceIME] ❌ クイック質問エラー: %@", error.localizedDescription)
+            }
         }
     }
 
@@ -198,7 +497,22 @@ public final class AppState: ObservableObject {
             // フローティングプレビューが有効な場合、リアルタイム音声認識とプレビューウィンドウを開始
             if settings.floatingPreviewEnabled {
                 FloatingPreviewController.shared.showLiveRecording()
-                LiveSpeechService.shared.startLiveRecognition(languageCode: settings.language) { text in
+
+                var contextWords: [String] = []
+                if settings.refinementStyle == .casual {
+                    contextWords.append(contentsOf: ["えーっと", "あのー", "ええと", "うーん", "まあ", "えっと", "あの"])
+                }
+                for rule in settings.dictionaryRules where !rule.isRegex {
+                    let w = rule.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !w.isEmpty && !contextWords.contains(w) {
+                        contextWords.append(w)
+                    }
+                }
+
+                LiveSpeechService.shared.startLiveRecognition(
+                    languageCode: settings.language,
+                    contextualStrings: contextWords
+                ) { text in
                     FloatingPreviewController.shared.updateLiveText(text)
                 }
             }
@@ -291,7 +605,10 @@ public final class AppState: ObservableObject {
 
         let currentProvider = settings.selectedProvider
         let currentConfig = settings.config(for: currentProvider)
-        let currentLLMConfig = settings.llmConfig(for: currentProvider)
+        let currentLLMConfig = settings.effectiveLLMConfig
+        let resolvedLLMProvider = settings.resolvedLLMProvider
+        let llmApiKey = keychain.loadAPIKey(for: resolvedLLMProvider)
+        let llmProviderDisplayName = settings.effectiveLLMProviderDisplayName
         let apiKey = keychain.loadAPIKey(for: currentProvider)
         let baseURL = currentConfig.baseURL
         let model = currentConfig.modelName
@@ -348,7 +665,7 @@ public final class AppState: ObservableObject {
                 let whisperStart = CFAbsoluteTimeGetCurrent()
                 // バックアッププロバイダが存在するか確認
                 let backupProvider = self.settings.backupProvider
-                let backupKey = backupProvider != nil ? self.keychain.loadAPIKey(for: backupProvider!) : nil
+                let backupKey = backupProvider.flatMap { self.keychain.loadAPIKey(for: $0) }
 
                 if let backup = backupProvider, let bKey = backupKey {
                     // =========================================================
@@ -529,11 +846,25 @@ public final class AppState: ObservableObject {
                 if isLLMEnabled && mode == .transcriptions {
                     self.phase = .refining
                     self.statusMessage = refinementStyle == .casual ? "AI推敲中(口語)..." : "AI推敲中(文章)..."
-                    NSLog("[VoiceIME] 🤖 AI推敲リクエスト送信 (%@, モデル: %@, スタイル: %@)", currentProvider.displayName, currentLLMConfig.modelName, refinementStyle.rawValue)
+                    NSLog("[VoiceIME] 🤖 AI推敲リクエスト送信 (%@, モデル: %@, スタイル: %@)", llmProviderDisplayName, currentLLMConfig.modelName, refinementStyle.rawValue)
 
                     let llmStart = CFAbsoluteTimeGetCurrent()
 
-                    if let backup = self.settings.backupProvider,
+                    let llmBackupProvider: APIProvider?
+                    if !currentLLMConfig.isCustom && self.settings.autoFallbackEnabled {
+                        switch resolvedLLMProvider {
+                        case .groq:
+                            llmBackupProvider = self.keychain.hasAPIKey(for: .openai) ? .openai : nil
+                        case .openai:
+                            llmBackupProvider = self.keychain.hasAPIKey(for: .groq) ? .groq : nil
+                        case .custom:
+                            llmBackupProvider = nil
+                        }
+                    } else {
+                        llmBackupProvider = nil
+                    }
+
+                    if let backup = llmBackupProvider,
                        let backupKey = self.keychain.loadAPIKey(for: backup) {
                         // =========================================================
                         // 🚀 LLM ヘッジド・リクエスト (Hedged Requests / 時間差レーシング)
@@ -562,11 +893,12 @@ public final class AppState: ObservableObject {
                                         let res = try await self.llm.refine(
                                             text: trimmedText,
                                             baseURL: currentLLMConfig.baseURL,
-                                            apiKey: apiKey,
+                                            apiKey: llmApiKey,
                                             model: currentLLMConfig.modelName,
                                             promptHint: prompt,
                                             style: refinementStyle,
-                                            livePreviewText: livePreviewText
+                                            livePreviewText: livePreviewText,
+                                            isCustom: false
                                         )
                                         return .success(.primary(res))
                                     } catch {
@@ -583,7 +915,7 @@ public final class AppState: ObservableObject {
                                         await MainActor.run {
                                             self.statusMessage = "\(backup.displayName) で並列推敲中 (応答遅延)..."
                                         }
-                                        NSLog("[VoiceIME] ⚡️ メインLLM(%@)応答待ち1.5秒超過: バックアップ(%@)へ並行リクエスト発射", currentProvider.displayName, backup.displayName)
+                                        NSLog("[VoiceIME] ⚡️ メインLLM(%@)応答待ち1.5秒超過: バックアップ(%@)へ並行リクエスト発射", resolvedLLMProvider.displayName, backup.displayName)
 
                                         let res = try await self.llm.refine(
                                             text: trimmedText,
@@ -592,12 +924,13 @@ public final class AppState: ObservableObject {
                                             model: backupLLMConfig.modelName,
                                             promptHint: prompt,
                                             style: refinementStyle,
-                                            livePreviewText: livePreviewText
+                                            livePreviewText: livePreviewText,
+                                            isCustom: false
                                         )
 
                                         let record = FallbackRecord(
                                             timestamp: Date(),
-                                            primaryProvider: currentProvider,
+                                            primaryProvider: resolvedLLMProvider,
                                             backupProvider: backup,
                                             step: "AI推敲",
                                             reasonSummary: "応答遅延 (1.5秒超過)",
@@ -624,7 +957,7 @@ public final class AppState: ObservableObject {
                                         if isPrimary {
                                             primaryError = err
                                             let (summary, detail) = self.extractErrorSummary(err)
-                                            NSLog("[VoiceIME] ⚠️ メインAI推敲エラー (%@): %@ (%@)", currentProvider.displayName, summary, detail)
+                                            NSLog("[VoiceIME] ⚠️ メインAI推敲エラー (%@): %@ (%@)", resolvedLLMProvider.displayName, summary, detail)
                                         } else {
                                             backupError = err
                                             NSLog("[VoiceIME] ⚠️ バックアップAI推敲エラー: %@", err.localizedDescription)
@@ -645,7 +978,7 @@ public final class AppState: ObservableObject {
                             switch winner {
                             case .primary(let text):
                                 refinedText = text
-                                self.lastUsedLLMProvider = currentProvider
+                                self.lastUsedLLMProvider = resolvedLLMProvider
                                 NSLog("[VoiceIME] ✨ メインAI推敲成功 (%.2f秒): [%@]", llmDuration, refinedText)
                             case .backup(let text, var record, let primErr):
                                 refinedText = text
@@ -655,7 +988,7 @@ public final class AppState: ObservableObject {
                                     let (summary, detail) = self.extractErrorSummary(primErr)
                                     record = FallbackRecord(
                                         timestamp: Date(),
-                                        primaryProvider: currentProvider,
+                                        primaryProvider: resolvedLLMProvider,
                                         backupProvider: backup,
                                         step: "AI推敲",
                                         reasonSummary: summary,
@@ -673,23 +1006,24 @@ public final class AppState: ObservableObject {
                             self.lastUsedLLMProvider = nil
                         }
                     } else {
-                        // バックアップ未設定の場合は通常通りメインのみ実行
+                        // バックアップ未設定、またはカスタムLLMの場合は単独で実行
                         do {
                             refinedText = try await self.llm.refine(
                                 text: trimmedText,
                                 baseURL: currentLLMConfig.baseURL,
-                                apiKey: apiKey,
+                                apiKey: llmApiKey,
                                 model: currentLLMConfig.modelName,
                                 promptHint: prompt,
                                 style: refinementStyle,
-                                livePreviewText: livePreviewText
+                                livePreviewText: livePreviewText,
+                                isCustom: currentLLMConfig.isCustom
                             )
                             llmDuration = CFAbsoluteTimeGetCurrent() - llmStart
-                            self.lastUsedLLMProvider = currentProvider
+                            self.lastUsedLLMProvider = resolvedLLMProvider
                             NSLog("[VoiceIME] ✨ AI推敲成功 (%.2f秒): [%@]", llmDuration, refinedText)
                         } catch {
                             let (summary, detail) = self.extractErrorSummary(error)
-                            NSLog("[VoiceIME] ⚠️ AI推敲エラー (%@): %@ (%@)。生テキストを使用します", currentProvider.displayName, summary, detail)
+                            NSLog("[VoiceIME] ⚠️ AI推敲エラー (%@): %@ (%@)。生テキストを使用します", llmProviderDisplayName, summary, detail)
                             refinedText = trimmedText
                             self.lastUsedLLMProvider = nil
                         }
@@ -767,10 +1101,10 @@ public final class AppState: ObservableObject {
                         }
                     } else {
                         if self.settings.floatingPreviewEnabled {
-                            FloatingPreviewController.shared.show(text: processedText, notice: "入力先を選択 ➔ ⌘↩")
+                            FloatingPreviewController.shared.show(text: processedText, notice: "入力先を選択 ➔ \(self.settings.pasteShortcutDisplayString)")
                         }
                         self.phase = .idle
-                        self.statusMessage = completionMessage + " [⌘↩で入力]"
+                        self.statusMessage = completionMessage + " [\(self.settings.pasteShortcutDisplayString)で入力]"
                     }
 
                 case .notEditable(let role, let detail):
@@ -782,10 +1116,10 @@ public final class AppState: ObservableObject {
 
                     // 3. ウィンドウを画面に残して案内
                     if self.settings.floatingPreviewEnabled {
-                        FloatingPreviewController.shared.show(text: processedText, notice: "45秒間コピー有効: ⌘V または ⌘↩")
+                        FloatingPreviewController.shared.show(text: processedText, notice: "45秒間コピー有効: ⌘V または \(self.settings.pasteShortcutDisplayString)")
                     }
                     self.phase = .idle
-                    self.statusMessage = "\(completionMessage) [45秒限定コピー: ⌘V/⌘↩で入力]"
+                    self.statusMessage = "\(completionMessage) [45秒限定コピー: ⌘V/\(self.settings.pasteShortcutDisplayString)で入力]"
                     NSLog("[VoiceIME] ⚠️ 非入力要素（\(role): \(detail)）を検出。45秒限定でクリップボードに退避しウィンドウを残します")
 
                 case .ambiguous(let role, let detail):
@@ -795,7 +1129,7 @@ public final class AppState: ObservableObject {
                     FloatingPreviewController.shared.setTemporaryClipboard(text: processedText, duration: tempDuration)
 
                     if self.settings.floatingPreviewEnabled {
-                        FloatingPreviewController.shared.show(text: processedText, notice: "45秒間コピー有効: ⌘V または ⌘↩")
+                        FloatingPreviewController.shared.show(text: processedText, notice: "45秒間コピー有効: ⌘V または \(self.settings.pasteShortcutDisplayString)")
                     }
 
                     if self.settings.autoPasteEnabled {
@@ -813,7 +1147,7 @@ public final class AppState: ObservableObject {
                         }
                     } else {
                         self.phase = .idle
-                        self.statusMessage = completionMessage + " [⌘↩で入力]"
+                        self.statusMessage = completionMessage + " [\(self.settings.pasteShortcutDisplayString)で入力]"
                     }
                 }
 
@@ -844,6 +1178,7 @@ public final class AppState: ObservableObject {
         FloatingPreviewController.shared.hide()
 
         recorder.cancelRecording()
+        isQuickAskActive = false
         phase = .idle
         statusMessage = "録音をキャンセルしました。"
     }
@@ -869,5 +1204,52 @@ public final class AppState: ObservableObject {
             return ("タイムアウト (応答なし)", "リクエストがタイムアウトしました。")
         }
         return ("エラー", error.localizedDescription)
+    }
+
+    /// アプリ更新後や初回起動時に、macOSのキーチェーンアクセス認証について親切に事前案内する
+    @MainActor
+    public func promptKeychainWarmupIfNeeded() {
+        guard keychain.hasAnyAPIKey() else { return }
+
+        let currentModDate = fetchExecutableModificationTimestamp()
+        let lastModDate = UserDefaults.standard.string(forKey: "voiceime_last_executable_mod_date")
+
+        let isRecompiledOrNew = (lastModDate == nil || lastModDate != currentModDate)
+
+        if isRecompiledOrNew {
+            let alert = NSAlert()
+            alert.messageText = "VoiceIME: macOS キーチェーン認証のご案内"
+            alert.informativeText = """
+VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を安全に暗号化保護するため、macOSのキーチェーンを使用しています。
+
+アプリの更新・起動に伴い、この直後に macOS のシステムダイアログが表示されます。
+
+【入力するパスワード】
+お手元の Mac のログインパスワード（画面ロック解除用パスワード）を入力してください。
+
+【推奨する選択】
+『常に許可』を選択いただくと、今後の起動時や音声入力時にパスワード入力を省略できます。
+"""
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "了解して認証へ進む")
+            alert.window.level = .floating
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+
+            UserDefaults.standard.set(currentModDate, forKey: "voiceime_last_executable_mod_date")
+        }
+
+        // 事前認証を実行（OSのダイアログが表示される）
+        keychain.warmUp()
+    }
+
+    /// 実行可能バイナリの最終更新日時文字列を取得
+    private func fetchExecutableModificationTimestamp() -> String {
+        guard let exePath = Bundle.main.executablePath,
+              let attrs = try? FileManager.default.attributesOfItem(atPath: exePath),
+              let modDate = attrs[.modificationDate] as? Date else {
+            return "\(Date().timeIntervalSince1970)"
+        }
+        return "\(modDate.timeIntervalSince1970)"
     }
 }

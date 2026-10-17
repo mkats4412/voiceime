@@ -1,46 +1,51 @@
 import AppKit
 import Carbon
 
+public enum HotkeyType: UInt32, CaseIterable {
+    case speechInput = 1
+    case quickAsk = 2
+}
+
 public final class HotkeyManager {
     public static let shared = HotkeyManager()
 
     private let signature = OSType(0x56494D45) // 'VIME'
-    private let hotKeyIDValue: UInt32 = 1
 
-    private var hotKeyRef: EventHotKeyRef?
+    private var hotKeyRefs: [HotkeyType: EventHotKeyRef] = [:]
     private var eventHandlerRef: EventHandlerRef?
 
-    private var onKeyDown: (() -> Void)?
-    private var onKeyUp: (() -> Void)?
+    private var onKeyDownHandlers: [HotkeyType: () -> Void] = [:]
+    private var onKeyUpHandlers: [HotkeyType: () -> Void] = [:]
 
     private init() {
         installCarbonEventHandler()
     }
 
     deinit {
-        unregister()
+        unregisterAll()
         if let eventHandlerRef = eventHandlerRef {
             RemoveEventHandler(eventHandlerRef)
             self.eventHandlerRef = nil
         }
     }
 
-    /// ホットキーを登録（KeyDownとKeyUpの両方を検知）
+    /// 指定タイプのホットキーを登録（KeyDownとKeyUpの両方を検知）
     @discardableResult
     public func register(
+        type: HotkeyType = .speechInput,
         keyCode: UInt32,
         modifiers: UInt32,
         onKeyDown: @escaping () -> Void,
         onKeyUp: (() -> Void)? = nil
     ) -> Bool {
-        unregister()
+        unregister(type: type)
 
-        self.onKeyDown = onKeyDown
-        self.onKeyUp = onKeyUp
+        self.onKeyDownHandlers[type] = onKeyDown
+        self.onKeyUpHandlers[type] = onKeyUp
 
         let carbonModifiers = convertToCarbonModifiers(modifiers: modifiers)
         var newRef: EventHotKeyRef?
-        let hotKeyID = EventHotKeyID(signature: signature, id: hotKeyIDValue)
+        let hotKeyID = EventHotKeyID(signature: signature, id: type.rawValue)
 
         let status = RegisterEventHotKey(
             keyCode,
@@ -51,26 +56,41 @@ public final class HotkeyManager {
             &newRef
         )
 
-        if status == noErr {
-            self.hotKeyRef = newRef
-            NSLog("[VoiceIME] ✅ ホットキー登録成功 (keyCode: %d, modifiers: %d)", keyCode, modifiers)
+        if status == noErr, let ref = newRef {
+            self.hotKeyRefs[type] = ref
+            NSLog("[VoiceIME] ✅ ホットキー登録成功 (type: %@, keyCode: %d, modifiers: %d)", String(describing: type), keyCode, modifiers)
             return true
         } else {
-            self.onKeyDown = nil
-            self.onKeyUp = nil
-            NSLog("[VoiceIME] ❌ ホットキー登録失敗 (OSStatus: %d, keyCode: %d)", status, keyCode)
+            self.onKeyDownHandlers.removeValue(forKey: type)
+            self.onKeyUpHandlers.removeValue(forKey: type)
+            NSLog("[VoiceIME] ❌ ホットキー登録失敗 (type: %@, OSStatus: %d, keyCode: %d)", String(describing: type), status, keyCode)
             return false
         }
     }
 
-    /// ホットキーの解除
-    public func unregister() {
-        if let ref = hotKeyRef {
+    /// 指定タイプのホットキーの解除
+    public func unregister(type: HotkeyType) {
+        if let ref = hotKeyRefs[type] {
             UnregisterEventHotKey(ref)
-            hotKeyRef = nil
+            hotKeyRefs.removeValue(forKey: type)
         }
-        onKeyDown = nil
-        onKeyUp = nil
+        onKeyDownHandlers.removeValue(forKey: type)
+        onKeyUpHandlers.removeValue(forKey: type)
+    }
+
+    /// すべてのホットキーを解除
+    public func unregisterAll() {
+        for (_, ref) in hotKeyRefs {
+            UnregisterEventHotKey(ref)
+        }
+        hotKeyRefs.removeAll()
+        onKeyDownHandlers.removeAll()
+        onKeyUpHandlers.removeAll()
+    }
+
+    /// 後方互換用: 音声入力ホットキーの解除
+    public func unregister() {
+        unregister(type: .speechInput)
     }
 
     // MARK: - Private Helpers
@@ -81,9 +101,6 @@ public final class HotkeyManager {
             EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))
         ]
 
-        // singleton であるため userData に unsafe pointer を渡さず shared 経由で処理。
-        // 従来の Unmanaged.passUnretained 方式だと HotkeyManager が解放後に
-        // Carbon側からコールバックされた際に dangling pointer でクラッシュするため。
         let callback: EventHandlerUPP = { _, event, _ -> OSStatus in
             HotkeyManager.shared.handleHotKeyEvent(event)
             return noErr
@@ -112,14 +129,16 @@ public final class HotkeyManager {
             &hotKeyID
         )
 
-        if status == noErr && hotKeyID.signature == self.signature && hotKeyID.id == hotKeyIDValue {
-            let eventKind = GetEventKind(event)
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                if eventKind == UInt32(kEventHotKeyPressed) {
-                    self.onKeyDown?()
-                } else if eventKind == UInt32(kEventHotKeyReleased) {
-                    self.onKeyUp?()
+        if status == noErr && hotKeyID.signature == self.signature {
+            if let type = HotkeyType(rawValue: hotKeyID.id) {
+                let eventKind = GetEventKind(event)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    if eventKind == UInt32(kEventHotKeyPressed) {
+                        self.onKeyDownHandlers[type]?()
+                    } else if eventKind == UInt32(kEventHotKeyReleased) {
+                        self.onKeyUpHandlers[type]?()
+                    }
                 }
             }
         }

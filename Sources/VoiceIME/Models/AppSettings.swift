@@ -52,9 +52,47 @@ public enum RefinementStyle: String, CaseIterable, Identifiable {
     public var description: String {
         switch self {
         case .casual:
-            return "話したとおりの語尾（〜ね、〜よ、〜かな等）や口語ニュアンスを100%維持し、聞き間違いやフィラーのみを修正します。"
+            return "話したとおりの語尾やつなぎ言葉（「えーっと」「あのー」等）を自然に残し、聞き間違いや漢字の誤りのみを修正します。"
         case .formal:
-            return "話し言葉を、読みやすく整った標準的な書き言葉（です・ます調など）に校正・推敲します。"
+            return "「えーっと」などのフィラーを除去し、読みやすく整った標準的な書き言葉（です・ます調など）に校正・推敲します。"
+        }
+    }
+}
+
+public enum LLMProviderMode: String, CaseIterable, Identifiable {
+    case sameAsSpeech = "sameAsSpeech"
+    case groq = "groq"
+    case openai = "openai"
+    case custom = "custom"
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .sameAsSpeech: return "音声認識と同一"
+        case .groq: return "Groq"
+        case .openai: return "OpenAI"
+        case .custom: return "カスタム (ローカルLLM / 互換URL)"
+        }
+    }
+}
+
+public enum QuickAskProviderMode: String, CaseIterable, Identifiable {
+    case sameAsLLM = "sameAsLLM"
+    case sameAsSpeech = "sameAsSpeech"
+    case groq = "groq"
+    case openai = "openai"
+    case custom = "custom"
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .sameAsLLM: return "推敲モデルと同一"
+        case .sameAsSpeech: return "音声認識と同一"
+        case .groq: return "Groq"
+        case .openai: return "OpenAI"
+        case .custom: return "カスタム (ローカルLLM / 互換URL)"
         }
     }
 }
@@ -99,6 +137,11 @@ public final class AppSettings: ObservableObject {
         static let openAIModel = "voiceime_openai_model"
         static let openAILLMModel = "voiceime_openai_llm_model"
 
+        // カスタム LLM 設定
+        static let llmProviderMode = "voiceime_llmProviderMode"
+        static let customLLMBaseURL = "voiceime_custom_llm_baseURL"
+        static let customLLMModel = "voiceime_custom_llm_model"
+
         // 共通設定
         static let apiMode = "voiceime_apiMode"
         static let triggerMode = "voiceime_triggerMode"
@@ -123,6 +166,21 @@ public final class AppSettings: ObservableObject {
         static let floatingPreviewEnabled = "voiceime_floatingPreviewEnabled"
         static let autoPasteEnabled = "voiceime_autoPasteEnabled"
         static let floatingPreviewDuration = "voiceime_floatingPreviewDuration"
+
+        // AI クイック質問 (Quick Ask) 設定
+        static let quickAskHotkeyCode = "voiceime_quickAskHotkeyCode"
+        static let quickAskHotkeyModifiers = "voiceime_quickAskHotkeyModifiers"
+        static let quickAskHotkeyDisplayString = "voiceime_quickAskHotkeyDisplayString"
+        static let quickAskProviderMode = "voiceime_quickAskProviderMode"
+        static let groqQuickAskModel = "voiceime_groq_quickAskModel"
+        static let openAIQuickAskModel = "voiceime_openai_quickAskModel"
+        static let customQuickAskBaseURL = "voiceime_custom_quickAsk_baseURL"
+        static let customQuickAskModel = "voiceime_custom_quickAsk_model"
+
+        // プレビューペーストショートカット設定
+        static let pasteShortcutKeyCode = "voiceime_pasteShortcutKeyCode"
+        static let pasteShortcutModifiers = "voiceime_pasteShortcutModifiers"
+        static let pasteShortcutDisplayString = "voiceime_pasteShortcutDisplayString"
     }
 
     private let defaults = UserDefaults.standard
@@ -155,6 +213,23 @@ public final class AppSettings: ObservableObject {
 
     @Published public var openAILLMModel: String {
         didSet { defaults.set(openAILLMModel, forKey: Keys.openAILLMModel) }
+    }
+
+    // MARK: - AI推敲 (LLM) プロバイダー設定
+
+    /// AI推敲（文脈理解）のプロバイダーモード（音声認識と同一 / Groq / OpenAI / カスタム）
+    @Published public var llmProviderMode: LLMProviderMode {
+        didSet { defaults.set(llmProviderMode.rawValue, forKey: Keys.llmProviderMode) }
+    }
+
+    /// カスタムLLM Base URL (Ollama, LM Studio, その他互換サーバー)
+    @Published public var customLLMBaseURL: String {
+        didSet { defaults.set(customLLMBaseURL, forKey: Keys.customLLMBaseURL) }
+    }
+
+    /// カスタムLLM モデル名 (例: llama3.2, qwen2.5, mistral など)
+    @Published public var customLLMModel: String {
+        didSet { defaults.set(customLLMModel, forKey: Keys.customLLMModel) }
     }
 
     // MARK: - 共通動作設定
@@ -217,6 +292,52 @@ public final class AppSettings: ObservableObject {
         didSet { defaults.set(hotkeyDisplayString, forKey: Keys.hotkeyDisplayString) }
     }
 
+    // MARK: - AI クイック質問 (Quick Ask) ショートカット
+    @Published public var quickAskHotkeyCode: UInt32 {
+        didSet { defaults.set(quickAskHotkeyCode, forKey: Keys.quickAskHotkeyCode) }
+    }
+
+    @Published public var quickAskHotkeyModifiers: UInt32 {
+        didSet { defaults.set(quickAskHotkeyModifiers, forKey: Keys.quickAskHotkeyModifiers) }
+    }
+
+    @Published public var quickAskHotkeyDisplayString: String {
+        didSet { defaults.set(quickAskHotkeyDisplayString, forKey: Keys.quickAskHotkeyDisplayString) }
+    }
+
+    @Published public var quickAskProviderMode: QuickAskProviderMode {
+        didSet { defaults.set(quickAskProviderMode.rawValue, forKey: Keys.quickAskProviderMode) }
+    }
+
+    @Published public var groqQuickAskModel: String {
+        didSet { defaults.set(groqQuickAskModel, forKey: Keys.groqQuickAskModel) }
+    }
+
+    @Published public var openAIQuickAskModel: String {
+        didSet { defaults.set(openAIQuickAskModel, forKey: Keys.openAIQuickAskModel) }
+    }
+
+    @Published public var customQuickAskBaseURL: String {
+        didSet { defaults.set(customQuickAskBaseURL, forKey: Keys.customQuickAskBaseURL) }
+    }
+
+    @Published public var customQuickAskModel: String {
+        didSet { defaults.set(customQuickAskModel, forKey: Keys.customQuickAskModel) }
+    }
+
+    // MARK: - プレビュー挿入 (ペースト) ショートカット
+    @Published public var pasteShortcutKeyCode: UInt32 {
+        didSet { defaults.set(pasteShortcutKeyCode, forKey: Keys.pasteShortcutKeyCode) }
+    }
+
+    @Published public var pasteShortcutModifiers: UInt32 {
+        didSet { defaults.set(pasteShortcutModifiers, forKey: Keys.pasteShortcutModifiers) }
+    }
+
+    @Published public var pasteShortcutDisplayString: String {
+        didSet { defaults.set(pasteShortcutDisplayString, forKey: Keys.pasteShortcutDisplayString) }
+    }
+
     @Published public var dictionaryRules: [DictionaryRule] {
         didSet { saveDictionaryRules() }
     }
@@ -266,7 +387,105 @@ public final class AppSettings: ObservableObject {
     }
 
     public var currentLLMModelName: String {
-        llmConfig(for: selectedProvider).modelName
+        effectiveLLMConfig.modelName
+    }
+
+    /// 実際に使用される推敲（LLM）プロバイダー
+    public var resolvedLLMProvider: APIProvider {
+        switch llmProviderMode {
+        case .sameAsSpeech:
+            return selectedProvider
+        case .groq:
+            return .groq
+        case .openai:
+            return .openai
+        case .custom:
+            return .custom
+        }
+    }
+
+    /// 有効な推敲（LLM）設定 (baseURL, modelName, isCustom)
+    public var effectiveLLMConfig: (baseURL: String, modelName: String, isCustom: Bool) {
+        switch llmProviderMode {
+        case .sameAsSpeech:
+            let cfg = llmConfig(for: selectedProvider)
+            return (cfg.baseURL, cfg.modelName, false)
+        case .groq:
+            return (groqBaseURL, groqLLMModel, false)
+        case .openai:
+            return (openAIBaseURL, openAILLMModel, false)
+        case .custom:
+            return (customLLMBaseURL, customLLMModel, true)
+        }
+    }
+
+    /// 現在有効な推敲（LLM）プロバイダーの表示名
+    public var effectiveLLMProviderDisplayName: String {
+        switch llmProviderMode {
+        case .sameAsSpeech:
+            return "\(selectedProvider.displayName) (音声認識と同一)"
+        case .groq:
+            return "Groq"
+        case .openai:
+            return "OpenAI"
+        case .custom:
+            return "カスタム (ローカルLLM/互換)"
+        }
+    }
+
+    /// 会話（クイック質問）で実際に使用されるプロバイダー
+    public var resolvedQuickAskProvider: APIProvider {
+        switch quickAskProviderMode {
+        case .sameAsLLM:
+            return resolvedLLMProvider
+        case .sameAsSpeech:
+            return selectedProvider
+        case .groq:
+            return .groq
+        case .openai:
+            return .openai
+        case .custom:
+            return .custom
+        }
+    }
+
+    /// 会話（クイック質問）のプロバイダー表示名
+    public var effectiveQuickAskProviderDisplayName: String {
+        switch quickAskProviderMode {
+        case .sameAsLLM:
+            return "\(effectiveLLMProviderDisplayName) (推敲モデルと同一)"
+        case .sameAsSpeech:
+            return "\(selectedProvider.displayName) (音声認識と同一)"
+        case .groq:
+            return "Groq"
+        case .openai:
+            return "OpenAI"
+        case .custom:
+            return "カスタム (ローカルLLM/互換)"
+        }
+    }
+
+    /// 会話（クイック質問）で現在有効なモデル名
+    public var currentQuickAskModelName: String {
+        effectiveQuickAskConfig.modelName
+    }
+
+    /// 会話（クイック質問）の有効な設定 (baseURL, modelName, isCustom, provider)
+    public var effectiveQuickAskConfig: (baseURL: String, modelName: String, isCustom: Bool, provider: APIProvider) {
+        switch quickAskProviderMode {
+        case .sameAsLLM:
+            let llm = effectiveLLMConfig
+            return (llm.baseURL, llm.modelName, llm.isCustom, resolvedLLMProvider)
+        case .sameAsSpeech:
+            let cfg = llmConfig(for: selectedProvider)
+            return (cfg.baseURL, cfg.modelName, false, selectedProvider)
+        case .groq:
+            return (groqBaseURL, groqQuickAskModel, false, .groq)
+        case .openai:
+            return (openAIBaseURL, openAIQuickAskModel, false, .openai)
+        case .custom:
+            return (customQuickAskBaseURL, customQuickAskModel, true, .custom)
+        }
     }
 
     /// Whisper（音声認識）用の設定を取得
@@ -276,6 +495,8 @@ public final class AppSettings: ObservableObject {
             return (groqBaseURL, groqModel)
         case .openai:
             return (openAIBaseURL, openAIModel)
+        case .custom:
+            return (customLLMBaseURL, customLLMModel)
         }
     }
 
@@ -286,6 +507,8 @@ public final class AppSettings: ObservableObject {
             return (groqBaseURL, groqLLMModel)
         case .openai:
             return (openAIBaseURL, openAILLMModel)
+        case .custom:
+            return (customLLMBaseURL, customLLMModel)
         }
     }
 
@@ -297,6 +520,8 @@ public final class AppSettings: ObservableObject {
             return KeychainService.shared.hasAPIKey(for: .openai) ? .openai : nil
         case .openai:
             return KeychainService.shared.hasAPIKey(for: .groq) ? .groq : nil
+        case .custom:
+            return nil
         }
     }
 
@@ -311,6 +536,12 @@ public final class AppSettings: ObservableObject {
         self.openAIBaseURL = defaults.string(forKey: Keys.openAIBaseURL) ?? "https://api.openai.com/v1"
         self.openAIModel = defaults.string(forKey: Keys.openAIModel) ?? "whisper-1"
         self.openAILLMModel = defaults.string(forKey: Keys.openAILLMModel) ?? "gpt-4o-mini"
+
+        let savedLLMMode = defaults.string(forKey: Keys.llmProviderMode) ?? LLMProviderMode.sameAsSpeech.rawValue
+        self.llmProviderMode = LLMProviderMode(rawValue: savedLLMMode) ?? .sameAsSpeech
+
+        self.customLLMBaseURL = defaults.string(forKey: Keys.customLLMBaseURL) ?? "http://localhost:11434/v1"
+        self.customLLMModel = defaults.string(forKey: Keys.customLLMModel) ?? "llama3.2"
 
         let savedMode = defaults.string(forKey: Keys.apiMode) ?? SpeechAPIMode.transcriptions.rawValue
         self.apiMode = SpeechAPIMode(rawValue: savedMode) ?? .transcriptions
@@ -350,6 +581,32 @@ public final class AppSettings: ObservableObject {
         self.hotkeyModifiers = savedModifiers ?? UInt32(controlKey)
 
         self.hotkeyDisplayString = defaults.string(forKey: Keys.hotkeyDisplayString) ?? "⌃Space"
+
+        // AI Quick Ask default shortcut: Ctrl + Shift + Space (kVK_Space = 49, controlKey | shiftKey)
+        let savedQuickAskCode = defaults.object(forKey: Keys.quickAskHotkeyCode) as? UInt32
+        self.quickAskHotkeyCode = savedQuickAskCode ?? UInt32(kVK_Space)
+
+        let savedQuickAskMods = defaults.object(forKey: Keys.quickAskHotkeyModifiers) as? UInt32
+        self.quickAskHotkeyModifiers = savedQuickAskMods ?? UInt32(controlKey | shiftKey)
+
+        self.quickAskHotkeyDisplayString = defaults.string(forKey: Keys.quickAskHotkeyDisplayString) ?? "⌃⇧Space"
+
+        let savedQuickAskProviderMode = defaults.string(forKey: Keys.quickAskProviderMode) ?? QuickAskProviderMode.sameAsLLM.rawValue
+        self.quickAskProviderMode = QuickAskProviderMode(rawValue: savedQuickAskProviderMode) ?? .sameAsLLM
+
+        self.groqQuickAskModel = defaults.string(forKey: Keys.groqQuickAskModel) ?? "llama-3.3-70b-versatile"
+        self.openAIQuickAskModel = defaults.string(forKey: Keys.openAIQuickAskModel) ?? "gpt-4o-mini"
+        self.customQuickAskBaseURL = defaults.string(forKey: Keys.customQuickAskBaseURL) ?? "http://localhost:11434/v1"
+        self.customQuickAskModel = defaults.string(forKey: Keys.customQuickAskModel) ?? "llama3.2"
+
+        // プレビューペーストショートカット default: ⌘ + Return (kVK_Return = 36, cmdKey)
+        let savedPasteCode = defaults.object(forKey: Keys.pasteShortcutKeyCode) as? UInt32
+        self.pasteShortcutKeyCode = savedPasteCode ?? UInt32(kVK_Return)
+
+        let savedPasteMods = defaults.object(forKey: Keys.pasteShortcutModifiers) as? UInt32
+        self.pasteShortcutModifiers = savedPasteMods ?? UInt32(cmdKey)
+
+        self.pasteShortcutDisplayString = defaults.string(forKey: Keys.pasteShortcutDisplayString) ?? "⌘↩"
 
         // 音声しきい値設定の読み込み（デフォルト: 有効, -32dB, トリミング有効）
         self.audioThresholdEnabled = defaults.object(forKey: Keys.audioThresholdEnabled) != nil ? defaults.bool(forKey: Keys.audioThresholdEnabled) : true

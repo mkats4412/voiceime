@@ -49,11 +49,11 @@ public final class FocusDetectionService {
             return .ambiguous(role: "None", detail: "フォーカス要素取得不能")
         }
 
-        // CFTypeRef を AXUIElement としてキャスト
+        // CFTypeRef を AXUIElement としてキャスト（GetTypeID検証済み）
         guard CFGetTypeID(element) == AXUIElementGetTypeID() else {
             return .ambiguous(role: "UnknownType", detail: "UIElement型不一致")
         }
-        let axElement = element as! AXUIElement
+        let axElement = unsafeBitCast(element, to: AXUIElement.self)
 
         // 1. 要素の Role（役割）を取得
         var roleRef: CFTypeRef?

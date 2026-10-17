@@ -16,46 +16,49 @@ public struct FloatingPreviewView: View {
                 switch controller.phase {
                 case .liveRecording:
                     Circle()
-                        .fill(Color.red)
+                        .fill(controller.mode == .quickAsk ? Color.purple : Color.red)
                         .frame(width: 9, height: 9)
-                    Text("リアルタイム音声入力中...")
+                    Text(controller.mode == .quickAsk ? "AIクイック質問中..." : "リアルタイム音声入力中...")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.primary)
 
                     Spacer()
 
-                    Text("離すとAI推敲")
+                    Text(controller.mode == .quickAsk ? "離すとAIが回答" : "離すとAI推敲")
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.red)
+                        .foregroundColor(controller.mode == .quickAsk ? .purple : .red)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(
                             Capsule()
-                                .fill(Color.red.opacity(0.12))
+                                .fill((controller.mode == .quickAsk ? Color.purple : Color.red).opacity(0.12))
                         )
 
                 case .processing:
                     ProgressView()
                         .controlSize(.small)
-                    Text("AI推敲中...")
+                    Text(controller.mode == .quickAsk ? "AI回答取得中..." : "AI推敲中...")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.primary)
 
                     Spacer()
 
                 case .ready:
-                    Image(systemName: "mic.bubble.fill")
-                        .foregroundColor(.accentColor)
+                    Image(systemName: controller.mode == .quickAsk ? "sparkles" : "mic.bubble.fill")
+                        .foregroundColor(controller.mode == .quickAsk ? .purple : .accentColor)
                         .font(.system(size: 13, weight: .semibold))
 
-                    Text("音声入力プレビュー")
+                    Text(controller.mode == .quickAsk ? "AIの回答" : "音声入力プレビュー")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.primary)
 
                     Spacer()
 
                     // ガイダンスバッジ
-                    Text(controller.customNotice ?? "入力先を選択 ➔ ⌘↩")
+                    let defaultNotice = controller.mode == .quickAsk
+                        ? "\(AppSettings.shared.pasteShortcutDisplayString) でペースト"
+                        : "入力先を選択 ➔ \(AppSettings.shared.pasteShortcutDisplayString)"
+                    Text(controller.customNotice ?? defaultNotice)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 6)
@@ -84,7 +87,10 @@ public struct FloatingPreviewView: View {
                     .fill(Color(NSColor.controlBackgroundColor).opacity(0.65))
 
                 if controller.currentText.isEmpty {
-                    Text(controller.phase == .liveRecording ? "話した言葉がリアルタイムでここに表示されます..." : "")
+                    let placeholder = controller.mode == .quickAsk
+                        ? "質問を話してください... (例: ゴミの英語のスペルは?)"
+                        : "話した言葉がリアルタイムでここに表示されます..."
+                    Text(controller.phase == .liveRecording ? placeholder : "")
                         .font(.system(size: 13, weight: .regular))
                         .foregroundColor(.secondary.opacity(0.6))
                         .padding(10)
@@ -100,7 +106,9 @@ public struct FloatingPreviewView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(
-                        controller.phase == .liveRecording ? Color.red.opacity(0.4) : Color.primary.opacity(0.12),
+                        controller.phase == .liveRecording
+                            ? (controller.mode == .quickAsk ? Color.purple.opacity(0.5) : Color.red.opacity(0.4))
+                            : Color.primary.opacity(0.12),
                         lineWidth: 1
                     )
             )
@@ -131,7 +139,7 @@ public struct FloatingPreviewView: View {
 
                 Spacer()
 
-                // 挿入実行ボタン（⌘+Enter）
+                // 挿入実行ボタン（ユーザー設定のショートカット）
                 Button {
                     controller.insertTextToFrontmostApp()
                 } label: {
@@ -139,30 +147,28 @@ public struct FloatingPreviewView: View {
                         Text("挿入")
                             .font(.system(size: 12, weight: .bold))
 
-                        HStack(spacing: 2) {
-                            Text("⌘")
-                                .font(.system(size: 10, weight: .bold))
-                            Text("↩")
-                                .font(.system(size: 10, weight: .bold))
-                        }
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.white.opacity(0.2))
-                        )
+                        Text(AppSettings.shared.pasteShortcutDisplayString)
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Color.white.opacity(0.2))
+                            )
                     }
                     .foregroundColor(.white)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 6)
-                            .fill(controller.phase == .ready && !controller.currentText.isEmpty ? Color.accentColor : Color.secondary.opacity(0.4))
+                            .fill(controller.phase == .ready && !controller.currentText.isEmpty
+                                  ? (controller.mode == .quickAsk ? Color.purple : Color.accentColor)
+                                  : Color.secondary.opacity(0.4))
                     )
                 }
                 .buttonStyle(.plain)
                 .disabled(controller.phase != .ready || controller.currentText.isEmpty)
-                .help("フォーカス中のアプリにテキストをペースト (⌘+Return)")
+                .help("フォーカス中のアプリにテキストをペースト (\(AppSettings.shared.pasteShortcutDisplayString))")
             }
         }
         .padding(12)

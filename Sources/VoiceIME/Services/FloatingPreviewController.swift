@@ -5,7 +5,12 @@ import Carbon
 public enum FloatingPreviewPhase: Equatable {
     case liveRecording // 録音・リアルタイム音声認識中
     case processing    // クラウドWhisper/AI推敲中
-    case ready         // 完了・保留中 (⌘+Enterで挿入可能)
+    case ready         // 完了・保留中 (ペースト可能)
+}
+
+public enum FloatingPreviewMode: Equatable {
+    case speechInput   // 通常の音声入力
+    case quickAsk      // AIクイック質問
 }
 
 @MainActor
@@ -13,6 +18,7 @@ public final class FloatingPreviewController: ObservableObject {
     public static let shared = FloatingPreviewController()
 
     @Published public var phase: FloatingPreviewPhase = .ready
+    @Published public var mode: FloatingPreviewMode = .speechInput
     @Published public var currentText: String = ""
     @Published public var isVisible: Bool = false
     @Published public var copySuccess: Bool = false
@@ -67,11 +73,12 @@ public final class FloatingPreviewController: ObservableObject {
     }
 
     /// 録音開始時のリアルタイムプレビュー表示
-    public func showLiveRecording() {
+    public func showLiveRecording(mode: FloatingPreviewMode = .speechInput) {
         dismissTimer?.invalidate()
         dismissTimer = nil
         registerHotkeys()
 
+        self.mode = mode
         self.phase = .liveRecording
         self.currentText = ""
         self.copySuccess = false
@@ -104,17 +111,23 @@ public final class FloatingPreviewController: ObservableObject {
     }
 
     /// 録音停止・AI推敲中へのステータス変更
-    public func setProcessing() {
+    public func setProcessing(mode: FloatingPreviewMode? = nil) {
+        if let mode = mode {
+            self.mode = mode
+        }
         self.phase = .processing
     }
 
     /// 認識・推敲完了後の確定テキスト表示
-    public func show(text: String, notice: String? = nil) {
+    public func show(text: String, notice: String? = nil, mode: FloatingPreviewMode? = nil) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             hide()
             return
         }
 
+        if let mode = mode {
+            self.mode = mode
+        }
         self.phase = .ready
         self.currentText = text
         self.copySuccess = false
@@ -424,21 +437,32 @@ public final class FloatingPreviewController: ObservableObject {
         )
     }
 
+    /// ペーストキー変更時にホットキーを再登録
+    public func reloadHotkeys() {
+        if isVisible {
+            registerHotkeys()
+        }
+    }
+
     private func registerHotkeys() {
         unregisterHotkeys()
 
-        // 1. ⌘ + Return (keyCode: kVK_Return = 36, modifiers: cmdKey)
+        // 1. ユーザー設定のペースト（挿入）ホットキー
+        let pasteCode = AppSettings.shared.pasteShortcutKeyCode
+        let pasteMods = AppSettings.shared.pasteShortcutModifiers
+        let carbonMods = convertToCarbonModifiers(modifiers: pasteMods)
+
         let enterHotKeyID = EventHotKeyID(signature: signature, id: hotKeyIDValue)
         let statusEnter = RegisterEventHotKey(
-            UInt32(kVK_Return),
-            UInt32(cmdKey),
+            pasteCode,
+            carbonMods,
             enterHotKeyID,
             GetEventDispatcherTarget(),
             0,
             &hotKeyRef
         )
         if statusEnter != noErr {
-            NSLog("[VoiceIME] ⚠️ ⌘+Return ホットキー登録失敗: %d", statusEnter)
+            NSLog("[VoiceIME] ⚠️ ペーストホットキー登録失敗 (code: %d, mods: %d): %d", pasteCode, pasteMods, statusEnter)
         }
 
         // 2. Escape (keyCode: kVK_Escape = 53, modifiers: 0)
@@ -468,7 +492,7 @@ public final class FloatingPreviewController: ObservableObject {
     }
 
     private func setupKeyMonitors() {
-        // パネルにフォーカスがある場合の Esc / ⌘+Return キーハンドリング
+        // パネルにフォーカスがある場合の Esc / 挿入キーハンドリング
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self, self.isVisible else { return event }
 
@@ -478,8 +502,10 @@ public final class FloatingPreviewController: ObservableObject {
                 return nil
             }
 
-            // ⌘ + Return キー (keyCode 36) で挿入
-            if event.keyCode == 36 && event.modifierFlags.contains(.command) {
+            // ユーザー設定のペーストキー判定
+            let targetCode = AppSettings.shared.pasteShortcutKeyCode
+            let targetMods = AppSettings.shared.pasteShortcutModifiers
+            if UInt32(event.keyCode) == targetCode && self.matchesModifiers(event.modifierFlags, carbonModifiers: targetMods) {
                 self.insertTextToFrontmostApp()
                 return nil
             }
@@ -497,5 +523,27 @@ public final class FloatingPreviewController: ObservableObject {
                 }
             }
         }
+    }
+
+    private func convertToCarbonModifiers(modifiers: UInt32) -> UInt32 {
+        var carbonMods: UInt32 = 0
+        if modifiers & UInt32(cmdKey) != 0 { carbonMods |= UInt32(cmdKey) }
+        if modifiers & UInt32(shiftKey) != 0 { carbonMods |= UInt32(shiftKey) }
+        if modifiers & UInt32(optionKey) != 0 { carbonMods |= UInt32(optionKey) }
+        if modifiers & UInt32(controlKey) != 0 { carbonMods |= UInt32(controlKey) }
+        return carbonMods
+    }
+
+    private func matchesModifiers(_ flags: NSEvent.ModifierFlags, carbonModifiers: UInt32) -> Bool {
+        let hasCmd = carbonModifiers & UInt32(cmdKey) != 0
+        let hasShift = carbonModifiers & UInt32(shiftKey) != 0
+        let hasOpt = carbonModifiers & UInt32(optionKey) != 0
+        let hasCtrl = carbonModifiers & UInt32(controlKey) != 0
+
+        if flags.contains(.command) != hasCmd { return false }
+        if flags.contains(.shift) != hasShift { return false }
+        if flags.contains(.option) != hasOpt { return false }
+        if flags.contains(.control) != hasCtrl { return false }
+        return true
     }
 }
