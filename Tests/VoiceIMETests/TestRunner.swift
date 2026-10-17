@@ -53,7 +53,20 @@ struct TestRunner {
         assert(service.apply(text: "ひらきシングルクォート単語シングルクォートとじ", rules: rules) == "'単語'")
         assert(service.apply(text: "Open single quotecharClose single quote", rules: rules) == "'char'")
 
-        // 7. 初期ルール (defaultDictionaryRules) に全記号ルールが最初から登録・有効化されていることを検証
+        // 7. 感嘆符 (!) / びっくりマーク（勝手に入った「。」「、」を巻き込んで「！」に置換）
+        assert(service.apply(text: "頑張ります!。", rules: rules) == "頑張ります！")
+        assert(service.apply(text: "頑張ります！。", rules: rules) == "頑張ります！")
+        assert(service.apply(text: "頑張ります。！", rules: rules) == "頑張ります！")
+        assert(service.apply(text: "頑張ります。びっくりマーク", rules: rules) == "頑張ります！")
+        assert(service.apply(text: "頑張ります! 。", rules: rules) == "頑張ります！")
+
+        // 8. 疑問符 (?) / はてなマーク（勝手に入った「。」「、」を巻き込んで「？」に置換）
+        assert(service.apply(text: "本当ですか?。", rules: rules) == "本当ですか？")
+        assert(service.apply(text: "本当ですか？。", rules: rules) == "本当ですか？")
+        assert(service.apply(text: "本当ですか。？", rules: rules) == "本当ですか？")
+        assert(service.apply(text: "本当ですか。はてなマーク", rules: rules) == "本当ですか？")
+
+        // 9. 初期ルール (defaultDictionaryRules) に全記号ルールが最初から登録・有効化されていることを検証
         let defaultRules = AppSettings.defaultDictionaryRules
         for symbol in AppSettings.symbolDictionaryRules {
             let found = defaultRules.first(where: { $0.pattern == symbol.pattern })

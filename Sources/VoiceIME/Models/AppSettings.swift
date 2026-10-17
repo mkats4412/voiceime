@@ -693,7 +693,13 @@ public final class AppSettings: ObservableObject {
 
             // シングルクォート ''
             DictionaryRule(pattern: "(シングルクォートとじ|シングルクォート閉じ|[Cc]lose single quote)", replacement: "'", isRegex: true, isEnabled: true),
-            DictionaryRule(pattern: "(ひらきシングルクォート|開きシングルクォート|[Oo]pen single quote)", replacement: "'", isRegex: true, isEnabled: true)
+            DictionaryRule(pattern: "(ひらきシングルクォート|開きシングルクォート|[Oo]pen single quote)", replacement: "'", isRegex: true, isEnabled: true),
+
+            // 感嘆符 (!) / びっくりマーク（前後に勝手に入った「。」「、」を巻き込んで「！」に置換）
+            DictionaryRule(pattern: "[。、]*[ 　]*([!！]|びっくりまーく|びっくりマーク|感嘆符|[Ee]xclamation mark)[ 　]*[。、]*", replacement: "！", isRegex: true, isEnabled: true),
+
+            // 疑問符 (?) / はてなマーク（前後に勝手に入った「。」「、」を巻き込んで「？」に置換）
+            DictionaryRule(pattern: "[。、]*[ 　]*([?？]|はてなまーく|はてなマーク|疑問符|クエスチョンマーク|[Qq]uestion mark)[ 　]*[。、]*", replacement: "？", isRegex: true, isEnabled: true)
         ]
     }
 
