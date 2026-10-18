@@ -125,6 +125,9 @@ public final class WhisperAPIService {
             effectiveModel = model
         }
 
+        // Amicalのwhisper-prompt設計を参考にした安全なプロンプト最適化
+        let sanitizedPrompt = prompt.map { Self.sanitizeWhisperPrompt($0) }
+
         request.httpBody = createMultipartBody(
             boundary: boundary,
             audioData: audioData,
@@ -132,7 +135,7 @@ public final class WhisperAPIService {
             mimeType: "audio/m4a",
             model: effectiveModel,
             mode: mode,
-            prompt: prompt,
+            prompt: sanitizedPrompt,
             language: language
         )
 
@@ -276,5 +279,30 @@ public final class WhisperAPIService {
             }
         }
         return String(data: data, encoding: .utf8)
+    }
+
+    /// Whisper APIの initial_prompt を安全に最適化・サニタイズする (Amical の設計を参考)
+    /// - Groqの896バイト上限（Whisperの~224トークン上限）を考慮し、UTF-8境界を守りながら安全に切り詰める
+    /// - 連続する余分な空白（改行含む）を単一スペースに丸めて、多言語トークナイザーの文字化け・中国語ハルシネーションを防ぐ
+    public static func sanitizeWhisperPrompt(_ prompt: String, maxBytes: Int = 800) -> String {
+        // 空白・改行の連続を単一スペースに正規化
+        let collapsed = prompt.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !collapsed.isEmpty else { return "" }
+
+        guard let data = collapsed.data(using: .utf8) else { return collapsed }
+        if data.count <= maxBytes {
+            return collapsed
+        }
+
+        // 先頭側からバイト単位で切り詰め、かつUTF-8文字境界を壊さないよう調整
+        // （Whisperは文末・末尾側のコンテキストを最優先するため、末尾を残す）
+        var startIndex = data.count - maxBytes
+        // UTF-8継続バイト (0b10xxxxxx: 0x80..0xBF) の間は進めて先頭バイト (0b0xxxxxxx または 0b11xxxxxx) を探す
+        while startIndex < data.count && (data[startIndex] & 0xC0) == 0x80 {
+            startIndex += 1
+        }
+
+        let subdata = data.subdata(in: startIndex..<data.count)
+        return String(data: subdata, encoding: .utf8) ?? collapsed
     }
 }

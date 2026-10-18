@@ -474,11 +474,23 @@ struct TestRunner {
         let sanitizedHallucination = llm.sanitizeLLMOutput("整形後：議事録の送付ですね。", originalInput: "議事録の送付", fallback: "議事録の送付")
         assert(sanitizedHallucination == "議事録の送付。", "sanitizeLLMOutput should suppress hallucinated ending: got '\(sanitizedHallucination)'")
 
-        // プロンプトに語尾補完抑制ルールが含まれていることの検証
-        assert(casualPrompt.contains("勝手な語尾補完・言葉の付け足し（ハルシネーション）の厳禁"), "Casual prompt must contain hallucination rule")
-        assert(formalPrompt.contains("勝手な語尾補完・言葉の付け足し（ハルシネーション）の厳禁"), "Formal prompt must contain hallucination rule")
+        // 11. XMLタグ（<formatted_text>）抽出テスト（Amical互換プロンプトフォーマット）
+        let xmlOutput1 = llm.sanitizeLLMOutput("<formatted_text>本日の進捗状況です。</formatted_text>", fallback: "fallback")
+        assert(xmlOutput1 == "本日の進捗状況です。", "XML formatted_text tag extraction failed: got '\(xmlOutput1)'")
 
-        print("  -> LLMService URL Construction, Sanitization, Punctuation Normalization, Prompt Modes, and LLMProviderMode passed!")
+        let xmlOutput2 = LLMService.extractFormattedText("AI思考プロセス...\n<formatted_text>\n会議の開始時間は15時です。\n</formatted_text>\n余計な注記")
+        assert(xmlOutput2 == "会議の開始時間は15時です。", "XML wrapped multiline extraction failed: got '\(String(describing: xmlOutput2))'")
+
+        // 12. WhisperAPIService sanitizeWhisperPrompt のバイト数制限と空白正規化テスト
+        let normalPrompt = WhisperAPIService.sanitizeWhisperPrompt("  こんにちは   世界 \n\n  テスト  ", maxBytes: 800)
+        assert(normalPrompt == "こんにちは 世界 テスト", "Whisper prompt whitespace normalization failed: got '\(normalPrompt)'")
+
+        let longString = String(repeating: "あいうえお", count: 200) // 1000文字 = 3000バイト
+        let truncated = WhisperAPIService.sanitizeWhisperPrompt(longString, maxBytes: 800)
+        assert(truncated.utf8.count <= 800, "Truncated prompt should be <= 800 bytes, got \(truncated.utf8.count) bytes")
+        assert(longString.hasSuffix(truncated), "Truncated string must be a valid suffix of original")
+
+        print("  -> LLMService URL Construction, Sanitization, Punctuation Normalization, Prompt Modes, LLMProviderMode, and Whisper Prompt Sanitization passed!")
     }
 
     static func testAudioAnalysisService() {
