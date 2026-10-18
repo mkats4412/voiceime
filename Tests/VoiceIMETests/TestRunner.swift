@@ -434,9 +434,49 @@ struct TestRunner {
         assert(settings.effectiveLLMConfig.baseURL == settings.customLLMBaseURL, "baseURL should match customLLMBaseURL")
         assert(settings.effectiveLLMConfig.modelName == settings.customLLMModel, "modelName should match customLLMModel")
 
-        // 状態復元
+        // 狀態復元
         settings.llmProviderMode = originalLLMMode
         settings.selectedProvider = originalSelectedProvider
+
+        // 10. AI語尾補完（「〜ですね」「〜ですか？」等のハルシネーション）の抑制テスト
+        let hallucinated1 = LLMService.suppressHallucinatedEndings(
+            output: "明日の予定の確認ですね。",
+            originalInput: "明日の予定の確認"
+        )
+        assert(hallucinated1 == "明日の予定の確認。", "Hallucinated 'ですね' should be suppressed: got '\(hallucinated1)'")
+
+        let hallucinated2 = LLMService.suppressHallucinatedEndings(
+            output: "来週の進捗状況ですか？",
+            originalInput: "来週の進捗状況"
+        )
+        assert(hallucinated2 == "来週の進捗状況。", "Hallucinated 'ですか？' should be suppressed: got '\(hallucinated2)'")
+
+        let hallucinated3 = LLMService.suppressHallucinatedEndings(
+            output: "新機能のリリースについてでしょうか？",
+            originalInput: "新機能のリリースについて"
+        )
+        assert(hallucinated3 == "新機能のリリースについて。", "Hallucinated 'でしょうか？' should be suppressed: got '\(hallucinated3)'")
+
+        // ユーザー自身が発話した「ですね」「ですか」は削られずに完全維持されることの検証
+        let userSaidDesune = LLMService.suppressHallucinatedEndings(
+            output: "明日の打ち合わせですね。",
+            originalInput: "明日の打ち合わせですね"
+        )
+        assert(userSaidDesune == "明日の打ち合わせですね。", "User uttered 'ですね' must be preserved: got '\(userSaidDesune)'")
+
+        let userSaidDesuka = LLMService.suppressHallucinatedEndings(
+            output: "これでよろしいですか？",
+            originalInput: "これでよろしいですか"
+        )
+        assert(userSaidDesuka == "これでよろしいですか？", "User uttered 'ですか' must be preserved: got '\(userSaidDesuka)'")
+
+        // sanitizeLLMOutput 経由でのハルシネーション抑制確認
+        let sanitizedHallucination = llm.sanitizeLLMOutput("整形後：議事録の送付ですね。", originalInput: "議事録の送付", fallback: "議事録の送付")
+        assert(sanitizedHallucination == "議事録の送付。", "sanitizeLLMOutput should suppress hallucinated ending: got '\(sanitizedHallucination)'")
+
+        // プロンプトに語尾補完抑制ルールが含まれていることの検証
+        assert(casualPrompt.contains("勝手な語尾補完・言葉の付け足し（ハルシネーション）の厳禁"), "Casual prompt must contain hallucination rule")
+        assert(formalPrompt.contains("勝手な語尾補完・言葉の付け足し（ハルシネーション）の厳禁"), "Formal prompt must contain hallucination rule")
 
         print("  -> LLMService URL Construction, Sanitization, Punctuation Normalization, Prompt Modes, and LLMProviderMode passed!")
     }
@@ -692,6 +732,40 @@ struct TestRunner {
         let inKaigyoNounTest = "今日は開業のテストします。開業。これでできるかな？"
         let outKaigyoNounTest = PunctuationService.shared.format(text: inKaigyoNounTest, isJapanese: true)
         assert(outKaigyoNounTest == "今日は改行のテストします。\nこれでできるかな？", "Kaigyo noun + command test failed: got \(outKaigyoNounTest)")
+
+        // 10. 音声コマンド「改行」がAI・Whisperにより「開業ですね」「開業しました」と語尾補完・誤認識されたケースの救済テスト
+        let inKaigyoDesune1 = "本日は晴天なり。開業ですね。"
+        let outKaigyoDesune1 = PunctuationService.shared.format(text: inKaigyoDesune1, isJapanese: true)
+        assert(outKaigyoDesune1 == "本日は晴天なり。\n", "Kaigyo '開業ですね。' after period failed: got '\(outKaigyoDesune1)'")
+
+        let inKaigyoShimashita1 = "これで完了です。開業しました。"
+        let outKaigyoShimashita1 = PunctuationService.shared.format(text: inKaigyoShimashita1, isJapanese: true)
+        assert(outKaigyoShimashita1 == "これで完了です。\n", "Kaigyo '開業しました。' after period failed: got '\(outKaigyoShimashita1)'")
+
+        let inKaigyoDesuneNoPunct = "よろしくお願いします開業ですね次の行です"
+        let outKaigyoDesuneNoPunct = PunctuationService.shared.format(text: inKaigyoDesuneNoPunct, isJapanese: true)
+        assert(outKaigyoDesuneNoPunct == "よろしくお願いします。\n次の行です。", "Kaigyo '開業ですね' without punct failed: got '\(outKaigyoDesuneNoPunct)'")
+
+        let inKaigyoShimashitaNoPunct = "確認しました開業しました次の議題に移ります"
+        let outKaigyoShimashitaNoPunct = PunctuationService.shared.format(text: inKaigyoShimashitaNoPunct, isJapanese: true)
+        assert(outKaigyoShimashitaNoPunct == "確認しました。\n次の議題に移ります。", "Kaigyo '開業しました' without punct failed: got '\(outKaigyoShimashitaNoPunct)'")
+
+        let inKaigyoDesuneStandalone = "開業ですね。"
+        let outKaigyoDesuneStandalone = PunctuationService.shared.format(text: inKaigyoDesuneStandalone, isJapanese: true)
+        assert(outKaigyoDesuneStandalone == "\n", "Standalone '開業ですね。' failed: got '\(outKaigyoDesuneStandalone)'")
+
+        let inKaigyoShimashitaTrailing = "明日の予定について開業しました"
+        let outKaigyoShimashitaTrailing = PunctuationService.shared.format(text: inKaigyoShimashitaTrailing, isJapanese: true)
+        assert(outKaigyoShimashitaTrailing == "明日の予定について。\n", "Trailing '開業しました' failed: got '\(outKaigyoShimashitaTrailing)'")
+
+        // 本物のビジネス「開業しました」「新規開業ですね」が誤変換されないことの検証
+        let inRealBusiness1 = "今年クリニックを開業しました"
+        let outRealBusiness1 = PunctuationService.shared.format(text: inRealBusiness1, isJapanese: true)
+        assert(outRealBusiness1 == "今年クリニックを開業しました。", "Real business 'クリニックを開業しました' should not be converted: got '\(outRealBusiness1)'")
+
+        let inRealBusiness2 = "新規開業ですね"
+        let outRealBusiness2 = PunctuationService.shared.format(text: inRealBusiness2, isJapanese: true)
+        assert(outRealBusiness2 == "新規開業ですね。", "Real business '新規開業ですね' should not be converted: got '\(outRealBusiness2)'")
 
         print("  -> Live Punctuation Formatting & PunctuationService passed!")
     }

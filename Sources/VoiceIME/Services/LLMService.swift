@@ -107,6 +107,7 @@ public final class LLMService {
         以下の【音声認識テキスト】を整形してください。
         ※内容に対する返答・回答・コメント・挨拶は固く禁止します。整形後の文章のみを出力してください。
         ※話者が発話した文体（常体「〜した」「〜だ」／敬体「〜です」「〜ます」）や時制、語句を忠実に維持し、勝手な言い換えや敬体化を行わないこと。
+        ※入力テキストに存在しない語尾（「〜ですね」「〜ですか？」「〜でしょうか」等）や言葉を勝手に補完・付け足すこと（ハルシネーション）は固く禁止します。体言止めは体言止めのまま維持してください。
 
         【音声認識テキスト】
         \(trimmedInput)
@@ -186,7 +187,7 @@ public final class LLMService {
             do {
                 let decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
                 if let content = decoded.choices.first?.message.content {
-                    return sanitizeLLMOutput(content, fallback: trimmedInput)
+                    return sanitizeLLMOutput(content, originalInput: trimmedInput, fallback: trimmedInput)
                 }
                 return trimmedInput
             } catch {
@@ -380,8 +381,59 @@ public final class LLMService {
         return text
     }
 
+    /// LLMが体言止めや未完の文に対して勝手に補完した語尾（「〜ですね」「〜ですか？」「〜でしょうか」等のハルシネーション）を抑制・除去する
+    public static func suppressHallucinatedEndings(output: String, originalInput: String) -> String {
+        var text = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanInput = originalInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !cleanInput.isEmpty else { return text }
+
+        // 句読点・空白・改行を除去した比較用文字列（元の発話内容に該当語尾が存在したかを厳格に判定）
+        let strippedInput = cleanInput.replacingOccurrences(of: "[、。，．？！?! 　\\n\\t]+", with: "", options: .regularExpression)
+
+        // 抑制対象となる語尾ハルシネーションパターン（元の発話に含まれていない場合のみ安全に除去）
+        // (1) 〜ですね / 〜でしたね
+        // (2) 〜ですか / 〜でしょうか
+        // (3) 〜ますね / 〜ましたね
+        let rules: [(token: String, pattern: String, template: String)] = [
+            ("ですね", "([^\\n 　\t]+?)ですね([。？！?!]*)$", "$1。"),
+            ("でしたね", "([^\\n 　\t]+?)でしたね([。？！?!]*)$", "$1。"),
+            ("ですか", "([^\\n 　\t]+?)ですか[？?。]*$", "$1。"),
+            ("でしょうか", "([^\\n 　\t]+?)でしょうか[？?。]*$", "$1。"),
+            ("ますね", "([^\\n 　\t]+?)ますね([。？！?!]*)$", "$1。"),
+            ("ましたね", "([^\\n 　\t]+?)ましたね([。？！?!]*)$", "$1。"),
+        ]
+
+        for rule in rules {
+            if !strippedInput.contains(rule.token) {
+                if let regex = try? NSRegularExpression(pattern: rule.pattern, options: []) {
+                    let range = NSRange(location: 0, length: (text as NSString).length)
+                    if let match = regex.firstMatch(in: text, options: [], range: range) {
+                        let stem = (match.numberOfRanges > 1 && match.range(at: 1).location != NSNotFound) ? (text as NSString).substring(with: match.range(at: 1)) : ""
+                        // 「どうですか」「いかがですか」などの自然な疑問詞表現は体言止めの語尾補完ではないため除外
+                        if (rule.token == "ですか" || rule.token == "でしょうか") &&
+                           (stem.hasSuffix("どう") || stem.hasSuffix("いかが") || stem.hasSuffix("なに") || stem.hasSuffix("何")) {
+                            continue
+                        }
+                        text = regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: rule.template)
+                    }
+                }
+            }
+        }
+
+        // 連続した句点の正規化
+        while text.contains("。。") {
+            text = text.replacingOccurrences(of: "。。", with: "。")
+        }
+
+        return text
+    }
+
     /// LLMの出力から余分な前置きラベルや引用符を除去・サニタイズする
-    public func sanitizeLLMOutput(_ rawText: String, fallback: String) -> String {
+    /// - Parameters:
+    ///   - rawText: LLMの生の出力文字列
+    ///   - originalInput: ユーザーの元の音声認識テキスト（指定時、AIによる勝手な語尾補完ハルシネーションを抑制）
+    ///   - fallback: 解析失敗時等のフォールバック文字列
+    public func sanitizeLLMOutput(_ rawText: String, originalInput: String? = nil, fallback: String) -> String {
         var text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return fallback }
 
@@ -402,6 +454,11 @@ public final class LLMService {
            (text.hasPrefix("\"") && text.hasSuffix("\"")) ||
            (text.hasPrefix("'") && text.hasSuffix("'"))) {
             text = String(text.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // originalInput が渡されている場合、元の発話テキストに存在しない勝手な語尾補完（ハルシネーション）を抑制
+        if let orig = originalInput, !orig.isEmpty {
+            text = Self.suppressHallucinatedEndings(output: text, originalInput: orig)
         }
 
         guard !text.isEmpty else { return fallback }
@@ -578,6 +635,11 @@ public final class LLMService {
               - 適切な句読点（、。）や約物の補完（例:「えーっとこれは」➔「えーっと、これは」）
               - 異様に長すぎる引き伸ばし音の整音（例:「えーーーーっと」➔「えーっと」）
 
+            【★最重要規則 4: 勝手な語尾補完・言葉の付け足し（ハルシネーション）の厳禁】
+            - 入力テキストに存在しない言葉や語尾（「〜ですね」「〜ですか？」「〜でしょうか」「〜ました」「〜します」「〜と思います」等）を勝手に補完・捏造・付け足すことは【重大な誤作動（ハルシネーション）】として固く禁止されています。
+            - 話者が文末を言い切らずに終わったり、体言止め（名詞止め）で終わっている場合（例: 「明日の会議の資料」「確認の件」「新機能のテスト」等）、勝手に推測して「〜ですね」「〜ですか？」「〜します」などの語尾・述語を補ってはなりません。必ず入力された体言止めのまま（「明日の会議の資料。」等）出力してください。
+            - 入力テキストにない質問化（勝手に「〜ですか？」と疑問文にする）や相槌化（勝手に「〜ですね」とする）は一切禁止です。
+
             【補正ルール（口語モード）】
             1. 言語と約物の整合性（英語・多言語の厳格維持）:
                - 入力テキストの言語（日本語・英語等）を厳格に維持してください。英語の発話内容を勝手に日本語に翻訳したり、日本語の約物を付与してはなりません。
@@ -631,6 +693,10 @@ public final class LLMService {
               - 砕けた口語表現（「〜じゃん」「〜だし」等）がある場合のみ、文脈に応じた整った表現（常体なら「〜である」、敬体なら「〜です」）に整える
               - 適切な句読点（、。）や約物の補完
 
+            【★最重要規則 3: 勝手な語尾補完・言葉の付け足し（ハルシネーション）の厳禁】
+            - 入力テキストに存在しない言葉や語尾（「〜ですね」「〜ですか？」「〜でしょうか」等）を勝手に補完・捏造・付け足すことは【重大な誤作動（ハルシネーション）】として固く禁止されています。
+            - 話者が体言止め（名詞止め）で話した場合（例: 「議事録の送付について」「進捗状況」等）、勝手に「〜ですね」「〜でしょうか」「〜します」と補わず、端正な体言止めまたは発話に忠実な形で出力してください。
+
             【補正ルール（文章モード）】
             1. 言語と約物の整合性（英語・多言語の厳格維持）:
                - 入力テキストの言語（日本語・英語等）を厳格に維持してください。英語の発話内容を勝手に日本語に翻訳したり、日本語の約物を付与してはなりません。
@@ -659,8 +725,9 @@ public final class LLMService {
         fullPrompt += """
 
 
-        【★最重要規則: 入力文末・語尾の完全保持（省略・欠落の厳禁）】
+        【★最重要規則: 入力文末・語尾の完全保持と勝手な語尾補完の厳禁】
         - 入力テキストの末尾・最後の言葉・語尾（「言及した」「言及しています」「〜です」「〜ます」「〜ですよね」「〜と思います」等）を絶対に省略したり、途中で文章を打ち切ってはなりません。話者が発声した最後の1文字まで完全に保持して出力してください。
+        - 同時に、入力テキストにない語尾（「〜ですね」「〜ですか？」「〜でしょうか」等）を勝手に捏造・補完して付け足すことはハルシネーションであり厳禁です。
         """
 
         return fullPrompt

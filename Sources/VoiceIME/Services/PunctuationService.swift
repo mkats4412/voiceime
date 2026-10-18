@@ -329,13 +329,22 @@ public final class PunctuationService {
             result = regexNounContext.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "改行$1")
         }
 
-        // 名詞としての「改行」および「開業」（直後に助詞「の・を・が・は・に・で・も・と」や複合語・動詞が続く場合）を除外する否定先読み
-        let notNounOrRealKaigyo = "(?![のをがはにでもとやへかコキ位文テル設機すし医届日資予準祝当以])"
+        // 救済対象となる「改行」「開業」「かいぎょう」音声コマンド表現
+        // 1) 語尾付き（Whisper/LLMが「改行」を「開業ですね」「開業しました」「開業です」等と誤認識・語尾補完したケース）
+        let kaigyoWithSuffix = "(?:改行|開業|かいぎょう)(?:ですね[ーえ]?|でしたね[ーえ]?|しました|します|です|でした)"
+        // 2) 単体（「改行」「開業」「かいぎょう」）
+        let kaigyoPlain = "(?:改行|開業|かいぎょう)"
+        // 単体の場合に名詞・複合語・動詞として除外する否定先読み
+        let notNounOrRealKaigyoForPlain = "(?![のをがはにでもとやへかコキ位文テル設機すし医届日資予準祝当以])"
+        // 語尾付きの場合に複合語として除外する否定先読み
+        let notCompoundForSuffix = "(?![コード|キー|位置|文字|機能|設定|ルール|医|届|日|資|予|準|祝|当|以|設|機])"
+
+        let kaigyoCommandPattern = "(?:\(kaigyoWithSuffix)\(notCompoundForSuffix)|\(kaigyoPlain)\(notNounOrRealKaigyoForPlain))"
 
         // パターン1: 文末表現（ですね、ますね、です、ます、ました、でした、ください、お願いします、思います、でしょうか、ですか等）
-        // の直後（読点・句点・改行・空白を挟んでもよい）に単独の「開業」「かいぎょう」「改行」が来る場合
+        // の直後（読点・句点・改行・空白を挟んでもよい）に「開業ですね」「開業しました」「開業」「改行」等が来る場合
         let sentenceEndings = "ですよねー|ですよねえ|ですねー|ですねえ|ですよー|ますよねー|ますよねえ|ますねー|ますねえ|ますよー|でしたよね|ましたよね|ませんよね|ですよね|ますよね|ですね|ですよ|ますね|ますよ|でしたね|でしたよ|ましたね|ましたよ|ませんね|ませんよ|ございます|ございました|と思います|と考えます|とのことです|ませんでした|でした|ました|ません|でしょうか|ですか|ますか|でしたか|ましたか|ください|お願いします|お願いいたします|です|ます|だ|である|だった|だよ|だね|だな|かな|かしら"
-        let patternAfterEnding = "(\(sentenceEndings))([、。，．？！?!\\n 　\t]*)(?:改行|開業|かいぎょう)\(notNounOrRealKaigyo)([、。，．\\n 　\t]*)"
+        let patternAfterEnding = "(\(sentenceEndings))([、。，．？！?!\\n 　\t]*)\(kaigyoCommandPattern)([、。，．\\n 　\t]*)"
         if let regex1 = try? NSRegularExpression(pattern: patternAfterEnding, options: []) {
             let nsString = result as NSString
             let matches = regex1.matches(in: result, options: [], range: NSRange(location: 0, length: nsString.length))
@@ -355,8 +364,8 @@ public final class PunctuationService {
             }
         }
 
-        // パターン2: 句読点や改行の直後に単独で「開業。」「かいぎょう。」「改行。」が挟まり、次の文へ続くケース
-        let standaloneBetweenSentences = "([、。，．？！?!\\n]+)[ 　\t]*(?:改行|開業|かいぎょう)\(notNounOrRealKaigyo)[ 　\t]*[、。，．\\n]*([ 　\t]*)"
+        // パターン2: 句読点や改行の直後に「開業ですね」「開業しました」「開業」「改行」等が挟まり、次の文へ続くケース
+        let standaloneBetweenSentences = "([、。，．？！?!\\n]+)[ 　\t]*\(kaigyoCommandPattern)[ 　\t]*[、。，．\\n]*([ 　\t]*)"
         if let regex2 = try? NSRegularExpression(pattern: standaloneBetweenSentences, options: []) {
             let nsString = result as NSString
             let matches = regex2.matches(in: result, options: [], range: NSRange(location: 0, length: nsString.length))
@@ -371,6 +380,37 @@ public final class PunctuationService {
                     punct = "。"
                 }
                 result = (result as NSString).replacingCharacters(in: match.range, with: "\(punct)\n")
+            }
+        }
+
+        // パターン3: 行頭・文頭・単独の「開業ですね」「開業しました」「開業」「改行」等（前後に文字がないか、改行のみ）
+        let standalonePattern = "(?:^|\\n)[ 　\t]*\(kaigyoCommandPattern)[ 　\t]*[、。，．\\n]*$"
+        if let regex3 = try? NSRegularExpression(pattern: standalonePattern, options: []) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regex3.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "\n")
+        }
+
+        // パターン4: 文末（テキスト末尾）に直接付いた「開業ですね」「開業しました」等の救済
+        // 例: 「明日の打ち合わせの件開業ですね」➔「明日の打ち合わせの件。\n」
+        // （本物の「〜を開業しました」「新規開業しました」等を除外）
+        if let regexTrailing = try? NSRegularExpression(
+            pattern: "([^\\n 　\t]{2,})[ 　\t]*\(kaigyoWithSuffix)[ 　\t]*[、。，．？！?!\\n]*$",
+            options: []
+        ) {
+            let nsString = result as NSString
+            if let match = regexTrailing.firstMatch(in: result, options: [], range: NSRange(location: 0, length: nsString.length)) {
+                let preceding = nsString.substring(with: match.range(at: 1))
+                // 本物の「〜を開業しました」「新規開業しました」等を除外
+                let isRealKaigyo = preceding.hasSuffix("を") || preceding.hasSuffix("が") ||
+                    preceding.hasSuffix("に") || preceding.hasSuffix("で") ||
+                    preceding.hasSuffix("へ") || preceding.hasSuffix("から") ||
+                    preceding.hasSuffix("新規") || preceding.hasSuffix("独立") ||
+                    preceding.hasSuffix("店舗") || preceding.hasSuffix("医院") ||
+                    preceding.hasSuffix("クリニック")
+                if !isRealKaigyo {
+                    let punct = (preceding.hasSuffix("？") || preceding.hasSuffix("?")) ? "" : ((preceding.hasSuffix("！") || preceding.hasSuffix("!")) ? "" : "。")
+                    result = nsString.replacingCharacters(in: match.range, with: "\(preceding)\(punct)\n")
+                }
             }
         }
 
