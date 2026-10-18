@@ -11,15 +11,27 @@ public final class PunctuationService {
     public func format(text: String, isJapanese: Bool) -> String {
         guard !text.isEmpty else { return text }
 
-        // 1. ユーザー辞書ルールの適用（「改行」➔ \n 等）
-        var formatted = DictionaryService.shared.apply(
-            text: text,
+        var formatted = text
+
+        // 0-a. 辞書置換（「改行」➔ \n）の前に、日本語・英語の音声コマンド「改行」「開業」「かいぎょう」「new line」「new paragraph」と前後の句読点（。、.,）を一括正規化
+        // これにより「改行。」や「New line.」が辞書置換で「\n。」となって次の行頭に「。」だけ残る現象を根絶する
+        formatted = normalizeNewlineVoiceCommand(formatted)
+
+        // 1. ユーザー辞書ルールの適用（「改行」➔ \n、括弧ルール等）
+        formatted = DictionaryService.shared.apply(
+            text: formatted,
             rules: AppSettings.shared.dictionaryRules
         )
 
+        // 1-b. 括弧・引用符（「」、（）、()、[]、{}、"" 等）の直後や閉じ括弧の直前・直後に混入した不要な句点・ピリオド・読点を除去
+        formatted = cleanupBracketPunctuation(formatted)
+
+        // 0-b. 辞書適用後にも残っている「開業」「かいぎょう」「new line」および行頭の孤立句読点を正規化
+        formatted = normalizeNewlineVoiceCommand(formatted)
+
         guard isJapanese else { return formatted }
 
-        // 0. 「〜です。よね」「〜でしょうか？ね」「〜ですか？ね」など、文末表現と終助詞が句読点や空白で誤って分断されたケースを最優先で修復
+        // 0-c. 「〜です。よね」「〜でしょうか？ね」「〜ですか？ね」など、文末表現と終助詞が句読点や空白で誤って分断されたケースを最優先で修復
         // 例: 「あるんです。よね」➔「あるんですよね」
         // 例: 「どうでしょうか？ねぇ」➔「どうでしょうかねぇ」
         // 例: 「どうでしょうか？ね？」➔「どうでしょうかね？」
@@ -71,21 +83,303 @@ public final class PunctuationService {
             "です", "ます"
         ]
 
+        // 文末表現の直後に「、\n」がある場合は「。\n」に整える
+        let commaBeforeNewlinePattern = "(\(fullEndings.joined(separator: "|")))[、，][ 　]*\\n"
+        if let regexCBN = try? NSRegularExpression(pattern: commaBeforeNewlinePattern, options: []) {
+            let range = NSRange(location: 0, length: (formatted as NSString).length)
+            formatted = regexCBN.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1。\n")
+        }
+
         let endingsPattern = "(\(fullEndings.joined(separator: "|")))(?![がからけどのでのにしたらたりならよねかもわぞぜさ])($|[ 　\t]+|(?=[\\nあ-んア-ン一-龥a-zA-Z0-9]))"
         if let regexE = try? NSRegularExpression(pattern: endingsPattern, options: []) {
             let range = NSRange(location: 0, length: (formatted as NSString).length)
             formatted = regexE.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1。")
         }
 
-        // 6. 重複句読点および不自然な空白のクリーンアップ
+        // 6. 重複句読点および不自然な空白・行頭孤立句読点・括弧周辺の句読点クリーンアップ
         formatted = cleanupDuplicatePunctuation(formatted)
 
         return formatted
     }
 
-    /// 重複した句読点や不自然な空白を整理
-    public func cleanupDuplicatePunctuation(_ text: String) -> String {
+    /// 括弧・引用符（「」、『』、（）、()、[]、{}、""、''）の前後（開き括弧の前後・閉じ括弧の前後）に
+    /// 勝手に入った句点「。」やピリオド「.」・読点「、」を除去し、「かぎかっことじ」や「まるかっことじ」「なみかっことじ」等が
+    /// 「「とち」」「(とち」「{とち」等に誤変換されたケースも、対応する括弧種別ごとに修復する
+    public func cleanupBracketPunctuation(_ text: String) -> String {
+        guard !text.isEmpty else { return text }
         var result = text
+
+        // 全角の丸括弧・角括弧・波括弧が混在している場合は、辞書ルールと統一して半角 () [] {} に揃える
+        result = result
+            .replacingOccurrences(of: "（", with: "(")
+            .replacingOccurrences(of: "）", with: ")")
+            .replacingOccurrences(of: "［", with: "[")
+            .replacingOccurrences(of: "］", with: "]")
+            .replacingOccurrences(of: "｛", with: "{")
+            .replacingOccurrences(of: "｝", with: "}")
+
+        // マッチ位置より前のテキスト（およびマッチ文字列自身に含まれる括弧種別）から対応する閉じ括弧を判定するヘルパー
+        func resolveMatchingCloseBracket(for matchRange: NSRange, in current: String) -> String {
+            let nsCurrent = current as NSString
+            let prefix = nsCurrent.substring(to: max(0, min(matchRange.location, nsCurrent.length)))
+            let parenOpen = prefix.filter { $0 == "(" }.count
+            let parenClose = prefix.filter { $0 == ")" }.count
+            if parenOpen > parenClose { return ")" }
+
+            let braceOpen = prefix.filter { $0 == "{" }.count
+            let braceClose = prefix.filter { $0 == "}" }.count
+            if braceOpen > braceClose { return "}" }
+
+            let bracketOpen = prefix.filter { $0 == "[" }.count
+            let bracketClose = prefix.filter { $0 == "]" }.count
+            if bracketOpen > bracketClose { return "]" }
+
+            let quoteOpen = prefix.filter { $0 == "「" }.count
+            let quoteClose = prefix.filter { $0 == "」" }.count
+            if quoteOpen > quoteClose { return "」" }
+
+            // プレフィックスに未閉じ括弧がない場合（「ステータス正常。取り{」等）、マッチ文字列内の括弧種別から判定
+            let matchedSub = nsCurrent.substring(with: matchRange)
+            if matchedSub.contains("{") || matchedSub.contains("}") { return "}" }
+            if matchedSub.contains("[") || matchedSub.contains("]") { return "]" }
+            if matchedSub.contains("(") || matchedSub.contains(")") { return ")" }
+
+            return "」"
+        }
+
+        // 0-a. 「〜かっことじ」や「とじ〜かっこ」の「とじ」が「とち」「土地」「どち」「と字」「都知」「都地」「都市」「取り」等として残ってしまったケースを対応する閉じ括弧に修復
+        if let regexBrokenCloseSuffix = try? NSRegularExpression(
+            pattern: "[。、，．\\.,]*[ 　\t]*[「(\\[\\{][ 　\t]*[。、，．\\.,]*[ 　\t]*(?:とじ|閉じ|とじる|閉じる|綴じ|綴じる|と字|戸字|閉字|途次|刀自|十時|当時|同時|とし|トシ|都市|年|どじ|ドジ|とち|土地|都知|都地|途地|取り|とり|トリ|とぢ|トジ|トチ|どち|栃)[ 　\t]*[。、，．\\.,]*[」』)\\]\\}]?",
+            options: []
+        ) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            if let match = regexBrokenCloseSuffix.firstMatch(in: result, options: [], range: range) {
+                let targetClose = resolveMatchingCloseBracket(for: match.range, in: result)
+                result = regexBrokenCloseSuffix.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: targetClose)
+            }
+        }
+        if let regexBrokenClosePrefix = try? NSRegularExpression(
+            pattern: "[。、，．\\.,]*[ 　\t]*(?:とじ|閉じ|とじる|閉じる|綴じ|綴じる|と字|戸字|閉字|途次|刀自|十時|当時|同時|とし|トシ|都市|年|どじ|ドジ|とち|土地|都知|都地|途地|取り|とり|トリ|とぢ|トジ|トチ|どち|栃)[ 　\t]*[。、，．\\.,]*[ 　\t]*[「」』(\\)\\[\\]\\{\\}][ 　\t]*[。、，．\\.,]*[」』)\\]\\}]?",
+            options: []
+        ) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            if let match = regexBrokenClosePrefix.firstMatch(in: result, options: [], range: range) {
+                let targetClose = resolveMatchingCloseBracket(for: match.range, in: result)
+                result = regexBrokenClosePrefix.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: targetClose)
+            }
+        }
+
+        // 0-b. 既に開き括弧（「、(、[、{）が開いている状態で、対応する閉じ括弧が1つもなく2つ目の同じ開き括弧が出現している場合、2つ目を閉じ括弧に修復
+        let bracketPairs: [(Character, String)] = [("「", "」"), ("(", ")"), ("[", "]"), ("{", "}")]
+        for (openChar, closeStr) in bracketPairs {
+            let openCount = result.filter { $0 == openChar }.count
+            let closeCount = result.filter { String($0) == closeStr }.count
+            if openCount == 2 && closeCount == 0, let lastOpenRange = result.range(of: String(openChar), options: .backwards) {
+                result.replaceSubrange(lastOpenRange, with: closeStr)
+            }
+        }
+
+        // 0-c. 「並(ステータス正常、と字並括弧です)」のように開きが「{」「[」「「」に置換されたあと、
+        //      対応する「(」が0個なのに末尾等に孤立した「)」が残っている場合はその孤立「)」を除去
+        let remainingParenOpen = result.filter { $0 == "(" }.count
+        let remainingParenClose = result.filter { $0 == ")" }.count
+        let hasOtherBrackets = result.contains("{") || result.contains("[") || result.contains("「")
+        if remainingParenOpen == 0 && remainingParenClose > 0 && hasOtherBrackets {
+            result = result.replacingOccurrences(of: ")", with: "")
+        }
+
+        // 1. 開き括弧の前後（直前および直後）に勝手に入った句点・読点・ピリオド・カンマを除去
+        // （例: 。「。なかなか ➔ 「なかなか / .( .test ➔ (test / .{.body ➔ {body）
+        if let regexAroundOpen = try? NSRegularExpression(
+            pattern: "[ 　\t]*[。、，．\\.,]*[ 　\t]*([「『（(\\[［\\{｛【〈《])[ 　\t]*[。、，．\\.,]*[ 　\t]*",
+            options: []
+        ) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexAroundOpen.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1")
+        }
+
+        // 2. 閉じ括弧の前後（直前および直後）に勝手に入った句点・読点・ピリオド・カンマを除去
+        // （例: なかなかうまくいかないな。」。 ➔ なかなかうまくいかないな」 / test.). ➔ test)）
+        // ※ 直前の？や！は疑問・感嘆の意味を持つため保持し、直後の「。」「.」のみ除去する
+        if let regexBeforeClose = try? NSRegularExpression(
+            pattern: "[ 　\t]*[。、，．\\.,]+[ 　\t]*([」』）)\\]］\\}｝】〉》])",
+            options: []
+        ) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexBeforeClose.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1")
+        }
+        if let regexAfterClose = try? NSRegularExpression(
+            pattern: "([」』）)\\]］\\}｝】〉》])[ 　\t]*[。、，．\\.,]+",
+            options: []
+        ) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexAfterClose.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1")
+        }
+
+        // 3. ダブルクォート "..." / シングルクォート '...' のペア前後および内側の不要な句点「。」除去
+        if let regexDoubleQuote = try? NSRegularExpression(
+            pattern: "[。、，．]*[ 　\t]*\"[ 　\t]*[。、，．]*([^\"\\n]+?)[ 　\t]*[。、，．]*\"[ 　\t]*[。、，．\\.]*",
+            options: []
+        ) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexDoubleQuote.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "\"$1\"")
+        }
+
+        // 3-b. シングルクォート '...' （日本語を含むペアのみ。英語のアポストロフィ don't 等は対象外）の前後・内側の不要な句点を除去
+        if let regexSingleQuote = try? NSRegularExpression(
+            pattern: "[。、，．]*[ 　\t]*'[ 　\t]*[。、，．]*([^'\\n]*?[ぁ-んァ-ヶ一-龥][^'\\n]*?)[ 　\t]*[。、，．]*'[ 　\t]*[。、，．\\.]*",
+            options: []
+        ) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexSingleQuote.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "'$1'")
+        }
+
+        // 3-c. 閉じ括弧や引用符の直後に残ってしまった誤認識閉じ語（「たち、と言った」「とじと言った」等）の除去
+        let closers = "」』\"'）)\\]\\}｝】〉》"
+        let brokenGarbage = "(?:たち|タチ|立ち|断ち|裁ち|発ち|とじ|閉じ|とじる|閉じる|綴じ|綴じる|と字|戸字|閉字|途次|刀自|十時|当時|同時|とし|トシ|都市|年|どじ|ドジ|とち|土地|都知|都地|途地|取り|とり|トリ|とぢ|トジ|トチ|どち|栃)"
+        let speechVerbs = "(と(?:[。、\\n$]|言|い[うい]|述|答|話|書|思|叫|尋|聞|つぶや|語|返|伝|主張|説明))"
+        if let regexLingering = try? NSRegularExpression(
+            pattern: "([\(closers)])[ 　\t]*\(brokenGarbage)[、，]?[ 　\t]*\(speechVerbs)",
+            options: []
+        ) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexLingering.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1$2")
+        }
+
+        // 3-d. 未閉鎖の引用符（"..." または '...'）の自動修復
+        // 音声認識で閉じクォートが欠落して「彼は'こんにちは と言った」や「彼は'こんにちは」となった場合、発言動詞の直前または文末で安全に閉じる
+        for q in ["'", "\""] {
+            let count: Int
+            if q == "'" {
+                // 英語のアポストロフィ（don't, it's等）を除外してカウント
+                if let regexNonAlphaApos = try? NSRegularExpression(pattern: "(?<![a-zA-Z])'|'(?![a-zA-Z])", options: []) {
+                    count = regexNonAlphaApos.numberOfMatches(in: result, options: [], range: NSRange(location: 0, length: (result as NSString).length))
+                } else {
+                    count = result.filter { String($0) == q }.count
+                }
+            } else {
+                count = result.filter { String($0) == q }.count
+            }
+
+            if count % 2 == 1 {
+                // パターン1: 発言動詞・引用助詞（「と言った」「と言う」「と。」等）の直前で閉じる
+                let verbPattern = "(\(q)[^\(q)\\n]+?)[ 　\t]*(?:\(brokenGarbage)[、，]?[ 　\t]*)?\(speechVerbs)"
+                if let regexVerb = try? NSRegularExpression(pattern: verbPattern, options: []) {
+                    let range = NSRange(location: 0, length: (result as NSString).length)
+                    if regexVerb.firstMatch(in: result, options: [], range: range) != nil {
+                        result = regexVerb.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1\(q)$2")
+                        continue
+                    }
+                }
+
+                // パターン2: 文末の未閉鎖クォートを補正（シングルクォートの場合は日本語または単語境界を含むもののみ）
+                let endPattern: String
+                if q == "'" {
+                    endPattern = "((?<![a-zA-Z])\(q)[^\(q)\\n]*?[ぁ-んァ-ヶ一-龥][^\(q)\\n]*?)[ 　\t]*([。．\\.]?)$"
+                } else {
+                    endPattern = "(\(q)[^\(q)\\n]+?)[ 　\t]*([。．\\.]?)$"
+                }
+                if let regexEnd = try? NSRegularExpression(pattern: endPattern, options: []) {
+                    let range = NSRange(location: 0, length: (result as NSString).length)
+                    result = regexEnd.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1\(q)$2")
+                }
+            }
+        }
+
+        return result
+    }
+
+    /// 音声コマンド「改行」（および英語の "new line" / "new paragraph"）が Whisper / LLM で「開業」「かいぎょう」「改行。」等と変換されたケースを検出し `\n` に変換する
+    /// また、文中の「開業のテスト」のような音声入力文脈での同音異義語も「改行」に補正する
+    public func normalizeNewlineVoiceCommand(_ text: String) -> String {
+        var result = text
+
+        // 英語の "new paragraph" / "new line" / "newline" / "next line" 音声コマンド正規化（前後のカンマ・ピリオド・空白を吸収）
+        if let regexEnParagraph = try? NSRegularExpression(
+            pattern: "([\\.,?!]?)[ 　\t]*\\b[Nn]ew[ 　]*paragraph\\b(?![ 　]+(?:in|of|for))[ 　\t]*[\\.,]*[ 　\t]*",
+            options: []
+        ) {
+            let nsString = result as NSString
+            let matches = regexEnParagraph.matches(in: result, options: [], range: NSRange(location: 0, length: nsString.length))
+            for match in matches.reversed() {
+                let leading = (match.numberOfRanges > 1 && match.range(at: 1).location != NSNotFound) ? nsString.substring(with: match.range(at: 1)) : ""
+                let punct = (leading == "?" || leading == "!") ? leading : (leading.isEmpty ? "" : ".")
+                result = (result as NSString).replacingCharacters(in: match.range, with: "\(punct)\n\n")
+            }
+        }
+        if let regexEnNewline = try? NSRegularExpression(
+            pattern: "([\\.,?!]?)[ 　\t]*\\b(?:[Nn]ew|[Nn]ext)[ 　]*line\\b(?![ 　]+(?:character|characters|code|in|of|for))[ 　\t]*[\\.,]*[ 　\t]*",
+            options: []
+        ) {
+            let nsString = result as NSString
+            let matches = regexEnNewline.matches(in: result, options: [], range: NSRange(location: 0, length: nsString.length))
+            for match in matches.reversed() {
+                let leading = (match.numberOfRanges > 1 && match.range(at: 1).location != NSNotFound) ? nsString.substring(with: match.range(at: 1)) : ""
+                let punct = (leading == "?" || leading == "!") ? leading : (leading.isEmpty ? "" : ".")
+                result = (result as NSString).replacingCharacters(in: match.range, with: "\(punct)\n")
+            }
+        }
+
+        // パターン0: 文中の名詞として「改行」を意図している文脈（例: 「今日は開業のテストします」「開業コード」「開業の位置」）の同音異義語補正
+        if let regexNounContext = try? NSRegularExpression(
+            pattern: "(?:開業|かいぎょう)(のテスト|テスト|コード|キー|位置|文字|機能|設定|ルール|がうまく|をテスト)",
+            options: []
+        ) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexNounContext.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "改行$1")
+        }
+
+        // 名詞としての「改行」および「開業」（直後に助詞「の・を・が・は・に・で・も・と」や複合語・動詞が続く場合）を除外する否定先読み
+        let notNounOrRealKaigyo = "(?![のをがはにでもとやへかコキ位文テル設機すし医届日資予準祝当以])"
+
+        // パターン1: 文末表現（ですね、ますね、です、ます、ました、でした、ください、お願いします、思います、でしょうか、ですか等）
+        // の直後（読点・句点・改行・空白を挟んでもよい）に単独の「開業」「かいぎょう」「改行」が来る場合
+        let sentenceEndings = "ですよねー|ですよねえ|ですねー|ですねえ|ですよー|ますよねー|ますよねえ|ますねー|ますねえ|ますよー|でしたよね|ましたよね|ませんよね|ですよね|ますよね|ですね|ですよ|ますね|ますよ|でしたね|でしたよ|ましたね|ましたよ|ませんね|ませんよ|ございます|ございました|と思います|と考えます|とのことです|ませんでした|でした|ました|ません|でしょうか|ですか|ますか|でしたか|ましたか|ください|お願いします|お願いいたします|です|ます|だ|である|だった|だよ|だね|だな|かな|かしら"
+        let patternAfterEnding = "(\(sentenceEndings))([、。，．？！?!\\n 　\t]*)(?:改行|開業|かいぎょう)\(notNounOrRealKaigyo)([、。，．\\n 　\t]*)"
+        if let regex1 = try? NSRegularExpression(pattern: patternAfterEnding, options: []) {
+            let nsString = result as NSString
+            let matches = regex1.matches(in: result, options: [], range: NSRange(location: 0, length: nsString.length))
+            for match in matches.reversed() {
+                let ending = (match.numberOfRanges > 1 && match.range(at: 1).location != NSNotFound) ? nsString.substring(with: match.range(at: 1)) : ""
+                let middlePunct = (match.numberOfRanges > 2 && match.range(at: 2).location != NSNotFound) ? nsString.substring(with: match.range(at: 2)) : ""
+                let punct: String
+                if middlePunct.contains("？") || middlePunct.contains("?") ||
+                   ending.hasSuffix("か") {
+                    punct = "？"
+                } else if middlePunct.contains("！") || middlePunct.contains("!") {
+                    punct = "！"
+                } else {
+                    punct = "。"
+                }
+                result = (result as NSString).replacingCharacters(in: match.range, with: "\(ending)\(punct)\n")
+            }
+        }
+
+        // パターン2: 句読点や改行の直後に単独で「開業。」「かいぎょう。」「改行。」が挟まり、次の文へ続くケース
+        let standaloneBetweenSentences = "([、。，．？！?!\\n]+)[ 　\t]*(?:改行|開業|かいぎょう)\(notNounOrRealKaigyo)[ 　\t]*[、。，．\\n]*([ 　\t]*)"
+        if let regex2 = try? NSRegularExpression(pattern: standaloneBetweenSentences, options: []) {
+            let nsString = result as NSString
+            let matches = regex2.matches(in: result, options: [], range: NSRange(location: 0, length: nsString.length))
+            for match in matches.reversed() {
+                let leading = (match.numberOfRanges > 1 && match.range(at: 1).location != NSNotFound) ? nsString.substring(with: match.range(at: 1)) : ""
+                let punct: String
+                if leading.contains("？") || leading.contains("?") {
+                    punct = "？"
+                } else if leading.contains("！") || leading.contains("!") {
+                    punct = "！"
+                } else {
+                    punct = "。"
+                }
+                result = (result as NSString).replacingCharacters(in: match.range, with: "\(punct)\n")
+            }
+        }
+
+        return result
+    }
+
+    /// 重複した句読点や不自然な空白・行頭の孤立句読点（\n。\n 等）・括弧周辺の句読点を整理
+    public func cleanupDuplicatePunctuation(_ text: String) -> String {
+        var result = cleanupBracketPunctuation(text)
 
         // 「です。よね」「ます。よね」「でしょうか？ね」等の誤った句読点挿入の修復
         let brokenParticlePattern = "([でまし]す|[でま]した|ません|ございま[すした]|でしょうか|ですか|ますか|でしたか|ましたか)([。、？！][ 　]*)(よね|よな|よ|ねえ|ねー|ねぇ|ね|かな|かね|し|もん|もの|さ)"
@@ -94,12 +388,38 @@ public final class PunctuationService {
             result = regexBP.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1$3")
         }
 
+        // 改行前後の不要な空白を整理
+        if let regexNewlineSpace = try? NSRegularExpression(pattern: "[ 　\t]*\\n[ 　\t]*", options: []) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexNewlineSpace.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "\n")
+        }
+
+        // ★重要: 改行の直後（次の行の行頭）に孤立した句読点（「\n。」「\n。\n」「\n、」等）を完全に除去・吸収
+        // 1) 前の行末にすでに句読点がある場合（例: 「なかなか難しいですね。\n。\n次の入力」➔「なかなか難しいですね。\n次の入力」）
+        if let regexOrphanAfterPunct = try? NSRegularExpression(pattern: "([。、，．？！?!])\\n+[。、，．]+\\n*", options: []) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexOrphanAfterPunct.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1\n")
+        }
+        // 2) 前の行末に句読点がない場合（例: 「テスト\n。\n次の入力」➔「テスト。\n次の入力」）
+        if let regexOrphanPeriod = try? NSRegularExpression(pattern: "([^\\n。、，．？！?!])\\n+[。．]+\\n*", options: []) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexOrphanPeriod.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1。\n")
+        }
+        if let regexOrphanComma = try? NSRegularExpression(pattern: "([^\\n。、，．？！?!])\\n+[、，]+\\n*", options: []) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexOrphanComma.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1、\n")
+        }
+        // 3) 文字列全体の先頭に孤立した句読点がある場合も除去
+        if let regexLeadingPunct = try? NSRegularExpression(pattern: "^[。、，．]+\\n*", options: []) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexLeadingPunct.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "")
+        }
+
         // 連続・重複の除去
         result = result.replacingOccurrences(of: "。。", with: "。")
         result = result.replacingOccurrences(of: "、、", with: "、")
         result = result.replacingOccurrences(of: "、。", with: "。")
         result = result.replacingOccurrences(of: "。、", with: "。")
-        result = result.replacingOccurrences(of: "？？", with: "？")
         result = result.replacingOccurrences(of: "？？", with: "？")
         result = result.replacingOccurrences(of: "？。", with: "？")
         result = result.replacingOccurrences(of: "。？", with: "？")
@@ -107,6 +427,9 @@ public final class PunctuationService {
         result = result.replacingOccurrences(of: "。！", with: "！")
         result = result.replacingOccurrences(of: "、？", with: "？")
         result = result.replacingOccurrences(of: "、！", with: "！")
+        result = result.replacingOccurrences(of: "…、", with: "…")
+        result = result.replacingOccurrences(of: "、…", with: "…")
+        result = result.replacingOccurrences(of: "。…", with: "…")
 
         // 句読点の直後の余分な空白（日本語文字が続く場合）を除去
         if let regexSpace = try? NSRegularExpression(pattern: "([。、？！])[ 　]+(?=[あ-んア-ン一-龥])", options: []) {
@@ -144,41 +467,51 @@ public final class PunctuationService {
             result = String(result.dropLast()) + "。"
         }
 
+        // 最終仕上げとして括弧内・括弧直後の不要な句点・ピリオドを再度クリーンアップ
+        result = cleanupBracketPunctuation(result)
+
         return result
     }
 
-    /// リアルタイムプレビューでユーザーが見ていたテキスト（referenceLiveText）の句読点・区切りを
+    /// リアルタイムプレビューでユーザーが見ていたテキスト（referenceLiveText）の句読点・改行・区切りを
     /// 最終テキスト（Whisper / LLM 推敲結果）に厳格に同期・反映させる
     public func alignPunctuation(
         text: String,
         referenceLiveText: String,
         isJapanese: Bool
     ) -> String {
-        var formatted = format(text: text, isJapanese: isJapanese)
         let trimmedRef = referenceLiveText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var formatted = format(text: text, isJapanese: isJapanese)
 
         guard isJapanese, !trimmedRef.isEmpty else {
             return formatted
         }
 
+        let formattedRef = format(text: trimmedRef, isJapanese: isJapanese)
+
         // 句読点・空白・改行を除去した純粋な文字列比較
         let cleanText = stripPunctuation(formatted)
-        let cleanRef = stripPunctuation(trimmedRef)
+        let cleanRef = stripPunctuation(formattedRef)
 
         // 1. 純粋な発話内容が完全に一致する場合:
-        // ユーザーがプレビュー画面で見ていた referenceLiveText そのものの句読点構造を最優先
+        // ユーザーがプレビュー画面で見ていた formattedRef そのものの句読点・改行構造を最優先
         if cleanText == cleanRef {
-            return format(text: trimmedRef, isJapanese: isJapanese)
+            return formattedRef
         }
 
-        // 2. プレビューが遅延して末尾が途切れている場合（cleanRef が cleanText の前方一致）:
-        // 確定テキスト（formatted）の末尾の完全な文言を決して削らず、formatted を完全優先
+        // 2. プレビュー側に改行（\n）が存在するのに formatted 側で改行が失われている場合、改行位置を復元する
+        if formattedRef.contains("\n") && !formatted.contains("\n") {
+            formatted = restoreNewlines(in: formatted, from: formattedRef)
+        }
+
+        // 3. プレビューが遅延して末尾が途切れている場合（cleanRef が cleanText の前方一致）:
+        // 確定テキスト（formatted）の末尾の完全な文言を決して削らず、formatted を優先
         if cleanText.hasPrefix(cleanRef) {
             return cleanupDuplicatePunctuation(formatted)
         }
 
-        // 3. 疑問文の整合性
-        if trimmedRef.hasSuffix("？") || trimmedRef.hasSuffix("?") {
+        // 4. 疑問文の整合性
+        if formattedRef.hasSuffix("？") || formattedRef.hasSuffix("?") {
             if !formatted.hasSuffix("？") && !formatted.hasSuffix("?") {
                 if formatted.hasSuffix("。") || formatted.hasSuffix(".") {
                     formatted = String(formatted.dropLast()) + "？"
@@ -189,6 +522,32 @@ public final class PunctuationService {
         }
 
         return cleanupDuplicatePunctuation(formatted)
+    }
+
+    /// プレビュー文字列（reference）に含まれていた改行（\n）の位置を、確定テキスト（target）へ復元する
+    private func restoreNewlines(in target: String, from reference: String) -> String {
+        let refLines = reference.components(separatedBy: "\n")
+        guard refLines.count > 1 else { return target }
+
+        var result = target
+        for i in 0..<(refLines.count - 1) {
+            let cleanLine = stripPunctuation(refLines[i])
+            guard cleanLine.count >= 2 else { continue }
+            let suffixLen = min(4, cleanLine.count)
+            let anchor = String(cleanLine.suffix(suffixLen))
+            let escapedAnchor = NSRegularExpression.escapedPattern(for: anchor)
+            // アンカー文字列＋直後の句読点（。、？！）の直後に改行が入っていなければ挿入
+            let pattern = "(\(escapedAnchor)[。、，．？！?!]?)(?!\\n)"
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+                let nsResult = result as NSString
+                if let match = regex.firstMatch(in: result, options: [], range: NSRange(location: 0, length: nsResult.length)),
+                   match.numberOfRanges > 1, match.range(at: 1).location != NSNotFound {
+                    let matchedStr = nsResult.substring(with: match.range(at: 1))
+                    result = nsResult.replacingCharacters(in: match.range, with: "\(matchedStr)\n")
+                }
+            }
+        }
+        return result
     }
 
     /// 句読点や空白記号を除去したテキストを取得

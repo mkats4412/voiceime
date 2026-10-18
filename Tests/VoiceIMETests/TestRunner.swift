@@ -116,12 +116,12 @@ struct TestRunner {
         assert(service.apply(text: "Open quotespeechClose quote", rules: rules) == "「speech」")
 
         // 5. ダブルクォート ""
-        assert(service.apply(text: "ひらきダブルクォート引用ダブルクォートとじ", rules: rules) == "\"引用\"")
-        assert(service.apply(text: "Open double quotetextClose double quote", rules: rules) == "\"text\"")
+        assert(service.apply(text: "ひらきダブルクォート引用ダブルクォート", rules: rules) == "\"引用\"")
+        assert(service.apply(text: "Open double quotetextdouble quote", rules: rules) == "\"text\"")
 
         // 6. シングルクォート ''
-        assert(service.apply(text: "ひらきシングルクォート単語シングルクォートとじ", rules: rules) == "'単語'")
-        assert(service.apply(text: "Open single quotecharClose single quote", rules: rules) == "'char'")
+        assert(service.apply(text: "ひらきシングルクォート単語シングルクォート", rules: rules) == "'単語'")
+        assert(service.apply(text: "Open single quotecharsingle quote", rules: rules) == "'char'")
 
         // 7. 感嘆符 (!) / びっくりマーク（勝手に入った「。」「、」を巻き込んで「！」に置換）
         assert(service.apply(text: "頑張ります!。", rules: rules) == "頑張ります！")
@@ -654,6 +654,44 @@ struct TestRunner {
         let inQ3 = "どうでしょうか？ね？" // 途中で二重に？が入ったケースの修復
         let outQ3 = PunctuationService.shared.format(text: inQ3, isJapanese: true)
         assert(outQ3 == "どうでしょうかね？", "Double question particle repair failed: got \(outQ3)")
+
+        // 9. 音声コマンド「改行」が同音異義語「開業」や「改行。」と認識されたケースの改行（\n）復元＆孤立「。」防止テスト
+        let inKaigyo1 = "なかなか難しいですね、開業。次の入力は入りますか？"
+        let outKaigyo1 = PunctuationService.shared.format(text: inKaigyo1, isJapanese: true)
+        assert(outKaigyo1 == "なかなか難しいですね。\n次の入力は入りますか？", "Kaigyo homophone format failed: got \(outKaigyo1)")
+
+        let inKaigyoWithPeriod = "なかなか難しいですね、改行。次の入力は入りますか？"
+        let outKaigyoWithPeriod = PunctuationService.shared.format(text: inKaigyoWithPeriod, isJapanese: true)
+        assert(outKaigyoWithPeriod == "なかなか難しいですね。\n次の入力は入りますか？", "Kaigyo with period format failed: got \(outKaigyoWithPeriod)")
+
+        let inOrphanPeriodLine = "なかなか難しいですね。\n。\n次の入力は入りますか？"
+        let outOrphanPeriodLine = PunctuationService.shared.format(text: inOrphanPeriodLine, isJapanese: true)
+        assert(outOrphanPeriodLine == "なかなか難しいですね。\n次の入力は入りますか？", "Orphan period line cleanup failed: got \(outOrphanPeriodLine)")
+
+        let refLiveWithNewline = "なかなか難しいですね、\n次の入力は入りますか？"
+        let alignedKaigyo = PunctuationService.shared.alignPunctuation(
+            text: "なかなか難しいですね、開業。次の入力は入りますか？",
+            referenceLiveText: refLiveWithNewline,
+            isJapanese: true
+        )
+        assert(alignedKaigyo == "なかなか難しいですね。\n次の入力は入りますか？", "Kaigyo alignPunctuation failed: got \(alignedKaigyo)")
+
+        let alignedKaigyoWithNewlineAndPeriod = PunctuationService.shared.alignPunctuation(
+            text: "なかなか難しいですね。\n改行。\n次の入力は入りますか？",
+            referenceLiveText: "なかなか難しいですね。\n。\n次の入力は入りますか？",
+            isJapanese: true
+        )
+        assert(alignedKaigyoWithNewlineAndPeriod == "なかなか難しいですね。\n次の入力は入りますか？", "Kaigyo newline+period alignPunctuation failed: got \(alignedKaigyoWithNewlineAndPeriod)")
+
+        // 本来の語彙としての「開業」（開業する、開業医等）が誤って改行に変換されないことも検証
+        let inRealKaigyo = "来月クリニックを開業します"
+        let outRealKaigyo = PunctuationService.shared.format(text: inRealKaigyo, isJapanese: true)
+        assert(outRealKaigyo == "来月クリニックを開業します。", "Real Kaigyo word should be preserved: got \(outRealKaigyo)")
+
+        // 文中の名詞「改行のテスト」が「開業のテスト」と誤認識された場合に「改行のテスト」へ補正され、かつ途中で改行コードに化けないことを検証
+        let inKaigyoNounTest = "今日は開業のテストします。開業。これでできるかな？"
+        let outKaigyoNounTest = PunctuationService.shared.format(text: inKaigyoNounTest, isJapanese: true)
+        assert(outKaigyoNounTest == "今日は改行のテストします。\nこれでできるかな？", "Kaigyo noun + command test failed: got \(outKaigyoNounTest)")
 
         print("  -> Live Punctuation Formatting & PunctuationService passed!")
     }

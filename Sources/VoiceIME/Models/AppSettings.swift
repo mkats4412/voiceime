@@ -649,6 +649,20 @@ public final class AppSettings: ObservableObject {
                 cleanedRules.append(DictionaryRule(pattern: "([0-9]{3})([0-9]{4})", replacement: "〒$1-$2", isRegex: true, isEnabled: false))
             }
 
+            // クォートの「とじ」に関するルールを削除
+            cleanedRules.removeAll {
+                $0.pattern.contains("ダブル") && $0.pattern.contains("とじ") ||
+                $0.pattern.contains("ダブル") && $0.pattern.contains("閉じ") ||
+                $0.pattern.contains("シングル") && $0.pattern.contains("とじ") ||
+                $0.pattern.contains("シングル") && $0.pattern.contains("閉じ") ||
+                $0.pattern.contains("Close double quote") ||
+                $0.pattern.contains("close double quote") ||
+                $0.pattern.contains("Close single quote") ||
+                $0.pattern.contains("close single quote") ||
+                $0.pattern.contains("[\"”]") ||
+                $0.pattern.contains("['’]")
+            }
+
             // 記号ルールの自動追加マイグレーション
             for symbolRule in AppSettings.symbolDictionaryRules {
                 if !cleanedRules.contains(where: { $0.pattern == symbolRule.pattern }) {
@@ -688,12 +702,10 @@ public final class AppSettings: ObservableObject {
             DictionaryRule(pattern: "(ひらきかぎかっこ|かぎかっこ|開き鍵括弧|鍵括弧|[Oo]pen quote)", replacement: "「", isRegex: true, isEnabled: true),
 
             // ダブルクォート ""
-            DictionaryRule(pattern: "(ダブルクォートとじ|ダブルクォート閉じ|[Cc]lose double quote)", replacement: "\"", isRegex: true, isEnabled: true),
-            DictionaryRule(pattern: "(ひらきダブルクォート|開きダブルクォート|[Oo]pen double quote)", replacement: "\"", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "((?:ひらき|開き)?[ 　]*(?:ダブル|だぶる)[ 　]*(?:ク[ォオ]ー?[トド]|コー[トド]|くぉーと|くおーと)|[Oo]pen double quote|double quote)", replacement: "\"", isRegex: true, isEnabled: true),
 
             // シングルクォート ''
-            DictionaryRule(pattern: "(シングルクォートとじ|シングルクォート閉じ|[Cc]lose single quote)", replacement: "'", isRegex: true, isEnabled: true),
-            DictionaryRule(pattern: "(ひらきシングルクォート|開きシングルクォート|[Oo]pen single quote)", replacement: "'", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "((?:ひらき|開き)?[ 　]*(?:シングル|しんぐる)[ 　]*(?:ク[ォオ]ー?[トド]|コー[トド]|くぉーと|くおーと)|[Oo]pen single quote|single quote)", replacement: "'", isRegex: true, isEnabled: true),
 
             // 日本語の直後にある感嘆符 (！)（前後に勝手に入った「。」「、」「.」を巻き込んで「！」に置換）
             DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[ 　]*([!！]|びっくりまーく|びっくりマーク|感嘆符)[ 　]*[。、\\.,]*", replacement: "！", isRegex: true, isEnabled: true),
