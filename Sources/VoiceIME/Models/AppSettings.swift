@@ -618,59 +618,11 @@ public final class AppSettings: ObservableObject {
         self.autoPasteEnabled = defaults.object(forKey: Keys.autoPasteEnabled) != nil ? defaults.bool(forKey: Keys.autoPasteEnabled) : true
         self.floatingPreviewDuration = defaults.object(forKey: Keys.floatingPreviewDuration) as? Double ?? 45.0
 
-        // Load dictionary rules with auto-migration (単語破壊の原因となる古いまる・てんルールを自動除去)
+        // Load dictionary rules with auto-migration (古い単語破壊ルールや旧記号ルールを自動除去・アップグレード)
         if let data = defaults.data(forKey: Keys.dictionaryRules),
            let rules = try? JSONDecoder().decode([DictionaryRule].self, from: data) {
-            var cleanedRules = rules.filter { rule in
-                !rule.pattern.contains("まる") &&
-                !rule.pattern.contains("てん") &&
-                rule.pattern != "はてな" &&
-                rule.pattern != "びっくり" &&
-                rule.pattern != "マック" &&
-                rule.pattern != "ウインドウズ" &&
-                rule.pattern != "マクド" &&
-                rule.pattern != "アニソン"
-            }
-            // 改行ルールが旧形式または未登録なら新形式 (改行 -> \n, isRegex: false) に補正
-            if let idx = cleanedRules.firstIndex(where: { $0.pattern == "(改行|かいぎょう)" }) {
-                cleanedRules[idx].pattern = "改行"
-                cleanedRules[idx].replacement = "\\n"
-                cleanedRules[idx].isRegex = false
-            } else if !cleanedRules.contains(where: { $0.pattern == "改行" }) {
-                cleanedRules.insert(DictionaryRule(pattern: "改行", replacement: "\\n", isRegex: false, isEnabled: true), at: 0)
-            }
-            // 郵便番号サンプルルール (正規表現ON、有効チェックOFF: 例として置いておくため初期値はチェックなし)
-            if let zipIndex = cleanedRules.firstIndex(where: { $0.pattern.contains("[0-9]{3}") }) {
-                cleanedRules[zipIndex].isEnabled = false
-                cleanedRules[zipIndex].pattern = "([0-9]{3})([0-9]{4})"
-                cleanedRules[zipIndex].replacement = "〒$1-$2"
-                cleanedRules[zipIndex].isRegex = true
-            } else {
-                cleanedRules.append(DictionaryRule(pattern: "([0-9]{3})([0-9]{4})", replacement: "〒$1-$2", isRegex: true, isEnabled: false))
-            }
-
-            // クォートの「とじ」に関するルールを削除
-            cleanedRules.removeAll {
-                $0.pattern.contains("ダブル") && $0.pattern.contains("とじ") ||
-                $0.pattern.contains("ダブル") && $0.pattern.contains("閉じ") ||
-                $0.pattern.contains("シングル") && $0.pattern.contains("とじ") ||
-                $0.pattern.contains("シングル") && $0.pattern.contains("閉じ") ||
-                $0.pattern.contains("Close double quote") ||
-                $0.pattern.contains("close double quote") ||
-                $0.pattern.contains("Close single quote") ||
-                $0.pattern.contains("close single quote") ||
-                $0.pattern.contains("[\"”]") ||
-                $0.pattern.contains("['’]")
-            }
-
-            // 記号ルールの自動追加マイグレーション
-            for symbolRule in AppSettings.symbolDictionaryRules {
-                if !cleanedRules.contains(where: { $0.pattern == symbolRule.pattern }) {
-                    cleanedRules.append(symbolRule)
-                }
-            }
-
-            self.dictionaryRules = cleanedRules.isEmpty ? AppSettings.defaultDictionaryRules : cleanedRules
+            let migrated = AppSettings.migrateRules(rules)
+            self.dictionaryRules = migrated.isEmpty ? AppSettings.defaultDictionaryRules : migrated
             saveDictionaryRules()
         } else {
             self.dictionaryRules = AppSettings.defaultDictionaryRules
@@ -681,42 +633,120 @@ public final class AppSettings: ObservableObject {
         VoiceIMEDiskSyncService.shared.syncOnLaunch(settings: self)
     }
 
-    /// 音声入力用の括弧・引用符記号ルール一式（スペースなし、日本語・英語両対応）
-    /// ※「まるかっこ」が開きのマッチ候補に含まれるため、「まるかっことじ」等閉じルールを先に評価して取り残しを防ぐ
+    /// 古い記号ルール（単体の丸括弧・鍵括弧等）を安全に最新の「ひらき/とじ」対称ルールおよびリーダー記号へ更新する
+    public static func migrateRules(_ rules: [DictionaryRule]) -> [DictionaryRule] {
+        var cleaned = rules.filter { rule in
+            !rule.pattern.contains("まる") &&
+            !rule.pattern.contains("てん") &&
+            rule.pattern != "はてな" &&
+            rule.pattern != "びっくり" &&
+            rule.pattern != "マック" &&
+            rule.pattern != "ウインドウズ" &&
+            rule.pattern != "マクド" &&
+            rule.pattern != "アニソン" &&
+            // 旧バージョンの記号ルールを除去（名詞「丸括弧」「鍵括弧」等を誤破壊する古いルール）
+            rule.pattern != "(まるかっことじ|丸括弧閉じ|[Cc]lose parenthesis)" &&
+            rule.pattern != "(ひらきまるかっこ|まるかっこ|開き丸括弧|丸括弧|[Oo]pen parenthesis)" &&
+            rule.pattern != "(かくかっことじ|角括弧閉じ|[Cc]lose bracket)" &&
+            rule.pattern != "(ひらきかくかっこ|かくかっこ|開き角括弧|角括弧|[Oo]pen bracket)" &&
+            rule.pattern != "(なみかっことじ|波括弧閉じ|[Cc]lose brace)" &&
+            rule.pattern != "(ひらきなみかっこ|なみかっこ|開き波括弧|波括弧|[Oo]pen brace)" &&
+            rule.pattern != "(かぎかっことじ|鍵括弧閉じ|[Cc]lose quote)" &&
+            rule.pattern != "(ひらきかぎかっこ|かぎかっこ|開き鍵括弧|鍵括弧|[Oo]pen quote)" &&
+            !rule.pattern.contains("ダブルクォートとじ") &&
+            !(rule.pattern.contains("ダブル") && rule.pattern.contains("ク") && !rule.pattern.contains("閉じ")) &&
+            !(rule.pattern.contains("シングル") && rule.pattern.contains("ク") && !rule.pattern.contains("閉じ"))
+        }
+
+        // 改行ルールが旧形式または未登録なら新形式 (改行 -> \n, isRegex: false) に補正
+        if let idx = cleaned.firstIndex(where: { $0.pattern == "(改行|かいぎょう)" }) {
+            cleaned[idx].pattern = "改行"
+            cleaned[idx].replacement = "\\n"
+            cleaned[idx].isRegex = false
+        } else if !cleaned.contains(where: { $0.pattern == "改行" }) {
+            cleaned.insert(DictionaryRule(pattern: "改行", replacement: "\\n", isRegex: false, isEnabled: true), at: 0)
+        }
+
+        // 郵便番号サンプルルール (正規表現ON、有効チェックOFF: 例として置いておくため初期値はチェックなし)
+        if let zipIndex = cleaned.firstIndex(where: { $0.pattern.contains("[0-9]{3}") }) {
+            cleaned[zipIndex].isEnabled = false
+            cleaned[zipIndex].pattern = "([0-9]{3})([0-9]{4})"
+            cleaned[zipIndex].replacement = "〒$1-$2"
+            cleaned[zipIndex].isRegex = true
+        } else {
+            cleaned.append(DictionaryRule(pattern: "([0-9]{3})([0-9]{4})", replacement: "〒$1-$2", isRegex: true, isEnabled: false))
+        }
+
+        // クォートの古い単体「とじ」に関する不要ルールを削除
+        cleaned.removeAll {
+            $0.pattern.contains("Close double quote") ||
+            $0.pattern.contains("close double quote") ||
+            $0.pattern.contains("Close single quote") ||
+            $0.pattern.contains("close single quote") ||
+            $0.pattern.contains("[\"”]") ||
+            $0.pattern.contains("['’]")
+        }
+
+        // 記号ルールの自動追加（未登録のものを順序正しく追加）
+        for symbolRule in AppSettings.symbolDictionaryRules {
+            if !cleaned.contains(where: { $0.pattern == symbolRule.pattern }) {
+                cleaned.append(symbolRule)
+            }
+        }
+
+        return cleaned
+    }
+
+    /// 音声入力用の括弧・引用符・リーダー記号ルール一式（スペースなし、日本語・英語両対応）
+    /// ※「丸括弧」「鍵括弧」等の名詞単体は文章用途として保護し、「ひらき〜 / とじ〜」を明示した場合のみ記号に置換
     public static var symbolDictionaryRules: [DictionaryRule] {
         [
-            // 丸括弧 ()
-            DictionaryRule(pattern: "(まるかっことじ|丸括弧閉じ|[Cc]lose parenthesis)", replacement: ")", isRegex: true, isEnabled: true),
-            DictionaryRule(pattern: "(ひらきまるかっこ|まるかっこ|開き丸括弧|丸括弧|[Oo]pen parenthesis)", replacement: "(", isRegex: true, isEnabled: true),
+            // 1. 二連三点リーダー …… (三点リーダーより先に評価)
+            DictionaryRule(pattern: "(?:にれん|二連)[ 　]*(?:さんてん|三点)[ 　]*(?:リーダー|りーだー)", replacement: "……", isRegex: true, isEnabled: true),
 
-            // 角括弧 []
-            DictionaryRule(pattern: "(かくかっことじ|角括弧閉じ|[Cc]lose bracket)", replacement: "]", isRegex: true, isEnabled: true),
-            DictionaryRule(pattern: "(ひらきかくかっこ|かくかっこ|開き角括弧|角括弧|[Oo]pen bracket)", replacement: "[", isRegex: true, isEnabled: true),
+            // 2. 三点リーダー …
+            DictionaryRule(pattern: "(?:さんてん|三点)[ 　]*(?:リーダー|りーだー)", replacement: "…", isRegex: true, isEnabled: true),
 
-            // 波括弧 {}
-            DictionaryRule(pattern: "(なみかっことじ|波括弧閉じ|[Cc]lose brace)", replacement: "}", isRegex: true, isEnabled: true),
-            DictionaryRule(pattern: "(ひらきなみかっこ|なみかっこ|開き波括弧|波括弧|[Oo]pen brace)", replacement: "{", isRegex: true, isEnabled: true),
+            // 3. 鍵括弧 」 閉じ (「かっことじ」一般形より先に評価)
+            DictionaryRule(pattern: "([と取][じちぢ]|閉じ?)[ 　]*(?:かぎ|鍵)[ 　]*(?:かっこ|括弧|カッコ)|(?:かぎ|鍵)[ 　]*(?:かっこ|括弧|カッコ)[ 　]*([と取][じちぢ]|閉じ?)|[Cc]lose quote", replacement: "」", isRegex: true, isEnabled: true),
 
-            // 鍵括弧 「」
-            DictionaryRule(pattern: "(かぎかっことじ|鍵括弧閉じ|[Cc]lose quote)", replacement: "」", isRegex: true, isEnabled: true),
-            DictionaryRule(pattern: "(ひらきかぎかっこ|かぎかっこ|開き鍵括弧|鍵括弧|[Oo]pen quote)", replacement: "「", isRegex: true, isEnabled: true),
+            // 4. 鍵括弧 「 開き (「ひらきかっこ」一般形より先に評価、名詞単体の「鍵括弧」は保護)
+            DictionaryRule(pattern: "(?:ひらき|開き)[ 　]*(?:かぎ|鍵)[ 　]*(?:かっこ|括弧|カッコ)|[Oo]pen quote", replacement: "「", isRegex: true, isEnabled: true),
 
-            // ダブルクォート ""
-            DictionaryRule(pattern: "((?:ひらき|開き)?[ 　]*(?:ダブル|だぶる)[ 　]*(?:ク[ォオ]ー?[トド]|コー[トド]|くぉーと|くおーと)|[Oo]pen double quote|double quote)", replacement: "\"", isRegex: true, isEnabled: true),
+            // 5. 角括弧 ] 閉じ (ブラケット / 角括弧)
+            DictionaryRule(pattern: "([と取][じちぢ]|閉じ?)[ 　]*(?:(?:ブラケット|ぶらけっと)|(?:かく|角)[ 　]*(?:かっこ|括弧|カッコ))|(?:(?:ブラケット|ぶらけっと)|(?:かく|角)[ 　]*(?:かっこ|括弧|カッコ))[ 　]*([と取][じちぢ]|閉じ?)|[Cc]lose bracket", replacement: "]", isRegex: true, isEnabled: true),
 
-            // シングルクォート ''
-            DictionaryRule(pattern: "((?:ひらき|開き)?[ 　]*(?:シングル|しんぐる)[ 　]*(?:ク[ォオ]ー?[トド]|コー[トド]|くぉーと|くおーと)|[Oo]pen single quote|single quote)", replacement: "'", isRegex: true, isEnabled: true),
+            // 6. 角括弧 [ 開き (ブラケット / 角括弧)
+            DictionaryRule(pattern: "(?:ひらき|開き)[ 　]*(?:(?:ブラケット|ぶらけっと)|(?:かく|角)[ 　]*(?:かっこ|括弧|カッコ))|[Oo]pen bracket", replacement: "[", isRegex: true, isEnabled: true),
 
-            // 日本語の直後にある感嘆符 (！)（前後に勝手に入った「。」「、」「.」を巻き込んで「！」に置換）
+            // 7. 波括弧 } 閉じ (ブレース / 波括弧)
+            DictionaryRule(pattern: "([と取][じちぢ]|閉じ?)[ 　]*(?:(?:ブレース|ぶれーす)|(?:なみ|波)[ 　]*(?:かっこ|括弧|カッコ))|(?:(?:ブレース|ぶれーす)|(?:なみ|波)[ 　]*(?:かっこ|括弧|カッコ))[ 　]*([と取][じちぢ]|閉じ?)|[Cc]lose brace", replacement: "}", isRegex: true, isEnabled: true),
+
+            // 8. 波括弧 { 開き (ブレース / 波括弧)
+            DictionaryRule(pattern: "(?:ひらき|開き)[ 　]*(?:(?:ブレース|ぶれーす)|(?:なみ|波)[ 　]*(?:かっこ|括弧|カッコ))|[Oo]pen brace", replacement: "{", isRegex: true, isEnabled: true),
+
+            // 9. 丸括弧 ) 閉じ (とじかっこ / とじまるかっこ / まるかっことじ / かっことじ)
+            DictionaryRule(pattern: "([と取][じちぢ]|閉じ?)[ 　]*(?:まる|丸)?[ 　]*(?:かっこ|括弧|カッコ)|(?:まる|丸)?[ 　]*(?:かっこ|括弧|カッコ)[ 　]*([と取][じちぢ]|閉じ?)|[Cc]lose parenthesis", replacement: ")", isRegex: true, isEnabled: true),
+
+            // 10. 丸括弧 ( 開き (ひらきかっこ / ひらきまるかっこ。名詞単体の「丸括弧」「かっこ」は保護)
+            DictionaryRule(pattern: "(?:ひらき|開き)[ 　]*(?:まる|丸)?[ 　]*(?:かっこ|括弧|カッコ)|[Oo]pen parenthesis", replacement: "(", isRegex: true, isEnabled: true),
+
+            // 11. ダブルクォート "
+            DictionaryRule(pattern: "((?:(?:ひらき|開き|[と取][じちぢ]|閉じ)[ 　]*)?(?:ダブル|だぶる)[ 　]*(?:ク[ォオ]ー?[トド]|コー[トド]|くぉーと|くおーと)(?:[ 　]*(?:[と取][じちぢ]|閉じ))?|[Oo]pen double quote|[Cc]lose double quote|double quote)", replacement: "\"", isRegex: true, isEnabled: true),
+
+            // 12. シングルクォート '
+            DictionaryRule(pattern: "((?:(?:ひらき|開き|[と取][じちぢ]|閉じ)[ 　]*)?(?:シングル|しんぐる)[ 　]*(?:ク[ォオ]ー?[トド]|コー[トド]|くぉーと|くおーと)(?:[ 　]*(?:[と取][じちぢ]|閉じ))?|[Oo]pen single quote|[Cc]lose single quote|single quote)", replacement: "'", isRegex: true, isEnabled: true),
+
+            // 13. 日本語の直後にある感嘆符 (！)（前後に勝手に入った「。」「、」「.」を巻き込んで「！」に置換）
             DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[ 　]*([!！]|びっくりまーく|びっくりマーク|感嘆符)[ 　]*[。、\\.,]*", replacement: "！", isRegex: true, isEnabled: true),
 
-            // 日本語の直後にある疑問符 (？)（前後に勝手に入った「。」「、」「.」を巻き込んで「？」に置換）
+            // 14. 日本語の直後にある疑問符 (？)（前後に勝手に入った「。」「、」「.」を巻き込んで「？」に置換）
             DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[ 　]*([?？]|はてなまーく|はてなマーク|疑問符|クエスチョンマーク)[ 　]*[。、\\.,]*", replacement: "？", isRegex: true, isEnabled: true),
 
-            // 英語・英字向けの感嘆符 (!)（前後に勝手に入ったピリオド「.」やカンマ「,」を巻き込んで半角「!」に置換）
+            // 15. 英語・英字向けの感嘆符 (!)（前後に勝手に入ったピリオド「.」やカンマ「,」を巻き込んで半角「!」に置換）
             DictionaryRule(pattern: "[。、\\.,]*\\s*(!|[Ee]xclamation mark)\\s*[。、\\.,]*", replacement: "!", isRegex: true, isEnabled: true),
 
-            // 英語・英字向けの疑問符 (?)（前後に勝手に入ったピリオド「.」やカンマ「,」を巻き込んで半角「?」に置換）
+            // 16. 英語・英字向けの疑問符 (?)（前後に勝手に入ったピリオド「.」やカンマ「,」を巻き込んで半角「?」に置換）
             DictionaryRule(pattern: "[。、\\.,]*\\s*(\\?|[Qq]uestion mark)\\s*[。、\\.,]*", replacement: "?", isRegex: true, isEnabled: true)
         ]
     }

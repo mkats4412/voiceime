@@ -96,47 +96,60 @@ struct TestRunner {
         let service = DictionaryService.shared
         let rules = AppSettings.symbolDictionaryRules
 
-        // 1. 丸括弧 ()
-        assert(service.apply(text: "ひらきまるかっこテストまるかっことじ", rules: rules) == "(テスト)")
-        assert(service.apply(text: "まるかっこhelloまるかっことじ", rules: rules) == "(hello)")
+        // 1. 丸括弧 () - 「ひらきかっこ」「とじかっこ」「とじまるかっこ」「まるかっことじ」両対応
+        assert(service.apply(text: "ひらきかっこテストとじかっこ", rules: rules) == "(テスト)")
+        assert(service.apply(text: "ひらきまるかっこhelloとじまるかっこ", rules: rules) == "(hello)")
+        assert(service.apply(text: "ひらきかっこworldまるかっことじ", rules: rules) == "(world)")
         assert(service.apply(text: "Open parenthesisworldClose parenthesis", rules: rules) == "(world)")
         assert(service.apply(text: "open parenthesistestclose parenthesis", rules: rules) == "(test)")
+        // 名詞単体の「丸括弧」「かっこ」は誤置換されずに保護されること
+        assert(service.apply(text: "この部分は丸括弧で囲んでください", rules: rules) == "この部分は丸括弧で囲んでください")
 
-        // 2. 角括弧 []
-        assert(service.apply(text: "ひらきかくかっこ配列かくかっことじ", rules: rules) == "[配列]")
+        // 2. 角括弧 [] - 「ブラケット」「ぶらけっと」「かくかっこ」
+        assert(service.apply(text: "ひらきブラケット配列とじブラケット", rules: rules) == "[配列]")
+        assert(service.apply(text: "ひらきぶらけっと0とじぶらけっと", rules: rules) == "[0]")
+        assert(service.apply(text: "ひらきかくかっこキーとじかくかっこ", rules: rules) == "[キー]")
         assert(service.apply(text: "Open bracket0Close bracket", rules: rules) == "[0]")
+        assert(service.apply(text: "角括弧とブラケット", rules: rules) == "角括弧とブラケット")
 
-        // 3. 波括弧 {}
-        assert(service.apply(text: "ひらきなみかっこブロックなみかっことじ", rules: rules) == "{ブロック}")
+        // 3. 波括弧 {} - 「ブレース」「ぶれーす」「なみかっこ」
+        assert(service.apply(text: "ひらきブレースブロックとじブレース", rules: rules) == "{ブロック}")
+        assert(service.apply(text: "ひらきなみかっこbodyとじなみかっこ", rules: rules) == "{body}")
         assert(service.apply(text: "Open bracebodyClose brace", rules: rules) == "{body}")
+        assert(service.apply(text: "波括弧とブレース", rules: rules) == "波括弧とブレース")
 
-        // 4. 鍵括弧 「」
-        assert(service.apply(text: "ひらきかぎかっこ重要かぎかっことじ", rules: rules) == "「重要」")
-        assert(service.apply(text: "かぎかっこ発言かぎかっことじ", rules: rules) == "「発言」")
+        // 4. 鍵括弧 「」 - 「ひらきかぎかっこ」「とじかぎかっこ」「かぎかっことじ」
+        assert(service.apply(text: "ひらきかぎかっこ重要とじかぎかっこ", rules: rules) == "「重要」")
+        assert(service.apply(text: "ひらきかぎかっこ発言かぎかっことじ", rules: rules) == "「発言」")
         assert(service.apply(text: "Open quotespeechClose quote", rules: rules) == "「speech」")
+        assert(service.apply(text: "鍵括弧の使い方", rules: rules) == "鍵括弧の使い方")
 
-        // 5. ダブルクォート ""
-        assert(service.apply(text: "ひらきダブルクォート引用ダブルクォート", rules: rules) == "\"引用\"")
-        assert(service.apply(text: "Open double quotetextdouble quote", rules: rules) == "\"text\"")
+        // 5. ダブルクォート "" - 「ひらき」「とじ」両対応
+        assert(service.apply(text: "ひらきダブルクォート引用ダブルクォートとじ", rules: rules) == "\"引用\"")
+        assert(service.apply(text: "Open double quotetextClose double quote", rules: rules) == "\"text\"")
 
-        // 6. シングルクォート ''
-        assert(service.apply(text: "ひらきシングルクォート単語シングルクォート", rules: rules) == "'単語'")
-        assert(service.apply(text: "Open single quotecharsingle quote", rules: rules) == "'char'")
+        // 6. シングルクォート '' - 「ひらき」「とじ」両対応
+        assert(service.apply(text: "ひらきシングルクォート単語シングルクォートとじ", rules: rules) == "'単語'")
+        assert(service.apply(text: "Open single quotecharClose single quote", rules: rules) == "'char'")
 
-        // 7. 感嘆符 (!) / びっくりマーク（勝手に入った「。」「、」を巻き込んで「！」に置換）
+        // 7. 三点リーダー … / 二連三点リーダー ……
+        assert(service.apply(text: "考え中さんてんリーダー", rules: rules) == "考え中…")
+        assert(service.apply(text: "絶句にれんさんてんリーダー", rules: rules) == "絶句……")
+
+        // 8. 感嘆符 (!) / びっくりマーク（勝手に入った「。」「、」を巻き込んで「！」に置換）
         assert(service.apply(text: "頑張ります!。", rules: rules) == "頑張ります！")
         assert(service.apply(text: "頑張ります！。", rules: rules) == "頑張ります！")
         assert(service.apply(text: "頑張ります。！", rules: rules) == "頑張ります！")
         assert(service.apply(text: "頑張ります。びっくりマーク", rules: rules) == "頑張ります！")
         assert(service.apply(text: "頑張ります! 。", rules: rules) == "頑張ります！")
 
-        // 8. 疑問符 (?) / はてなマーク（勝手に入った「。」「、」を巻き込んで「？」に置換）
+        // 9. 疑問符 (?) / はてなマーク（勝手に入った「。」「、」を巻き込んで「？」に置換）
         assert(service.apply(text: "本当ですか?。", rules: rules) == "本当ですか？")
         assert(service.apply(text: "本当ですか？。", rules: rules) == "本当ですか？")
         assert(service.apply(text: "本当ですか。？", rules: rules) == "本当ですか？")
         assert(service.apply(text: "本当ですか。はてなマーク", rules: rules) == "本当ですか？")
 
-        // 9. 英語の感嘆符 (!) / 疑問符 (?) のピリオド・カンマ巻き込み置換
+        // 10. 英語の感嘆符 (!) / 疑問符 (?) のピリオド・カンマ巻き込み置換
         assert(service.apply(text: "Great!.", rules: rules) == "Great!")
         assert(service.apply(text: "Great.!", rules: rules) == "Great!")
         assert(service.apply(text: "Thank you. exclamation mark", rules: rules) == "Thank you!")

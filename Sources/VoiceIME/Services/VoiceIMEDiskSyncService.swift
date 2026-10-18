@@ -144,7 +144,11 @@ public final class VoiceIMEDiskSyncService {
 
         // 辞書ルールの同期
         if let diskRules = importDictionaryFromDisk(), !diskRules.isEmpty {
-            settings.dictionaryRules = diskRules
+            let migrated = AppSettings.migrateRules(diskRules)
+            settings.dictionaryRules = migrated
+            if migrated != diskRules {
+                exportToDisk(rules: migrated, vocabulary: settings.customVocabulary)
+            }
             didImport = true
         }
 
