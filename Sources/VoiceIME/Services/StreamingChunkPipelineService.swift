@@ -244,14 +244,18 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                         NSLog("[VoiceIME] ⚡ 初回Whisper速報表示 (ステップ1): [%@]", cleanTranscribed)
                     }
 
+                    // ユーザー辞書・音声記号置換を適用して即座にプレビュー表示
+                    let preprocessed = Self.applyDictionaryRules(to: textToRefine)
                     Task { @MainActor in
-                        FloatingPreviewController.shared.updateLiveText(textToRefine)
+                        FloatingPreviewController.shared.updateLiveText(preprocessed)
                     }
                 }
 
                 if Task.isCancelled { return }
 
-                var finalText = textToRefine
+                // 辞書置換済みのテキストを中間推敲および表示のベースにする
+                let preprocessedBase = Self.applyDictionaryRules(to: textToRefine)
+                var finalText = preprocessedBase
 
                 // 🌟 【ステップ2: 息継ぎ時の中間推敲】
                 // 1. 極端に短い断片（12文字未満）はLLMが文脈不足でハルシネーションを起こしやすいため推敲しない
@@ -261,7 +265,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                 self?.queue.sync {
                     guard let self = self, self.isRunning else { return }
                     let timeSinceLastLLM = now - self.lastLLMRefineTime
-                    if self.isLLMEnabled && textToRefine.count >= 12 && timeSinceLastLLM >= self.minLLMRefineIntervalSeconds {
+                    if self.isLLMEnabled && preprocessedBase.count >= 12 && timeSinceLastLLM >= self.minLLMRefineIntervalSeconds {
                         self.lastLLMRefineTime = now
                         shouldRunIntermediateLLM = true
                         NSLog("[VoiceIME] ⏱️ 10秒間隔トリガー到達 (前回到達から%.1f秒経過) ➔ 中間LLM推敲を実行します", timeSinceLastLLM)
@@ -269,11 +273,11 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                 }
 
                 if shouldRunIntermediateLLM, let llmCfg = llmConfig, !llmCfg.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    // 🌟 ログ: 2. Whisperから推敲LLMへ送られる文字列
-                    PipelineLogger.shared.logLLMInput(type: "途中息継ぎ推敲", text: textToRefine)
+                    // 🌟 ログ: 2. Whisperから推敲LLMへ送られる文字列 (辞書置換済み)
+                    PipelineLogger.shared.logLLMInput(type: "途中息継ぎ推敲", text: preprocessedBase)
                     do {
                         let refined = try await LLMService.shared.refine(
-                            text: textToRefine,
+                            text: preprocessedBase,
                             baseURL: llmCfg.baseURL,
                             apiKey: llmCfg.apiKey,
                             model: llmCfg.model,
@@ -283,9 +287,10 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                         )
                         let cleanRefined = refined.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !cleanRefined.isEmpty {
-                            finalText = cleanRefined
+                            // LLM推敲後にもセーフティとして辞書置換を適用
+                            finalText = Self.applyDictionaryRules(to: cleanRefined)
                             // 🌟 ログ: 3. 推敲LLMから修正され戻される文字列
-                            PipelineLogger.shared.logLLMOutput(type: "途中息継ぎ推敲", text: cleanRefined)
+                            PipelineLogger.shared.logLLMOutput(type: "途中息継ぎ推敲", text: finalText)
                         }
                     } catch {
                         NSLog("[VoiceIME] ⚠️ 紙芝居推敲スキップ: %@", error.localizedDescription)
@@ -389,23 +394,25 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                             self.latestRefinedText = capturedFinalWhisper
                             NSLog("[VoiceIME] ⚡ 最終Whisper速報表示 (ステップ1): [%@]", capturedFinalWhisper)
                         }
+                        // ユーザー辞書・音声記号置換を適用して即座にプレビュー表示
+                        let preprocessedPreview = Self.applyDictionaryRules(to: textToRefine)
                         Task { @MainActor in
-                            FloatingPreviewController.shared.updateLiveText(textToRefine)
+                            FloatingPreviewController.shared.updateLiveText(preprocessedPreview)
                         }
                     }
 
                     // 🌟 最終確定時は、最初から最後まで通しで認識された完全なWhisper結果（capturedFinalWhisper）を最優先で使用！
-                    // 万が一LLM推敲が失敗した時も、重複結合テキストではなく完全Whisper結果（capturedFinalWhisper）を採用して安全性を保証！
-                    var finalText = !capturedFinalWhisper.isEmpty ? capturedFinalWhisper : textToRefine
+                    let rawBaseForLLM = !capturedFinalWhisper.isEmpty ? capturedFinalWhisper : textToRefine
+                    let preprocessedForLLM = Self.applyDictionaryRules(to: rawBaseForLLM)
+                    var finalText = preprocessedForLLM
 
                     // 2. 推敲が有効な場合は LLM の推敲完了も確実に待つ（ステップ4）
-                    let textForLLM = !capturedFinalWhisper.isEmpty ? capturedFinalWhisper : textToRefine
-                    if isLLMEnabled, let llmCfg = llmConfig, !textForLLM.isEmpty, !llmCfg.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        // 🌟 ログ: 2. Whisperから推敲LLMへ送られる文字列
-                        PipelineLogger.shared.logLLMInput(type: "最終確定推敲", text: textForLLM)
+                    if isLLMEnabled, let llmCfg = llmConfig, !preprocessedForLLM.isEmpty, !llmCfg.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        // 🌟 ログ: 2. Whisperから推敲LLMへ送られる文字列（辞書置換済み）
+                        PipelineLogger.shared.logLLMInput(type: "最終確定推敲", text: preprocessedForLLM)
                         do {
                             let refined = try await LLMService.shared.refine(
-                                text: textForLLM,
+                                text: preprocessedForLLM,
                                 baseURL: llmCfg.baseURL,
                                 apiKey: llmCfg.apiKey,
                                 model: llmCfg.model,
@@ -415,18 +422,19 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                             )
                             let cleanRefined = refined.trimmingCharacters(in: .whitespacesAndNewlines)
                             if !cleanRefined.isEmpty {
-                                finalText = cleanRefined
-                                NSLog("[VoiceIME] ✨ 最終推敲成功 (ステップ4): [%@]", cleanRefined)
+                                // LLM推敲後にもセーフティとして辞書置換を適用
+                                finalText = Self.applyDictionaryRules(to: cleanRefined)
+                                NSLog("[VoiceIME] ✨ 最終推敲成功 (ステップ4): [%@]", finalText)
                                 // 🌟 ログ: 3. 推敲LLMから修正され戻される文字列
-                                PipelineLogger.shared.logLLMOutput(type: "最終確定推敲", text: cleanRefined)
+                                PipelineLogger.shared.logLLMOutput(type: "最終確定推敲", text: finalText)
                             }
                         } catch {
-                            NSLog("[VoiceIME] ⚠️ 最終LLM推敲失敗 (%@): %@。完全Whisper生テキストを使用します", llmCfg.model, error.localizedDescription)
+                            NSLog("[VoiceIME] ⚠️ 最終LLM推敲失敗 (%@): %@。辞書置換済みWhisperテキストを使用します", llmCfg.model, error.localizedDescription)
                             PipelineLogger.shared.logLLMOutput(type: "最終確定推敲[失敗]", text: "[推敲エラー: \(error)]")
                         }
                     }
 
-                    let result = !finalText.isEmpty ? finalText : capturedFinalWhisper
+                    let result = !finalText.isEmpty ? finalText : preprocessedForLLM
                     self.queue.async {
                         // 次回録音セッションへの残留を防ぐため、バッファと前回の推敲状態を完全リセット
                         self.latestRefinedText = ""
@@ -444,9 +452,10 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
 
                     completion(result)
                 } catch {
-                    NSLog("[VoiceIME] ⚠️ 最終送信失敗、手持ちの最新テキストで完了: [%@]", self.latestRefinedText)
-                    PipelineLogger.shared.logSessionEnd(finalText: self.latestRefinedText)
-                    completion(self.latestRefinedText)
+                    let fallbackResult = Self.applyDictionaryRules(to: self.latestRefinedText)
+                    NSLog("[VoiceIME] ⚠️ 最終送信失敗、手持ちの最新テキストで完了: [%@]", fallbackResult)
+                    PipelineLogger.shared.logSessionEnd(finalText: fallbackResult)
+                    completion(fallbackResult)
                 }
             }
         }
@@ -661,6 +670,18 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             return "\(cleanRefined) \(cleanDelta)"
         }
         return "\(cleanRefined)\(cleanDelta)"
+    }
+
+    // MARK: - ユーザー辞書・記号置換ヘルパー
+
+    /// Whisper認識テキストまたは推敲テキストに対し、ユーザー辞書ルールおよび音声記号正規化を適用
+    public static func applyDictionaryRules(to text: String) -> String {
+        guard !text.isEmpty else { return "" }
+        let normalized = LLMService.normalizePunctuation(for: text)
+        return DictionaryService.shared.apply(
+            text: normalized,
+            rules: AppSettings.shared.dictionaryRules
+        )
     }
 }
 

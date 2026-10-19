@@ -467,6 +467,12 @@ public final class AppState: ObservableObject {
                     trimmedQuestion = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
                 }
 
+                // ユーザー辞書・音声記号置換を適用（「教えて、はてなマーク」➔「教えて？」等）
+                trimmedQuestion = self.dictionary.apply(
+                    text: LLMService.normalizePunctuation(for: trimmedQuestion),
+                    rules: self.settings.dictionaryRules
+                )
+
                 guard !trimmedQuestion.isEmpty else {
                     self.isQuickAskActive = false
                     self.phase = .idle

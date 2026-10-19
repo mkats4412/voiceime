@@ -784,7 +784,7 @@ public final class AppSettings: ObservableObject {
         }
 
         // 改行ルールが旧形式または未登録なら新形式 (改行 -> \n, isRegex: false) に補正
-        if let idx = cleaned.firstIndex(where: { $0.pattern == "(改行|かいぎょう)" }) {
+        if let idx = cleaned.firstIndex(where: { $0.pattern == "(改行|かいぎょう)" || $0.pattern == "改行" || $0.pattern.contains("改行") }) {
             cleaned[idx].pattern = "改行"
             cleaned[idx].replacement = "\\n"
             cleaned[idx].isRegex = false
@@ -872,7 +872,16 @@ public final class AppSettings: ObservableObject {
             DictionaryRule(pattern: "[。、\\.,]*\\s*(!|[Ee]xclamation mark)\\s*[。、\\.,]*", replacement: "!", isRegex: true, isEnabled: true),
 
             // 16. 英語・英字向けの疑問符 (?)（前後に勝手に入ったピリオド「.」やカンマ「,」を巻き込んで半角「?」に置換）
-            DictionaryRule(pattern: "[。、\\.,]*\\s*(\\?|[Qq]uestion mark)\\s*[。、\\.,]*", replacement: "?", isRegex: true, isEnabled: true)
+            DictionaryRule(pattern: "[。、\\.,]*\\s*(\\?|[Qq]uestion mark)\\s*[。、\\.,]*", replacement: "?", isRegex: true, isEnabled: true),
+
+            // 17. ピリオド → 半角ピリオド (.)（日英ゆらぎ吸収・前後の空白除去）
+            DictionaryRule(pattern: "[ 　]*(?:ピリオド|ぴりおど|[Pp]eriod)[ 　]*", replacement: ".", isRegex: true, isEnabled: true),
+
+            // 18. カンマ → 読点 (、)（日英ゆらぎ吸収・前後の空白除去）
+            DictionaryRule(pattern: "(?:[、。])?[ 　]*(?:カンマ|かんま|[Cc]omma)(?:[ 　]*[、。](?![、。]))?", replacement: "、", isRegex: true, isEnabled: true),
+
+            // 19. まる/〇 → 句点 (。)。直前に。があれば重ねず単一。に(実質何もしない)。後ろに区切り・文末が必要
+            DictionaryRule(pattern: "(?:。)?[ 　]*(?:まる|マル|丸|〇)(?:[ 　]*[、。](?![、。])|(?=[ 　。、，．.,!?！？「」『』（）()\\[\\]{}…\\s]|$))", replacement: "。", isRegex: true, isEnabled: true)
         ]
     }
 
