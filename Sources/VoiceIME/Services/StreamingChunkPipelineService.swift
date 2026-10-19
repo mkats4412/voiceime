@@ -247,7 +247,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                     // ユーザー辞書・音声記号置換を適用して即座にプレビュー表示
                     let preprocessed = Self.applyDictionaryRules(to: textToRefine)
                     Task { @MainActor in
-                        FloatingPreviewController.shared.updateLiveText(preprocessed)
+                        FloatingPreviewController.shared.updatePipelineText(preprocessed)
                     }
                 }
 
@@ -306,7 +306,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                     self.latestRefinedText = capturedFinalText
                     self.lastWhisperBaseText = cleanTranscribed
                     Task { @MainActor in
-                        FloatingPreviewController.shared.updateLiveText(capturedFinalText)
+                        FloatingPreviewController.shared.updatePipelineText(capturedFinalText)
                         NSLog("[VoiceIME] 🎭 推敲完了全置換 (ステップ2/4): [%@]", capturedFinalText)
                     }
                 }
@@ -397,7 +397,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                         // ユーザー辞書・音声記号置換を適用して即座にプレビュー表示
                         let preprocessedPreview = Self.applyDictionaryRules(to: textToRefine)
                         Task { @MainActor in
-                            FloatingPreviewController.shared.updateLiveText(preprocessedPreview)
+                            FloatingPreviewController.shared.updatePipelineText(preprocessedPreview)
                         }
                     }
 
@@ -444,7 +444,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                     NSLog("[VoiceIME] ✅ 最後の一つが到着しました: [%@]", result)
 
                     Task { @MainActor in
-                        FloatingPreviewController.shared.updateLiveText(result)
+                        FloatingPreviewController.shared.updatePipelineText(result)
                     }
 
                     // 🌟 ログ: セッション完了（確定出力テキスト）
@@ -674,14 +674,13 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
 
     // MARK: - ユーザー辞書・記号置換ヘルパー
 
-    /// Whisper認識テキストまたは推敲テキストに対し、ユーザー辞書ルールおよび音声記号正規化を適用
-    public static func applyDictionaryRules(to text: String) -> String {
+    /// Whisper認識テキストまたは推敲テキストに対し、音声コマンド正規化（「開業」「かいぎょう」「改行」➔ \n、ピリオド、括弧等）およびユーザー辞書ルールを完全適用
+    public static func applyDictionaryRules(to text: String, isJapanese: Bool = true) -> String {
         guard !text.isEmpty else { return "" }
-        let normalized = LLMService.normalizePunctuation(for: text)
-        return DictionaryService.shared.apply(
-            text: normalized,
-            rules: AppSettings.shared.dictionaryRules
-        )
+        // 1. PunctuationService による音声コマンド正規化（「開業」「かいぎょう」「改行」の改行変換、ピリオド、括弧、びっくりマークなど）および辞書置換
+        let formatted = PunctuationService.shared.format(text: text, isJapanese: isJapanese)
+        // 2. 句読点の正規化
+        return LLMService.normalizePunctuation(for: formatted)
     }
 }
 

@@ -1065,6 +1065,11 @@ struct TestRunner {
         assert(llm.sanitizeQuickAskOutput("") == "[答えを持っていません。]", "Empty output fallback failed")
         assert(llm.sanitizeQuickAskOutput("   ") == "[答えを持っていません。]", "Whitespace output fallback failed")
 
+        // 3. StreamingChunkPipelineService.applyDictionaryRules のリアルタイム音声コマンド（開業/改行/ピリオド）置換テスト
+        let rawWhisperInput = "お買い物リスト開業1.ピリオド"
+        let converted = StreamingChunkPipelineService.applyDictionaryRules(to: rawWhisperInput)
+        assert(converted.contains("お買い物リスト\n1."), "Expected newline and period conversion: got '\(converted)'")
+
         print("  -> Quick Ask & Paste Shortcuts passed!")
     }
 

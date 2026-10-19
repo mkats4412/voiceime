@@ -104,9 +104,15 @@ public final class FloatingPreviewController: ObservableObject {
         }
     }
 
-    /// リアルタイム音声認識テキストの逐次更新
+    /// リアルタイム音声認識テキストの逐次更新（Appleローカル音声認識等）
     public func updateLiveText(_ text: String) {
         guard phase == .liveRecording else { return }
+        self.currentText = text
+    }
+
+    /// 累積紙芝居ストリーミングパイプラインからのリアルタイム＆処理中テキスト更新
+    public func updatePipelineText(_ text: String) {
+        guard phase == .liveRecording || phase == .processing else { return }
         self.currentText = text
     }
 
