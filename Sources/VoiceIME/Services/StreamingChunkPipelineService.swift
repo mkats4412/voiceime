@@ -188,7 +188,6 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         self.isTranscribing = true
         let whisperPrompt = self.whisperPrompt
         let language = self.language
-        let isLLMEnabled = self.isLLMEnabled
         let style = self.refinementStyle
 
         NSLog("[VoiceIME] 🎭 紙芝居トリガー (0〜%.2f秒, 息継ぎ検知) ➔ Whisper累積送信開始", totalDuration)
@@ -543,11 +542,11 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         let totalDataLen = UInt32(pcmData.count)
         let totalFileLen = totalDataLen + 36
 
-        wav.append("RIFF".data(using: .ascii)!)
+        wav.append(Data("RIFF".utf8))
         var fileLen = totalFileLen
         wav.append(Data(bytes: &fileLen, count: 4))
-        wav.append("WAVE".data(using: .ascii)!)
-        wav.append("fmt ".data(using: .ascii)!)
+        wav.append(Data("WAVE".utf8))
+        wav.append(Data("fmt ".utf8))
         var subchunk1Size: UInt32 = 16
         wav.append(Data(bytes: &subchunk1Size, count: 4))
         var audioFormat: UInt16 = 1 // PCM
@@ -562,7 +561,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         wav.append(Data(bytes: &bAlign, count: 2))
         var bps = bitsPerSample
         wav.append(Data(bytes: &bps, count: 2))
-        wav.append("data".data(using: .ascii)!)
+        wav.append(Data("data".utf8))
         var dataLen = totalDataLen
         wav.append(Data(bytes: &dataLen, count: 4))
         wav.append(pcmData)

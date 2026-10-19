@@ -51,7 +51,6 @@ public final class LiveSpeechService: ObservableObject {
         stopLiveRecognition()
 
         let trimmedLang = languageCode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let isAuto = trimmedLang.isEmpty || trimmedLang == "auto"
         let isExplicitEnglish = trimmedLang.starts(with: "en")
 
         // 英語明示時以外（自動判定または日本語指定）は日本語エンジン（ja-JP）を使用

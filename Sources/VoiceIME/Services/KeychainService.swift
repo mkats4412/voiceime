@@ -145,8 +145,7 @@ public final class KeychainService {
             kSecAttrService as String: service,
             kSecAttrAccount as String: provider.accountKey,
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseOperationPrompt as String: operationPrompt(for: provider)
+            kSecMatchLimit as String: kSecMatchLimitOne
         ]
 
         var item: CFTypeRef?
