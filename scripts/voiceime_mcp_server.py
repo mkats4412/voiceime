@@ -17,6 +17,22 @@ from typing import Any, Dict, List, Optional
 VOICEIME_DIR = Path.home() / ".voiceime"
 DICT_FILE = VOICEIME_DIR / "dictionary.json"
 VOCAB_FILE = VOICEIME_DIR / "vocabulary.json"
+PROMPTS_FILE = VOICEIME_DIR / "prompts.json"
+
+DEFAULT_CASUAL_PROMPT = """あなたは音声認識テキストの校正・推敲エキスパートです（口語モード）。
+話者の語尾・文体・口語ニュアンスを維持しながら、音声入力特有の誤字脱字、聞き間違い、同音異義語の誤変換、言い直し・重複を文脈から見つけ出し、自然で読みやすい文章に修正してください。
+修正後の文章のみを必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。前置きや解説は一切不要です。"""
+
+DEFAULT_FORMAL_PROMPT = """あなたは音声認識テキストの校正・推敲エキスパートです（文章モード）。
+音声入力特有の誤字脱字、聞き間違い、同音異義語の誤変換、言い直し・重複を文脈から見つけ出し、ビジネスや記録に適した端正で自然な文章に修正してください。
+修正後の文章のみを必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。前置きや解説は一切不要です。"""
+
+DEFAULT_USER_TEMPLATE = """以下の <input> タグで囲まれた音声テキストの【誤字脱字、音声認識による聞き間違い、同音異義語や慣用句の誤変換、言い直し・重複】を前後の文脈から正しく修復・整形し、必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。
+※内容に対する回答やコメントは一切禁止します。
+
+<input>
+{input}
+</input>"""
 
 def ensure_voiceime_dir():
     VOICEIME_DIR.mkdir(parents=True, exist_ok=True)
@@ -241,6 +257,81 @@ def tool_update_dictionary_rule(args: Dict[str, Any]) -> str:
     else:
         return "エラー: dictionary.json の保存に失敗しました。"
 
+def load_prompts() -> Dict[str, str]:
+    ensure_voiceime_dir()
+    if not PROMPTS_FILE.exists():
+        return {
+            "casual_system_prompt": DEFAULT_CASUAL_PROMPT,
+            "formal_system_prompt": DEFAULT_FORMAL_PROMPT,
+            "user_prompt_template": DEFAULT_USER_TEMPLATE
+        }
+    try:
+        with open(PROMPTS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return {
+                "casual_system_prompt": data.get("casual_system_prompt", DEFAULT_CASUAL_PROMPT),
+                "formal_system_prompt": data.get("formal_system_prompt", DEFAULT_FORMAL_PROMPT),
+                "user_prompt_template": data.get("user_prompt_template", DEFAULT_USER_TEMPLATE)
+            }
+    except Exception as e:
+        sys.stderr.write(f"[VoiceIME MCP] Error loading prompts.json: {e}\n")
+        return {
+            "casual_system_prompt": DEFAULT_CASUAL_PROMPT,
+            "formal_system_prompt": DEFAULT_FORMAL_PROMPT,
+            "user_prompt_template": DEFAULT_USER_TEMPLATE
+        }
+
+def save_prompts(prompts: Dict[str, str]) -> bool:
+    ensure_voiceime_dir()
+    temp_file = PROMPTS_FILE.with_suffix(".tmp")
+    try:
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(prompts, f, ensure_ascii=False, indent=2)
+        temp_file.replace(PROMPTS_FILE)
+        notify_voiceime_app()
+        return True
+    except Exception as e:
+        sys.stderr.write(f"[VoiceIME MCP] Error saving prompts.json: {e}\n")
+        if temp_file.exists():
+            temp_file.unlink(missing_ok=True)
+        return False
+
+def tool_get_llm_prompts(args: Dict[str, Any]) -> str:
+    prompts = load_prompts()
+    return json.dumps(prompts, ensure_ascii=False, indent=2)
+
+def tool_set_llm_prompts(args: Dict[str, Any]) -> str:
+    current = load_prompts()
+    updated = []
+    if "casual_system_prompt" in args and args["casual_system_prompt"] is not None:
+        current["casual_system_prompt"] = str(args["casual_system_prompt"])
+        updated.append("口語システムプロンプト (casual_system_prompt)")
+    if "formal_system_prompt" in args and args["formal_system_prompt"] is not None:
+        current["formal_system_prompt"] = str(args["formal_system_prompt"])
+        updated.append("文章システムプロンプト (formal_system_prompt)")
+    if "user_prompt_template" in args and args["user_prompt_template"] is not None:
+        current["user_prompt_template"] = str(args["user_prompt_template"])
+        updated.append("ユーザー入力テンプレート (user_prompt_template)")
+
+    if not updated:
+        return "変更するプロンプトが指定されていません。(casual_system_prompt, formal_system_prompt, user_prompt_template のいずれかを指定してください)"
+
+    if save_prompts(current):
+        return f"以下のプロンプトを正常に更新・保存しました (VoiceIMEに即座に反映されます):\n" + "\n".join(f"- {u}" for u in updated)
+    else:
+        return "エラー: prompts.json の保存に失敗しました。"
+
+def tool_reset_llm_prompts(args: Dict[str, Any]) -> str:
+    defaults = {
+        "casual_system_prompt": DEFAULT_CASUAL_PROMPT,
+        "formal_system_prompt": DEFAULT_FORMAL_PROMPT,
+        "user_prompt_template": DEFAULT_USER_TEMPLATE
+    }
+    if save_prompts(defaults):
+        return "推敲プロンプトを初期値（推奨設定）にリセットしました。(VoiceIMEに即座に反映されます)"
+    else:
+        return "エラー: prompts.json のリセットに失敗しました。"
+
 def tool_reload_voiceime(args: Dict[str, Any]) -> str:
     # タイムスタンプを更新して FileWatcher を確実にトリガー
     try:
@@ -249,6 +340,9 @@ def tool_reload_voiceime(args: Dict[str, Any]) -> str:
             os.utime(DICT_FILE, None)
         if VOCAB_FILE.exists():
             os.utime(VOCAB_FILE, None)
+        if PROMPTS_FILE.exists():
+            os.utime(PROMPTS_FILE, None)
+        notify_voiceime_app()
         return "VoiceIME アプリへ再読み込みシグナルを送信しました。ファイル監視により即座に反映されます。"
     except Exception as e:
         return f"再読み込みトリガー中にエラーが発生しました: {e}"
@@ -382,6 +476,43 @@ TOOLS = [
             "type": "object",
             "properties": {}
         }
+    },
+    {
+        "name": "get_llm_prompts",
+        "description": "VoiceIME の推敲（LLM）用プロンプト（口語システムプロンプト、文章システムプロンプト、ユーザー入力テンプレート）を取得します。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
+        "name": "set_llm_prompts",
+        "description": "VoiceIME の推敲（LLM）用プロンプトを更新します。指定した項目のみが更新され、~/.voiceime/prompts.json に即座に保存・同期されます。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "casual_system_prompt": {
+                    "type": "string",
+                    "description": "口語モード（チャット・会話向け）のシステムプロンプト (任意)"
+                },
+                "formal_system_prompt": {
+                    "type": "string",
+                    "description": "文章モード（ビジネス・報告書向け）のシステムプロンプト (任意)"
+                },
+                "user_prompt_template": {
+                    "type": "string",
+                    "description": "ユーザー入力プロンプトのテンプレート（{input} にWhisperテキストが挿入されます）(任意)"
+                }
+            }
+        }
+    },
+    {
+        "name": "reset_llm_prompts",
+        "description": "VoiceIME の推敲（LLM）用プロンプトを推奨初期値にリセットします。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {}
+        }
     }
 ]
 
@@ -393,7 +524,10 @@ TOOL_MAP = {
     "add_dictionary_rule": tool_add_dictionary_rule,
     "remove_dictionary_rule": tool_remove_dictionary_rule,
     "update_dictionary_rule": tool_update_dictionary_rule,
-    "reload_voiceime": tool_reload_voiceime
+    "reload_voiceime": tool_reload_voiceime,
+    "get_llm_prompts": tool_get_llm_prompts,
+    "set_llm_prompts": tool_set_llm_prompts,
+    "reset_llm_prompts": tool_reset_llm_prompts
 }
 
 def handle_json_rpc(line: str):

@@ -6,8 +6,13 @@ import AppKit
 public final class VoiceIMEDiskSyncService {
     public static let shared = VoiceIMEDiskSyncService()
 
+    public var customBaseDirectory: URL? = nil
+
     public var baseDirectory: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".voiceime", isDirectory: true)
+        if let custom = customBaseDirectory {
+            return custom
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".voiceime", isDirectory: true)
     }
 
     public var dictionaryFileURL: URL {
@@ -16,6 +21,10 @@ public final class VoiceIMEDiskSyncService {
 
     public var vocabularyFileURL: URL {
         baseDirectory.appendingPathComponent("vocabulary.json")
+    }
+
+    public var promptsFileURL: URL {
+        baseDirectory.appendingPathComponent("prompts.json")
     }
 
     private let fileManager = FileManager.default
@@ -130,6 +139,39 @@ public final class VoiceIMEDiskSyncService {
         }
     }
 
+    /// `~/.voiceime/prompts.json` にプロンプト設定を書き出し
+    public func exportPromptsToDisk(config: PromptConfig) {
+        guard !isSyncingInternal else { return }
+        ensureDirectoryExists()
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+
+        lastExportTimestamp = Date().timeIntervalSince1970
+
+        if let data = try? encoder.encode(config) {
+            try? data.write(to: promptsFileURL, options: .atomic)
+            NSLog("[VoiceIME] 💾 ~/.voiceime/prompts.json を更新しました")
+        }
+    }
+
+    /// `~/.voiceime/prompts.json` からプロンプト設定を読み込む
+    public func importPromptsFromDisk() -> PromptConfig? {
+        guard fileManager.fileExists(atPath: promptsFileURL.path),
+              let data = try? Data(contentsOf: promptsFileURL) else {
+            return nil
+        }
+        do {
+            let decoder = JSONDecoder()
+            let config = try decoder.decode(PromptConfig.self, from: data)
+            NSLog("[VoiceIME] 📥 ~/.voiceime/prompts.json を読み込みました")
+            return config
+        } catch {
+            NSLog("[VoiceIME] ⚠️ ~/.voiceime/prompts.json の読み込みエラー: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
     /// アプリ起動時の同期および常駐ファイル監視の開始
     public func syncOnLaunch(settings: AppSettings) {
         self.targetSettings = settings
@@ -156,6 +198,21 @@ public final class VoiceIMEDiskSyncService {
         if let diskVocab = importVocabularyFromDisk(), !diskVocab.isEmpty {
             settings.customVocabulary = diskVocab
             didImport = true
+        }
+
+        // 推敲プロンプト設定の同期
+        if let diskPrompts = importPromptsFromDisk() {
+            settings.systemPromptCasual = diskPrompts.casualSystemPrompt
+            settings.systemPromptFormal = diskPrompts.formalSystemPrompt
+            settings.userPromptTemplate = diskPrompts.userPromptTemplate
+            didImport = true
+        } else {
+            let current = PromptConfig(
+                casualSystemPrompt: settings.systemPromptCasual,
+                formalSystemPrompt: settings.systemPromptFormal,
+                userPromptTemplate: settings.userPromptTemplate
+            )
+            exportPromptsToDisk(config: current)
         }
 
         // ファイルがまだ無かった場合は、現在の設定（初期ルール等）をJSONとして初回書き出し
@@ -264,4 +321,56 @@ public final class VoiceIMEDiskSyncService {
         ensureDirectoryExists()
         NSWorkspace.shared.open(baseDirectory)
     }
+}
+
+/// `~/.voiceime/prompts.json` の構造定義
+public struct PromptConfig: Codable, Equatable {
+    public var casualSystemPrompt: String
+    public var formalSystemPrompt: String
+    public var userPromptTemplate: String
+
+    enum CodingKeys: String, CodingKey {
+        case casualSystemPrompt = "casual_system_prompt"
+        case formalSystemPrompt = "formal_system_prompt"
+        case userPromptTemplate = "user_prompt_template"
+    }
+
+    public init(casualSystemPrompt: String, formalSystemPrompt: String, userPromptTemplate: String) {
+        self.casualSystemPrompt = casualSystemPrompt
+        self.formalSystemPrompt = formalSystemPrompt
+        self.userPromptTemplate = userPromptTemplate
+    }
+
+    public static let defaultCasualPrompt = """
+あなたは音声認識テキストの校正・推敲エキスパートです（口語モード）。
+話者の語尾・文体・口語ニュアンスを維持しながら、音声入力特有の誤字脱字、聞き間違い、同音異義語の誤変換（漢字の修正）を文脈から見つけ出し、自然で読みやすい文章に修正してください。
+
+【厳守事項】
+1. 発話内容の要約・大幅な削除・文の省略は絶対に禁止です。話された全ての文と話題を最初から最後まで漏れなく含めてください。
+2. 修正後の文章のみを必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。前置きや解説は一切不要です。
+"""
+
+    public static let defaultFormalPrompt = """
+あなたは音声認識テキストの校正・推敲エキスパートです（文章モード）。
+音声入力特有の誤字脱字、聞き間違い、同音異義語の誤変換（漢字の修正）を文脈から見つけ出し、ビジネスや記録に適した端正で自然な文章に修正してください。
+
+【厳守事項】
+1. 発話内容の要約・大幅な削除・文の省略は絶対に禁止です。話された全ての文と話題を最初から最後まで漏れなく含めてください。
+2. 修正後の文章のみを必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。前置きや解説は一切不要です。
+"""
+
+    public static let defaultUserPromptTemplate = """
+以下の <input> タグで囲まれた音声テキストを校正し、必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。
+※発話内容の要約や削除は禁止します。最初から最後まで全ての文を含めてください。
+
+<input>
+{input}
+</input>
+"""
+
+    public static let `default` = PromptConfig(
+        casualSystemPrompt: defaultCasualPrompt,
+        formalSystemPrompt: defaultFormalPrompt,
+        userPromptTemplate: defaultUserPromptTemplate
+    )
 }

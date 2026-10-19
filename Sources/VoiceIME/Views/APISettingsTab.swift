@@ -14,6 +14,16 @@ public final class APISettingsViewModel: ObservableObject {
     @Published public var customSaveMessage: String? = nil
     @Published public var hasCustomKeyStored: Bool = false
 
+    @Published public var sarashinaApiKeyInput: String = ""
+    @Published public var isSarashinaKeyVisible: Bool = false
+    @Published public var sarashinaSaveMessage: String? = nil
+    @Published public var hasSarashinaKeyStored: Bool = false
+
+    @Published public var llmApiKeyInput: String = ""
+    @Published public var isLLMKeyVisible: Bool = false
+    @Published public var llmSaveMessage: String? = nil
+    @Published public var hasLLMKeyStored: Bool = false
+
     @Published public var isTestingLLM: Bool = false
     @Published public var testLLMResult: String? = nil
     @Published public var testLLMIsError: Bool = false
@@ -21,6 +31,14 @@ public final class APISettingsViewModel: ObservableObject {
     @Published public var isTestingQuickAsk: Bool = false
     @Published public var testQuickAskResult: String? = nil
     @Published public var testQuickAskIsError: Bool = false
+
+    public enum PromptTabMode: String, CaseIterable, Identifiable {
+        case casual = "口語システムプロンプト"
+        case formal = "文章システムプロンプト"
+        case userTemplate = "ユーザー入力テンプレート"
+        public var id: String { rawValue }
+    }
+    @Published public var selectedPromptTab: PromptTabMode = .casual
 
     public let maskText = "••••••••••••••••••••••••••••••••"
     private let keychain = KeychainService.shared
@@ -40,6 +58,59 @@ public final class APISettingsViewModel: ObservableObject {
             apiKeyInput = ""
         }
         updateCustomKeyStatus()
+        updateSarashinaKeyStatus()
+        updateLLMKeyStatus(settings: AppSettings.shared)
+    }
+
+    public func updateSarashinaKeyStatus() {
+        let exists = keychain.hasAPIKey(for: .sarashina)
+        hasSarashinaKeyStored = exists
+        isSarashinaKeyVisible = false
+        if exists {
+            sarashinaApiKeyInput = maskText
+        } else {
+            sarashinaApiKeyInput = ""
+        }
+    }
+
+    public func toggleSarashinaKeyVisibility() {
+        isSarashinaKeyVisible.toggle()
+        if isSarashinaKeyVisible {
+            if (sarashinaApiKeyInput == maskText || sarashinaApiKeyInput.isEmpty),
+               let loadedKey = keychain.loadAPIKey(for: .sarashina) {
+                sarashinaApiKeyInput = loadedKey
+            }
+        } else {
+            if let loadedKey = keychain.loadAPIKey(for: .sarashina), sarashinaApiKeyInput == loadedKey {
+                sarashinaApiKeyInput = maskText
+            }
+        }
+    }
+
+    public func saveSarashinaAPIKey() {
+        let trimmed = sarashinaApiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty && trimmed != maskText else { return }
+
+        if keychain.saveAPIKey(trimmed, for: .sarashina) {
+            updateSarashinaKeyStatus()
+            AppState.shared.resetError()
+            sarashinaSaveMessage = "✓ Sarashina APIキーをKeychainに保存しました"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.sarashinaSaveMessage = nil
+            }
+        } else {
+            sarashinaSaveMessage = "⚠️ 保存に失敗しました"
+        }
+    }
+
+    public func deleteSarashinaAPIKey() {
+        if keychain.deleteAPIKey(for: .sarashina) {
+            updateSarashinaKeyStatus()
+            sarashinaSaveMessage = "Sarashina APIキーを削除しました"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.sarashinaSaveMessage = nil
+            }
+        }
     }
 
     public func updateCustomKeyStatus() {
@@ -133,12 +204,86 @@ public final class APISettingsViewModel: ObservableObject {
         }
     }
 
+    public func updateLLMKeyStatus(settings: AppSettings) {
+        let provider = settings.resolvedLLMProvider
+        let exists = keychain.hasAPIKey(for: provider)
+        hasLLMKeyStored = exists
+        isLLMKeyVisible = false
+        if exists {
+            llmApiKeyInput = maskText
+        } else {
+            llmApiKeyInput = ""
+        }
+    }
+
+    public func toggleLLMKeyVisibility(settings: AppSettings) {
+        let provider = settings.resolvedLLMProvider
+        isLLMKeyVisible.toggle()
+        if isLLMKeyVisible {
+            if (llmApiKeyInput == maskText || llmApiKeyInput.isEmpty),
+               let loadedKey = keychain.loadAPIKey(for: provider) {
+                llmApiKeyInput = loadedKey
+            }
+        } else {
+            if let loadedKey = keychain.loadAPIKey(for: provider), llmApiKeyInput == loadedKey {
+                llmApiKeyInput = maskText
+            }
+        }
+    }
+
+    public func saveLLMAPIKey(settings: AppSettings) {
+        let provider = settings.resolvedLLMProvider
+        let trimmed = llmApiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty && trimmed != maskText else { return }
+
+        if keychain.saveAPIKey(trimmed, for: provider) {
+            if provider == .sarashina {
+                _ = keychain.saveAPIKey(trimmed, for: .custom)
+            } else if provider == .custom {
+                _ = keychain.saveAPIKey(trimmed, for: .sarashina)
+            }
+            updateLLMKeyStatus(settings: settings)
+            updateKeyStatus(currentProvider: settings.selectedProvider)
+            AppState.shared.resetError()
+            llmSaveMessage = "✓ \(provider.displayName) APIキーをKeychainに保存しました"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.llmSaveMessage = nil
+            }
+        } else {
+            llmSaveMessage = "⚠️ 保存に失敗しました"
+        }
+    }
+
+    public func deleteLLMAPIKey(settings: AppSettings) {
+        let provider = settings.resolvedLLMProvider
+        if keychain.deleteAPIKey(for: provider) {
+            if provider == .sarashina {
+                _ = keychain.deleteAPIKey(for: .custom)
+            } else if provider == .custom {
+                _ = keychain.deleteAPIKey(for: .sarashina)
+            }
+            updateLLMKeyStatus(settings: settings)
+            updateKeyStatus(currentProvider: settings.selectedProvider)
+            llmSaveMessage = "\(provider.displayName) APIキーを削除しました"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.llmSaveMessage = nil
+            }
+        }
+    }
+
     public func testLLMConnection(settings: AppSettings) async {
+        let config = settings.effectiveLLMConfig
+        let trimmedModel = config.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedModel.isEmpty else {
+            testLLMIsError = false
+            testLLMResult = "推敲モデル名が未指定のため推敲OFFです（Whisper文字起こしをそのまま出力）"
+            return
+        }
+
         isTestingLLM = true
         testLLMResult = nil
         testLLMIsError = false
 
-        let config = settings.effectiveLLMConfig
         let resolvedProvider = settings.resolvedLLMProvider
         let apiKey = keychain.loadAPIKey(for: resolvedProvider)
 
@@ -147,7 +292,7 @@ public final class APISettingsViewModel: ObservableObject {
                 text: "えーっと、これは音声入力のテストです。",
                 baseURL: config.baseURL,
                 apiKey: apiKey,
-                model: config.modelName,
+                model: trimmedModel,
                 promptHint: settings.promptHint.isEmpty ? nil : settings.promptHint,
                 style: settings.refinementStyle,
                 isCustom: config.isCustom
@@ -222,6 +367,7 @@ public struct APISettingsTab: View {
                 switch settings.selectedProvider {
                 case .groq: settings.groqBaseURL = newValue
                 case .openai: settings.openAIBaseURL = newValue
+                case .sarashina: settings.sarashinaBaseURL = newValue
                 case .custom: settings.customLLMBaseURL = newValue
                 }
             }
@@ -236,6 +382,7 @@ public struct APISettingsTab: View {
                 switch settings.selectedProvider {
                 case .groq: settings.groqModel = newValue
                 case .openai: settings.openAIModel = newValue
+                case .sarashina: settings.sarashinaModel = newValue
                 case .custom: settings.customLLMModel = newValue
                 }
             }
@@ -248,6 +395,7 @@ public struct APISettingsTab: View {
             get: { settings.currentLLMModelName },
             set: { newValue in
                 switch settings.resolvedLLMProvider {
+                case .sarashina: settings.sarashinaModel = newValue
                 case .groq: settings.groqLLMModel = newValue
                 case .openai: settings.openAILLMModel = newValue
                 case .custom: settings.customLLMModel = newValue
@@ -591,24 +739,178 @@ public struct APISettingsTab: View {
                 )
 
                 // ==========================================
-                // セクション2: AI（LLM）推敲・文脈理解
+                // セクション2: 音声認識（Whisper）詳細設定
+                // ==========================================
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Label("音声認識（Whisper）詳細設定", systemImage: "waveform")
+                            .font(.headline)
+                        Spacer()
+                        Text("対象: \(currentProvider.displayName)")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.secondary.opacity(0.12))
+                            .cornerRadius(4)
+                    }
+
+                    // Base URL 入力
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(currentProvider.displayName) Base URL:")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+
+                        InputFieldBox {
+                            Image(systemName: "link")
+                                .foregroundColor(.blue)
+                                .font(.system(size: 13))
+                        } content: {
+                            TextField("https://api.groq.com/openai/v1", text: baseURLBinding)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 12, design: .monospaced))
+                        } trailing: {
+                            if !baseURLBinding.wrappedValue.isEmpty {
+                                Button(action: { baseURLBinding.wrappedValue = "" }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.secondary)
+                                        .font(.system(size: 13))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+
+                        if let resolvedURL = apiService.constructEndpointURL(from: settings.currentBaseURL, mode: settings.apiMode) {
+                            HStack(spacing: 4) {
+                                Text("送信先:")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text(resolvedURL.absoluteString)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(.primary)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.secondary.opacity(0.08))
+                            .cornerRadius(4)
+                        }
+                    }
+
+                    // 音声認識モデル名
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("音声認識モデル名:")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            Text("[自由入力・変更可]")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("現在: \(settings.currentModelName)")
+                                .font(.caption)
+                                .foregroundColor(.accentColor)
+                        }
+
+                        InputFieldBox {
+                            Image(systemName: "waveform")
+                                .foregroundColor(.orange)
+                                .font(.system(size: 13))
+                        } content: {
+                            TextField("モデルIDを入力（例: whisper-large-v3-turbo, whisper-1 など）", text: modelNameBinding)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 12.5, design: .monospaced))
+                        } trailing: {
+                            if !modelNameBinding.wrappedValue.isEmpty {
+                                Button(action: { modelNameBinding.wrappedValue = "" }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.secondary)
+                                        .font(.system(size: 13))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+
+                        HStack(spacing: 6) {
+                            Image(systemName: "hand.tap.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                            Text("候補からワンクリックで入力:")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+
+                            if currentProvider == .groq {
+                                Button("whisper-large-v3-turbo") {
+                                    settings.groqModel = "whisper-large-v3-turbo"
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+
+                                Button("whisper-large-v3") {
+                                    settings.groqModel = "whisper-large-v3"
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                            } else {
+                                Button("gpt-4o-mini-transcribe (高速)") {
+                                    settings.openAIModel = "gpt-4o-mini-transcribe"
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+
+                                Button("whisper-1 (高精度・約2秒)") {
+                                    settings.openAIModel = "whisper-1"
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                            }
+                        }
+                    }
+
+                    // 一括データ送信トグル
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    Toggle(isOn: $settings.batchTranscriptionEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("録音終了時の一括送信モード（OFF時はリアルタイム累積・紙芝居ストリーミング）")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            Text("ONの場合、キーを離した際に全音声を1回でAPI送信します。OFF（デフォルト）の場合、話者の息継ぎ（無音）を検知するたびに0秒からの累積音声をAPIへ送信し、紙芝居のように画面全体を最新の高精度テキストへ上書き更新します（1分間に最大18回レート制限でAPIクォータを安全に保護）。")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color(NSColor.controlBackgroundColor).opacity(0.6))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color(NSColor.separatorColor).opacity(0.6), lineWidth: 1)
+                )
+
+                // ==========================================
+                // セクション3: AI（LLM）推敲・文脈理解 [共通設定]
                 // ==========================================
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(spacing: 6) {
-                                Label("AI（LLM）推敲・文脈理解", systemImage: "sparkles")
+                                Label("AI（LLM）推敲・文脈理解（共通設定）", systemImage: "sparkles")
                                     .font(.headline)
-                                Text("おすすめ")
+                                Text(settings.isLLMRefinementActive ? "推敲有効" : "推敲OFF")
                                     .font(.caption2)
                                     .fontWeight(.bold)
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(settings.isLLMRefinementActive ? .blue : .secondary)
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 1)
-                                    .background(Color.blue.opacity(0.12))
+                                    .background(settings.isLLMRefinementActive ? Color.blue.opacity(0.12) : Color.secondary.opacity(0.12))
                                     .cornerRadius(4)
                             }
-                            Text("音声認識結果の意味を理解し、「えーっと」などのフィラーを除去して自然な句読点（、。？！）を補完します。")
+                            Text("音声認識プロバイダー（Groq / OpenAI）に関係なく共通で適用されます。音声の誤字・同音異義語・慣用句の誤りを自然に復元します。")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -621,290 +923,286 @@ public struct APISettingsTab: View {
 
                     if settings.llmRefinementEnabled {
                         VStack(alignment: .leading, spacing: 12) {
-                            // 1. プロバイダー選択
+                            // 1. 推敲モデル名（ユーザー自由入力）
                             VStack(alignment: .leading, spacing: 5) {
                                 HStack {
-                                    Text("推敲プロバイダー:")
+                                    Text("推敲モデル名:")
                                         .font(.subheadline)
                                         .fontWeight(.medium)
+                                    Text("※ 空欄の場合は推敲を使用せず、文字起こしをそのまま出力します")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
                                     Spacer()
-                                    Text("使用中: \(settings.effectiveLLMProviderDisplayName)")
-                                        .font(.caption)
-                                        .foregroundColor(.accentColor)
-                                }
-
-                                Picker("", selection: $settings.llmProviderMode) {
-                                    Text("音声認識と同一 (\(currentProvider.displayName))").tag(LLMProviderMode.sameAsSpeech)
-                                    Text("Groq (クラウド高速)").tag(LLMProviderMode.groq)
-                                    Text("OpenAI (クラウド高品質)").tag(LLMProviderMode.openai)
-                                    Text("カスタム (ローカルLLM / 互換URL)").tag(LLMProviderMode.custom)
-                                }
-                                .pickerStyle(.menu)
-                            }
-
-                            // 2. プロバイダーに応じた詳細設定
-                            if settings.llmProviderMode == .custom {
-                                // カスタムLLM (Ollama, LM Studio, その他)
-                                VStack(alignment: .leading, spacing: 10) {
-                                    // Base URL 入力
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        HStack {
-                                            Text("カスタム Base URL:")
-                                                .font(.subheadline)
-                                                .fontWeight(.medium)
-                                            Spacer()
-                                            Text("OpenAI互換 (/chat/completions)")
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                        }
-
-                                        InputFieldBox {
-                                            Image(systemName: "network")
-                                                .foregroundColor(.purple)
-                                                .font(.system(size: 13))
-                                        } content: {
-                                            TextField("http://localhost:11434/v1", text: $settings.customLLMBaseURL)
-                                                .textFieldStyle(.plain)
-                                                .font(.system(size: 12, design: .monospaced))
-                                        } trailing: {
-                                            if !settings.customLLMBaseURL.isEmpty {
-                                                Button(action: { settings.customLLMBaseURL = "" }) {
-                                                    Image(systemName: "xmark.circle.fill")
-                                                        .foregroundColor(.secondary)
-                                                        .font(.system(size: 13))
-                                                }
-                                                .buttonStyle(.plain)
-                                            }
-                                        }
-
-                                        if let resolvedChat = llmService.constructChatURL(from: settings.customLLMBaseURL) {
-                                            HStack(spacing: 4) {
-                                                Text("送信先:")
-                                                    .font(.caption2)
-                                                    .foregroundColor(.secondary)
-                                                Text(resolvedChat.absoluteString)
-                                                    .font(.system(size: 11, design: .monospaced))
-                                                    .foregroundColor(.primary)
-                                            }
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(Color.secondary.opacity(0.08))
-                                            .cornerRadius(4)
-                                        }
-
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "hand.tap.fill")
-                                                .font(.system(size: 10))
-                                                .foregroundColor(.secondary)
-                                            Text("プリセット:")
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-
-                                            Button("Sarashina") {
-                                                settings.customLLMBaseURL = "https://api.sarashina.ai/v1"
-                                                settings.customLLMModel = "sarashina3-nano"
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .controlSize(.mini)
-
-                                            Button("Ollama (11434)") {
-                                                settings.customLLMBaseURL = "http://localhost:11434/v1"
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .controlSize(.mini)
-
-                                            Button("LM Studio (1234)") {
-                                                settings.customLLMBaseURL = "http://localhost:1234/v1"
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .controlSize(.mini)
-
-                                            Button("LocalAI (8080)") {
-                                                settings.customLLMBaseURL = "http://localhost:8080/v1"
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .controlSize(.mini)
-                                        }
-                                    }
-
-                                    // モデル名入力
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("推敲モデル名:")
-                                            .font(.subheadline)
-                                            .fontWeight(.medium)
-
-                                        InputFieldBox {
-                                            Image(systemName: "brain")
-                                                .foregroundColor(.purple)
-                                                .font(.system(size: 13))
-                                        } content: {
-                                            TextField("例: sarashina3-nano, llama3.2, qwen2.5 など", text: $settings.customLLMModel)
-                                                .textFieldStyle(.plain)
-                                                .font(.system(size: 12.5, design: .monospaced))
-                                        } trailing: {
-                                            if !settings.customLLMModel.isEmpty {
-                                                Button(action: { settings.customLLMModel = "" }) {
-                                                    Image(systemName: "xmark.circle.fill")
-                                                        .foregroundColor(.secondary)
-                                                        .font(.system(size: 13))
-                                                }
-                                                .buttonStyle(.plain)
-                                            }
-                                        }
-
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "hand.tap.fill")
-                                                .font(.system(size: 10))
-                                                .foregroundColor(.secondary)
-                                            Text("プリセット:")
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-
-                                            Button("sarashina3-nano") { settings.customLLMModel = "sarashina3-nano" }
-                                                .buttonStyle(.bordered).controlSize(.mini)
-                                            Button("sarashina3-mini") { settings.customLLMModel = "sarashina3-mini" }
-                                                .buttonStyle(.bordered).controlSize(.mini)
-                                            Button("llama3.2") { settings.customLLMModel = "llama3.2" }
-                                                .buttonStyle(.bordered).controlSize(.mini)
-                                            Button("qwen2.5:7b") { settings.customLLMModel = "qwen2.5:7b" }
-                                                .buttonStyle(.bordered).controlSize(.mini)
-                                        }
-                                    }
-
-                                    // カスタムAPIキー（任意）
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        HStack {
-                                            Text("カスタムAPIキー (任意):")
-                                                .font(.subheadline)
-                                                .fontWeight(.medium)
-                                            Text("※ ローカルLLM(Ollama等)は空欄のままで使用可能です")
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                        }
-
-                                        HStack(spacing: 8) {
-                                            InputFieldBox {
-                                                Image(systemName: "key.fill")
-                                                    .foregroundColor(.yellow)
-                                                    .font(.system(size: 13))
-                                            } content: {
-                                                if vm.isCustomKeyVisible {
-                                                    TextField("APIキーを入力（任意）", text: $vm.customApiKeyInput)
-                                                        .textFieldStyle(.plain)
-                                                        .font(.system(size: 12, design: .monospaced))
-                                                } else {
-                                                    SecureField("APIキーを入力（任意）", text: $vm.customApiKeyInput)
-                                                        .textFieldStyle(.plain)
-                                                        .font(.system(size: 12, design: .monospaced))
-                                                }
-                                            } trailing: {
-                                                Button(action: { vm.toggleCustomKeyVisibility() }) {
-                                                    Image(systemName: vm.isCustomKeyVisible ? "eye.slash.fill" : "eye.fill")
-                                                        .foregroundColor(.secondary)
-                                                        .font(.system(size: 13))
-                                                }
-                                                .buttonStyle(.plain)
-                                            }
-
-                                            Button("保存") {
-                                                vm.saveCustomAPIKey()
-                                            }
-                                            .buttonStyle(.borderedProminent)
-                                            .controlSize(.regular)
-                                            .disabled(vm.customApiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || vm.customApiKeyInput == vm.maskText)
-
-                                            if vm.hasCustomKeyStored {
-                                                Button("削除") {
-                                                    vm.deleteCustomAPIKey()
-                                                }
-                                                .buttonStyle(.bordered)
-                                                .controlSize(.regular)
-                                                .foregroundColor(.red)
-                                                .help("KeychainからカスタムAPIキーを消去")
-                                            }
-                                        }
-
-                                        if let msg = vm.customSaveMessage {
-                                            Text(msg)
-                                                .font(.caption)
-                                                .foregroundColor(.accentColor)
-                                        }
-                                    }
-                                }
-                            } else {
-                                // Groq / OpenAI / 音声認識と同一 の場合
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack {
-                                        Text("推敲モデル名:")
-                                            .font(.subheadline)
-                                            .fontWeight(.medium)
-                                        Text("[自由入力・変更可]")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                        Spacer()
-                                        Text("現在: \(settings.currentLLMModelName)")
+                                    if settings.userLLMModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Text("未指定 (推敲なし)")
+                                            .font(.caption)
+                                            .foregroundColor(.orange)
+                                    } else {
+                                        Text("指定中: \(settings.userLLMModel)")
                                             .font(.caption)
                                             .foregroundColor(.accentColor)
                                     }
+                                }
 
-                                    InputFieldBox {
-                                        Image(systemName: "brain")
-                                            .foregroundColor(.purple)
-                                            .font(.system(size: 13))
-                                    } content: {
-                                        TextField("モデルIDを入力（例: qwen/qwen3.8-27b, gpt-4o-mini など）", text: llmModelNameBinding)
-                                            .textFieldStyle(.plain)
-                                            .font(.system(size: 12.5, design: .monospaced))
-                                    } trailing: {
-                                        if !llmModelNameBinding.wrappedValue.isEmpty {
-                                            Button(action: { llmModelNameBinding.wrappedValue = "" }) {
-                                                Image(systemName: "xmark.circle.fill")
-                                                    .foregroundColor(.secondary)
-                                                    .font(.system(size: 13))
-                                            }
-                                            .buttonStyle(.plain)
+                                InputFieldBox {
+                                    Image(systemName: "brain")
+                                        .foregroundColor(.purple)
+                                        .font(.system(size: 13))
+                                } content: {
+                                    TextField("例: sarashina3-mini, gpt-4o-mini など（空欄で推敲なし）", text: $settings.userLLMModel)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 12.5, design: .monospaced))
+                                } trailing: {
+                                    if !settings.userLLMModel.isEmpty {
+                                        Button(action: { settings.userLLMModel = "" }) {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .foregroundColor(.secondary)
+                                                .font(.system(size: 13))
                                         }
+                                        .buttonStyle(.plain)
+                                        .help("推敲モデル名をクリア（推敲OFF）")
                                     }
+                                }
 
-                                    HStack(spacing: 6) {
-                                        Image(systemName: "hand.tap.fill")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(.secondary)
-                                        Text("候補からワンクリックで入力:")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
+                                HStack(spacing: 6) {
+                                    Image(systemName: "hand.tap.fill")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.secondary)
+                                    Text("ワンクリック候補:")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
 
-                                        let activeProvider = settings.resolvedLLMProvider
-                                        if activeProvider == .groq {
-                                            Button("llama-3.1-8b-instant (最速・安定)") {
-                                                settings.groqLLMModel = "llama-3.1-8b-instant"
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .controlSize(.mini)
-
-                                            Button("qwen/qwen3.8-27b") {
-                                                settings.groqLLMModel = "qwen/qwen3.8-27b"
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .controlSize(.mini)
-
-                                            Button("openai/gpt-oss-20b") {
-                                                settings.groqLLMModel = "openai/gpt-oss-20b"
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .controlSize(.mini)
-                                        } else {
-                                            Button("gpt-4o-mini") {
-                                                settings.openAILLMModel = "gpt-4o-mini"
-                                            }
-                                            .buttonStyle(.bordered)
-                                            .controlSize(.mini)
+                                    Button("🌸 sarashina3-mini (推奨)") {
+                                        settings.userLLMModel = "sarashina3-mini"
+                                        if settings.userLLMBaseURL.isEmpty || !settings.userLLMBaseURL.contains("sarashina") {
+                                            settings.userLLMBaseURL = "https://api.sarashina.ai/v1"
                                         }
+                                        vm.updateLLMKeyStatus(settings: settings)
                                     }
+                                    .buttonStyle(.bordered).controlSize(.mini)
+
+                                    Button("🌸 sarashina3-nano") {
+                                        settings.userLLMModel = "sarashina3-nano"
+                                        if settings.userLLMBaseURL.isEmpty || !settings.userLLMBaseURL.contains("sarashina") {
+                                            settings.userLLMBaseURL = "https://api.sarashina.ai/v1"
+                                        }
+                                        vm.updateLLMKeyStatus(settings: settings)
+                                    }
+                                    .buttonStyle(.bordered).controlSize(.mini)
+
+                                    Button("🟢 gpt-4o-mini") {
+                                        settings.userLLMModel = "gpt-4o-mini"
+                                        settings.userLLMBaseURL = "https://api.openai.com/v1"
+                                        vm.updateLLMKeyStatus(settings: settings)
+                                    }
+                                    .buttonStyle(.bordered).controlSize(.mini)
+
+                                    Button("⚡ openai/gpt-oss-120b") {
+                                        settings.userLLMModel = "openai/gpt-oss-120b"
+                                        settings.userLLMBaseURL = "https://api.groq.com/openai/v1"
+                                        vm.updateLLMKeyStatus(settings: settings)
+                                    }
+                                    .buttonStyle(.bordered).controlSize(.mini)
+
+                                    Button("🚫 未指定 (推敲OFF)") {
+                                        settings.userLLMModel = ""
+                                    }
+                                    .buttonStyle(.bordered).controlSize(.mini)
+                                    .foregroundColor(.orange)
                                 }
                             }
 
-                            // 3. 推敲接続テスト
+                            // 2. 推敲 Base URL（直接入力）
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack {
+                                    Text("推敲 API Base URL:")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                    Spacer()
+                                    Text("自動検出: \(settings.resolvedLLMProvider.displayName)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                InputFieldBox {
+                                    Image(systemName: "network")
+                                        .foregroundColor(.blue)
+                                        .font(.system(size: 13))
+                                } content: {
+                                    TextField("https://api.sarashina.ai/v1", text: $settings.userLLMBaseURL)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 12, design: .monospaced))
+                                } trailing: {
+                                    if !settings.userLLMBaseURL.isEmpty {
+                                        Button(action: { settings.userLLMBaseURL = "" }) {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .foregroundColor(.secondary)
+                                                .font(.system(size: 13))
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+
+                                HStack(spacing: 6) {
+                                    Image(systemName: "hand.tap.fill")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.secondary)
+                                    Text("プリセット:")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+
+                                    Button("Sarashina") {
+                                        settings.userLLMBaseURL = "https://api.sarashina.ai/v1"
+                                        vm.updateLLMKeyStatus(settings: settings)
+                                    }
+                                    .buttonStyle(.bordered).controlSize(.mini)
+
+                                    Button("OpenAI") {
+                                        settings.userLLMBaseURL = "https://api.openai.com/v1"
+                                        vm.updateLLMKeyStatus(settings: settings)
+                                    }
+                                    .buttonStyle(.bordered).controlSize(.mini)
+
+                                    Button("Groq") {
+                                        settings.userLLMBaseURL = "https://api.groq.com/openai/v1"
+                                        vm.updateLLMKeyStatus(settings: settings)
+                                    }
+                                    .buttonStyle(.bordered).controlSize(.mini)
+
+                                    Button("Ollama (11434)") {
+                                        settings.userLLMBaseURL = "http://localhost:11434/v1"
+                                        vm.updateLLMKeyStatus(settings: settings)
+                                    }
+                                    .buttonStyle(.bordered).controlSize(.mini)
+
+                                    Button("LM Studio (1234)") {
+                                        settings.userLLMBaseURL = "http://localhost:1234/v1"
+                                        vm.updateLLMKeyStatus(settings: settings)
+                                    }
+                                    .buttonStyle(.bordered).controlSize(.mini)
+                                }
+                            }
+
+                            // 3. 推敲 APIキー (Keychain保存)
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack {
+                                    Text("\(settings.resolvedLLMProvider.displayName) APIキー:")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                    if settings.resolvedLLMProvider == .custom && (settings.userLLMBaseURL.contains("localhost") || settings.userLLMBaseURL.contains("127.0.0.1")) {
+                                        Text("※ ローカルLLM (Ollama等) ではAPIキー不要です")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    if vm.hasLLMKeyStored {
+                                        HStack(spacing: 3) {
+                                            Image(systemName: "lock.shield.fill")
+                                                .foregroundColor(.green)
+                                            Text("Keychain暗号化保護中")
+                                                .foregroundColor(.green)
+                                        }
+                                        .font(.caption2)
+                                    }
+                                }
+
+                                HStack(spacing: 8) {
+                                    InputFieldBox {
+                                        Image(systemName: "key.fill")
+                                            .foregroundColor(.accentColor)
+                                            .font(.system(size: 13))
+                                    } content: {
+                                        if vm.isLLMKeyVisible {
+                                            TextField("APIキーを入力", text: $vm.llmApiKeyInput)
+                                                .textFieldStyle(.plain)
+                                                .font(.system(size: 12, design: .monospaced))
+                                        } else {
+                                            SecureField("APIキーを入力", text: $vm.llmApiKeyInput)
+                                                .textFieldStyle(.plain)
+                                                .font(.system(size: 12, design: .monospaced))
+                                        }
+                                    } trailing: {
+                                        Button(action: { vm.toggleLLMKeyVisibility(settings: settings) }) {
+                                            Image(systemName: vm.isLLMKeyVisible ? "eye.slash.fill" : "eye.fill")
+                                                .foregroundColor(.secondary)
+                                                .font(.system(size: 13))
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+
+                                    Button("保存") {
+                                        vm.saveLLMAPIKey(settings: settings)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.regular)
+                                    .disabled(vm.llmApiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || vm.llmApiKeyInput == vm.maskText)
+
+                                    if vm.hasLLMKeyStored {
+                                        Button("削除") {
+                                            vm.deleteLLMAPIKey(settings: settings)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.regular)
+                                        .foregroundColor(.red)
+                                        .help("Keychainからこの推敲APIキーを消去")
+                                    }
+                                }
+
+                                if let msg = vm.llmSaveMessage {
+                                    Text(msg)
+                                        .font(.caption)
+                                        .foregroundColor(.accentColor)
+                                }
+                            }
+
+                            // 4. 文体スタイル
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("推敲文体スタイル:")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+
+                                HStack(spacing: 8) {
+                                    Button(action: { settings.refinementStyle = .casual }) {
+                                        HStack {
+                                            Image(systemName: settings.refinementStyle == .casual ? "largecircle.fill.circle" : "circle")
+                                                .foregroundColor(.accentColor)
+                                            VStack(alignment: .leading, spacing: 1) {
+                                                Text("口語スタイル（会話・チャット向け）")
+                                                    .font(.system(size: 11.5, weight: .semibold))
+                                                Text("「〜ですね」「〜ですよ」等の自然な語尾や口調をそのまま維持します。")
+                                                    .font(.system(size: 9.5))
+                                                    .foregroundColor(.secondary)
+                                            }
+                                        }
+                                        .padding(6)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(settings.refinementStyle == .casual ? Color.accentColor.opacity(0.1) : Color.clear))
+                                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    Button(action: { settings.refinementStyle = .formal }) {
+                                        HStack {
+                                            Image(systemName: settings.refinementStyle == .formal ? "largecircle.fill.circle" : "circle")
+                                                .foregroundColor(.accentColor)
+                                            VStack(alignment: .leading, spacing: 1) {
+                                                Text("文章スタイル（報告書・メール向け）")
+                                                    .font(.system(size: 11.5, weight: .semibold))
+                                                Text("「〜である」「〜報告いたします」等の標準的な書き言葉に整えます。")
+                                                    .font(.system(size: 9.5))
+                                                    .foregroundColor(.secondary)
+                                            }
+                                        }
+                                        .padding(6)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(settings.refinementStyle == .formal ? Color.accentColor.opacity(0.1) : Color.clear))
+                                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+
+                            // 5. 推敲接続テスト
                             Divider().padding(.vertical, 2)
 
                             HStack(spacing: 10) {
@@ -936,6 +1234,78 @@ public struct APISettingsTab: View {
                                 }
                                 Spacer()
                             }
+
+                            Divider().padding(.vertical, 4)
+
+                            // 6. 推敲プロンプトの編集 (prompts.json 連動)
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Image(systemName: "pencil.and.outline")
+                                        .foregroundColor(.purple)
+                                    Text("推敲プロンプトの編集:")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                    Spacer()
+
+                                    Button("Finderで開く") {
+                                        VoiceIMEDiskSyncService.shared.openFolderInFinder()
+                                    }
+                                    .buttonStyle(.bordered).controlSize(.mini)
+                                    .help("~/.voiceime/prompts.json が保存されているフォルダをFinderで開きます")
+
+                                    Button("初期値に戻す") {
+                                        settings.resetPromptsToDefaults()
+                                    }
+                                    .buttonStyle(.bordered).controlSize(.mini)
+                                    .foregroundColor(.orange)
+                                    .help("プロンプトを推奨初期値にリセットします")
+                                }
+
+                                Picker("", selection: $vm.selectedPromptTab) {
+                                    ForEach(APISettingsViewModel.PromptTabMode.allCases) { mode in
+                                        Text(mode.rawValue).tag(mode)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    if vm.selectedPromptTab == .casual {
+                                        TextEditor(text: $settings.systemPromptCasual)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .frame(height: 100)
+                                            .padding(4)
+                                            .background(RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.textBackgroundColor)))
+                                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+                                        Text("※ 口語モード発話時にシステムプロンプトとして使用されます。")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    } else if vm.selectedPromptTab == .formal {
+                                        TextEditor(text: $settings.systemPromptFormal)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .frame(height: 100)
+                                            .padding(4)
+                                            .background(RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.textBackgroundColor)))
+                                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+                                        Text("※ 文章モード発話時にシステムプロンプトとして使用されます。")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    } else {
+                                        TextEditor(text: $settings.userPromptTemplate)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .frame(height: 100)
+                                            .padding(4)
+                                            .background(RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.textBackgroundColor)))
+                                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+                                        Text("※ {input} の部分にWhisper文字起こしテキストが代入されます。")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+
+                                Text("💡 ~/.voiceime/prompts.json に常時同期。MCPや外部エディタからの編集も即座に反映されます。")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
                 }
@@ -950,7 +1320,7 @@ public struct APISettingsTab: View {
                 )
 
                 // ==========================================
-                // セクション3: AI会話（クイック質問）モデル設定
+                // セクション4: AI会話（クイック質問）モデル設定
                 // ==========================================
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
@@ -1271,145 +1641,6 @@ public struct APISettingsTab: View {
                         .stroke(Color(NSColor.separatorColor).opacity(0.6), lineWidth: 1)
                 )
 
-                // ==========================================
-                // セクション4: 音声認識（Whisper）設定
-                // ==========================================
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Label("音声認識（Whisper）詳細設定", systemImage: "waveform")
-                            .font(.headline)
-                        Spacer()
-                        Text("対象: \(currentProvider.displayName)")
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.12))
-                            .cornerRadius(4)
-                    }
-
-                    // Base URL 入力
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("\(currentProvider.displayName) Base URL:")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-
-                        InputFieldBox {
-                            Image(systemName: "link")
-                                .foregroundColor(.blue)
-                                .font(.system(size: 13))
-                        } content: {
-                            TextField("https://api.groq.com/openai/v1", text: baseURLBinding)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 12, design: .monospaced))
-                        } trailing: {
-                            if !baseURLBinding.wrappedValue.isEmpty {
-                                Button(action: { baseURLBinding.wrappedValue = "" }) {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundColor(.secondary)
-                                        .font(.system(size: 13))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-
-                        if let resolvedURL = apiService.constructEndpointURL(from: settings.currentBaseURL, mode: settings.apiMode) {
-                            HStack(spacing: 4) {
-                                Text("送信先:")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                Text(resolvedURL.absoluteString)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundColor(.primary)
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.08))
-                            .cornerRadius(4)
-                        }
-                    }
-
-                    // 音声認識モデル名
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("音声認識モデル名:")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                            Text("[自由入力・変更可]")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text("現在: \(settings.currentModelName)")
-                                .font(.caption)
-                                .foregroundColor(.accentColor)
-                        }
-
-                        InputFieldBox {
-                            Image(systemName: "waveform")
-                                .foregroundColor(.orange)
-                                .font(.system(size: 13))
-                        } content: {
-                            TextField("モデルIDを入力（例: whisper-large-v3-turbo, whisper-1 など）", text: modelNameBinding)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 12.5, design: .monospaced))
-                        } trailing: {
-                            if !modelNameBinding.wrappedValue.isEmpty {
-                                Button(action: { modelNameBinding.wrappedValue = "" }) {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundColor(.secondary)
-                                        .font(.system(size: 13))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-
-                        HStack(spacing: 6) {
-                            Image(systemName: "hand.tap.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                            Text("候補からワンクリックで入力:")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-
-                            if currentProvider == .groq {
-                                Button("whisper-large-v3-turbo") {
-                                    settings.groqModel = "whisper-large-v3-turbo"
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-
-                                Button("whisper-large-v3") {
-                                    settings.groqModel = "whisper-large-v3"
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-                            } else {
-                                Button("gpt-4o-mini-transcribe (高速)") {
-                                    settings.openAIModel = "gpt-4o-mini-transcribe"
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-
-                                Button("whisper-1 (高精度・約2秒)") {
-                                    settings.openAIModel = "whisper-1"
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-                            }
-                        }
-                    }
-
-
-                }
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(Color(NSColor.controlBackgroundColor).opacity(0.6))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(Color(NSColor.separatorColor).opacity(0.6), lineWidth: 1)
-                )
             }
             .padding(18)
         }
@@ -1418,6 +1649,9 @@ public struct APISettingsTab: View {
         }
         .onChange(of: settings.selectedProvider) { _ in
             updateKeyStatus()
+        }
+        .onChange(of: settings.userLLMBaseURL) { _ in
+            vm.updateLLMKeyStatus(settings: settings)
         }
     }
 

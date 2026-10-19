@@ -18,8 +18,78 @@ struct TestRunner {
         testLivePunctuationFormatting()
         testLiveSpeechPhoneticTransliteration()
         testQuickAskAndPasteShortcuts()
+        testProgressiveRefinementPreview()
+        testPipelineLogger()
+        testAudioDeviceService()
 
         print("=== All Tests Passed Successfully! ===")
+    }
+
+    static func testProgressiveRefinementPreview() {
+        print("[TEST] Progressive Refinement Preview (差分連結 & 推敲全置換)...")
+
+        // 1. 基本的な差分抽出
+        let w1 = "明日の天気は晴れで"
+        let r1 = "明日の天気は晴れですが、"
+
+        let w2 = "明日の天気は晴れで、午後から雨が降るそうです"
+        let d2 = StreamingChunkPipelineService.extractDelta(newText: w2, baseText: w1)
+        assert(d2 == "午後から雨が降るそうです", "Expected '午後から雨が降るそうです', got '\(String(describing: d2))'")
+
+        let combined2 = StreamingChunkPipelineService.combineRefinedWithDelta(refined: r1, delta: d2 ?? "")
+        assert(combined2 == "明日の天気は晴れですが、午後から雨が降るそうです", "Expected combined text, got '\(combined2)'")
+
+        // 2. 読点なしの差分抽出
+        let w3 = "明日の天気は晴れで午後から雨が降るそうです"
+        let d3 = StreamingChunkPipelineService.extractDelta(newText: w3, baseText: w1)
+        assert(d3 == "午後から雨が降るそうです", "Expected '午後から雨が降るそうです', got '\(String(describing: d3))'")
+
+        // 3. 空白やピリオドの英語差分抽出
+        let wEn1 = "Hello world"
+        let rEn1 = "Hello, world!"
+        let wEn2 = "Hello world and good morning"
+        let dEn2 = StreamingChunkPipelineService.extractDelta(newText: wEn2, baseText: wEn1)
+        assert(dEn2 == "and good morning", "Expected 'and good morning', got '\(String(describing: dEn2))'")
+        let combinedEn = StreamingChunkPipelineService.combineRefinedWithDelta(refined: rEn1, delta: dEn2 ?? "")
+        assert(combinedEn == "Hello, world! and good morning", "Expected combined English text, got '\(combinedEn)'")
+
+        // 4. 初回（baseText が空）の場合
+        let dInitial = StreamingChunkPipelineService.extractDelta(newText: "テスト発話", baseText: "")
+        assert(dInitial == "テスト発話", "Expected initial text, got '\(String(describing: dInitial))'")
+
+        // 5. 文頭の漢字・表記がブレた場合のアンカー差分抽出（「海人」➔「海事」のケース）
+        let wFuzzyBase = "海人の中東派遣1年延長へ 政府船舶の安全確保継続政府は中央海域で海賊対策と情報収集の任務にあたる海上自衛隊の派遣期間を"
+        let wFuzzyNew = "海事の中東派遣1年延長へ 政府船舶の安全確保継続政府は中東海域で海賊対策と情報収集の任務にあたる海上自衛隊の派遣期間を来年11月まで1年間延長する方針を固めた"
+        let dFuzzy = StreamingChunkPipelineService.extractDelta(newText: wFuzzyNew, baseText: wFuzzyBase)
+        assert(dFuzzy == "来年11月まで1年間延長する方針を固めた", "Expected delta after anchor, got '\(String(describing: dFuzzy))'")
+
+        // 6. 全く一致しないテキストの場合、安全のため nil を返す（二重重複の防止）
+        let dMismatch = StreamingChunkPipelineService.extractDelta(newText: "全然違うテキストです", baseText: "過去の発話履歴です")
+        assert(dMismatch == nil, "Expected nil on mismatch to prevent duplication, got '\(String(describing: dMismatch))'")
+
+        // 7. Whisperの無音ハルシネーション（"Thank you." 等）のサニタイズテスト（文中含む）
+        let hallucinatedInput1 = "Thank you.海賊対策について報告します。"
+        assert(WhisperAPIService.sanitizeWhisperOutput(hallucinatedInput1) == "海賊対策について報告します。", "Should strip leading Thank you.")
+        let hallucinatedInput2 = "本日はお集まりいただきありがとうございます。 ご視聴ありがとうございました。"
+        assert(WhisperAPIService.sanitizeWhisperOutput(hallucinatedInput2) == "本日はお集まりいただきありがとうございます。", "Should strip trailing ご視聴ありがとうございました")
+        let hallucinatedInput3 = "来年11月まで延長する方針を固めた。ご視聴ありがとうございました。海事の中東派遣へ"
+        let sanitized3 = WhisperAPIService.sanitizeWhisperOutput(hallucinatedInput3)
+        assert(!sanitized3.contains("ご視聴ありがとうございました"), "Should strip inline ご視聴ありがとうございました: got '\(sanitized3)'")
+
+        // 8. PCM無音トリミング (VAD) テスト
+        let sampleRate = 16000.0
+        let silenceSampleCount = Int(sampleRate * 0.5) // 0.5秒の無音
+        let speechSampleCount = Int(sampleRate * 1.0)  // 1.0秒の音声 (振幅大)
+        var mockPCM = Data(count: silenceSampleCount * 2) // 先頭無音
+        for i in 0..<speechSampleCount {
+            var val = Int16(sin(Double(i) * 0.1) * 20000.0) // ~ -4dBFS
+            withUnsafeBytes(of: &val) { mockPCM.append(contentsOf: $0) }
+        }
+        mockPCM.append(Data(count: silenceSampleCount * 2)) // 末尾無音
+        let trimmedPCM = StreamingChunkPipelineService.trimSilence(pcmData: mockPCM, sampleRate: sampleRate, speechThresholdDB: -38.0)
+        assert(trimmedPCM.count < mockPCM.count, "Trimmed PCM should be shorter than original by cutting leading/trailing silence")
+
+        print("  -> Progressive Refinement Preview passed!")
     }
 
     static func testLiveSpeechPhoneticTransliteration() {
@@ -98,6 +168,8 @@ struct TestRunner {
 
         // 1. 丸括弧 () - 「ひらきかっこ」「とじかっこ」「とじまるかっこ」「まるかっことじ」両対応
         assert(service.apply(text: "ひらきかっこテストとじかっこ", rules: rules) == "(テスト)")
+        assert(service.apply(text: "ひらきかっこ テスト とじかっこ", rules: rules) == "(テスト)")
+        assert(service.apply(text: "ひらきかっこテスト とじかっこ", rules: rules) == "(テスト)")
         assert(service.apply(text: "ひらきまるかっこhelloとじまるかっこ", rules: rules) == "(hello)")
         assert(service.apply(text: "ひらきかっこworldまるかっことじ", rules: rules) == "(world)")
         assert(service.apply(text: "Open parenthesisworldClose parenthesis", rules: rules) == "(world)")
@@ -136,18 +208,18 @@ struct TestRunner {
         assert(service.apply(text: "考え中さんてんリーダー", rules: rules) == "考え中…")
         assert(service.apply(text: "絶句にれんさんてんリーダー", rules: rules) == "絶句……")
 
-        // 8. 感嘆符 (!) / びっくりマーク（勝手に入った「。」「、」を巻き込んで「！」に置換）
+        // 8. 感嘆符 (!) / びっくり記号（勝手に入った「。」「、」を巻き込んで「！」に置換。※単語「びっくりマーク」は辞書で破壊せず保護）
         assert(service.apply(text: "頑張ります!。", rules: rules) == "頑張ります！")
         assert(service.apply(text: "頑張ります！。", rules: rules) == "頑張ります！")
         assert(service.apply(text: "頑張ります。！", rules: rules) == "頑張ります！")
-        assert(service.apply(text: "頑張ります。びっくりマーク", rules: rules) == "頑張ります！")
         assert(service.apply(text: "頑張ります! 。", rules: rules) == "頑張ります！")
+        assert(service.apply(text: "びっくりマークの使い方", rules: rules) == "びっくりマークの使い方")
 
-        // 9. 疑問符 (?) / はてなマーク（勝手に入った「。」「、」を巻き込んで「？」に置換）
+        // 9. 疑問符 (?) / はてな記号（勝手に入った「。」「、」を巻き込んで「？」に置換。※単語「はてなマーク」は辞書で破壊せず保護）
         assert(service.apply(text: "本当ですか?。", rules: rules) == "本当ですか？")
         assert(service.apply(text: "本当ですか？。", rules: rules) == "本当ですか？")
         assert(service.apply(text: "本当ですか。？", rules: rules) == "本当ですか？")
-        assert(service.apply(text: "本当ですか。はてなマーク", rules: rules) == "本当ですか？")
+        assert(service.apply(text: "はてなマークの使い方", rules: rules) == "はてなマークの使い方")
 
         // 10. 英語の感嘆符 (!) / 疑問符 (?) のピリオド・カンマ巻き込み置換
         assert(service.apply(text: "Great!.", rules: rules) == "Great!")
@@ -169,8 +241,16 @@ struct TestRunner {
     }
 
     static func testVoiceIMEDiskSync() {
-        print("[TEST] VoiceIMEDiskSyncService (~/.voiceime 同期 & JSON復元)...")
+        print("[TEST] VoiceIMEDiskSyncService (一時ディレクトリによる安全な同期 & JSON復元)...")
         let syncService = VoiceIMEDiskSyncService.shared
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceime_test_\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        syncService.customBaseDirectory = tempDir
+        defer {
+            syncService.customBaseDirectory = nil
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
         syncService.ensureDirectoryExists()
         assert(FileManager.default.fileExists(atPath: syncService.baseDirectory.path), "Base dir must exist")
 
@@ -207,8 +287,6 @@ struct TestRunner {
         assert(firstRule.pattern == "AI略称")
         assert(firstRule.replacement == "Artificial Intelligence")
         assert(firstRule.isEnabled == true, "isEnabled should default to true")
-        // 外部リロード通知の送受信テスト
-        VoiceIMEDiskSyncService.postReloadNotification()
 
         print("  -> VoiceIMEDiskSync passed!")
     }
@@ -363,23 +441,31 @@ struct TestRunner {
         let out3 = llm.sanitizeLLMOutput("   \n\n  ", fallback: "フォールバック")
         assert(out3 == "フォールバック", "Empty fallback failed: \(out3)")
 
-        // 5. 口語モード vs 文章モードのプロンプト生成テスト
+        // 5. 口語モード vs 文章モードのプロンプト生成テスト & カスタムプロンプト連動テスト
         let casualPrompt = llm.generateSystemPrompt(style: .casual, promptHint: "用語A, 用語B")
         assert(casualPrompt.contains("口語モード"), "Casual prompt should specify 口語モード")
-        assert(casualPrompt.contains("文体（常体・敬体）および時制の完全維持"), "Casual prompt must contain style/tense rule")
-        assert(casualPrompt.contains("語尾・終助詞・口語ニュアンスの完全維持"), "Casual prompt must contain trailing particle preservation rule")
-        assert(casualPrompt.contains("言及した"), "Casual prompt must mention 言及した example")
-        assert(casualPrompt.contains("〇〇でありませんね"), "Casual prompt should include explicit negative example")
-        assert(casualPrompt.contains("言語と約物の整合性"), "Casual prompt should include language punctuation rule")
         assert(casualPrompt.contains("用語A, 用語B"), "Casual prompt should contain prompt hint")
 
         let formalPrompt = llm.generateSystemPrompt(style: .formal, promptHint: nil)
         assert(formalPrompt.contains("文章モード"), "Formal prompt should specify 文章モード")
-        assert(formalPrompt.contains("文体（常体・敬体）および時制の完全維持"), "Formal prompt must contain style/tense rule")
-        assert(formalPrompt.contains("勝手な言い換え・語句改変の厳禁"), "Formal prompt must prohibit paraphrasing")
-        assert(formalPrompt.contains("入力文末・語尾の完全保持"), "Formal prompt must contain ending preservation rule")
-        assert(formalPrompt.contains("端正な書き言葉への推敲"), "Formal prompt should specify formal rewriting")
-        assert(formalPrompt.contains("言語と約物の整合性"), "Formal prompt should include language punctuation rule")
+
+        // ユーザーカスタマイズプロンプトの動的反映テスト
+        let settingsForPrompt = AppSettings.shared
+        let originalCasual = settingsForPrompt.systemPromptCasual
+        settingsForPrompt.systemPromptCasual = "テスト用カスタム口語プロンプト"
+        let customCasualOut = llm.generateSystemPrompt(style: .casual, promptHint: nil)
+        assert(customCasualOut == "テスト用カスタム口語プロンプト", "Custom casual prompt should be reflected")
+        settingsForPrompt.systemPromptCasual = originalCasual
+
+        // PromptConfig のエンコード・デコード検証
+        let configTest = PromptConfig(
+            casualSystemPrompt: "c1",
+            formalSystemPrompt: "f1",
+            userPromptTemplate: "u1 {input}"
+        )
+        let configData = try! JSONEncoder().encode(configTest)
+        let decodedConfig = try! JSONDecoder().decode(PromptConfig.self, from: configData)
+        assert(decodedConfig == configTest, "PromptConfig Codable mismatch")
 
         // 6. 英文句読点の正規化テスト (英語で入力した際に末尾が「。」でなく「.」になること等の検証)
         let enOut1 = LLMService.normalizePunctuation(for: "This is a test。")
@@ -426,30 +512,41 @@ struct TestRunner {
         assert(lmStudioURL?.absoluteString == "http://localhost:1234/v1/chat/completions",
                "LM Studio custom URL mismatch: \(String(describing: lmStudioURL))")
 
-        // 9. LLMProviderMode および effectiveLLMConfig 切り離し動作テスト
-        let originalLLMMode = settings.llmProviderMode
-        let originalSelectedProvider = settings.selectedProvider
+        // 9. 共通推敲設定（ユーザー直接指定 & 未指定時は推敲OFF）テスト
+        let originalUserBaseURL = settings.userLLMBaseURL
+        let originalUserModel = settings.userLLMModel
+        let originalRefinementEnabled = settings.llmRefinementEnabled
 
-        settings.selectedProvider = .groq
-        settings.llmProviderMode = .sameAsSpeech
-        assert(settings.resolvedLLMProvider == .groq, "resolvedLLMProvider should match selectedProvider when sameAsSpeech")
-        assert(settings.effectiveLLMConfig.isCustom == false, "isCustom should be false for sameAsSpeech")
-        assert(settings.effectiveLLMConfig.modelName == settings.groqLLMModel, "modelName should match groqLLMModel")
+        // Sarashina 指定時
+        settings.userLLMBaseURL = "https://api.sarashina.ai/v1"
+        settings.userLLMModel = "sarashina3-mini"
+        settings.llmRefinementEnabled = true
+        assert(settings.resolvedLLMProvider == .sarashina, "resolvedLLMProvider should be sarashina")
+        assert(settings.effectiveLLMConfig.modelName == "sarashina3-mini", "modelName should match")
+        assert(settings.isLLMRefinementActive == true, "isLLMRefinementActive should be true when model is set")
 
-        settings.llmProviderMode = .openai
+        // 未指定（空欄）時 ➔ 推敲OFF
+        settings.userLLMModel = ""
+        assert(settings.isLLMRefinementActive == false, "isLLMRefinementActive should be false when model is empty")
+        assert(settings.effectiveLLMProviderDisplayName.contains("未指定"), "displayName should indicate 未指定")
+
+        // OpenAI 指定時
+        settings.userLLMBaseURL = "https://api.openai.com/v1"
+        settings.userLLMModel = "gpt-4o-mini"
         assert(settings.resolvedLLMProvider == .openai, "resolvedLLMProvider should be openai")
-        assert(settings.effectiveLLMConfig.isCustom == false, "isCustom should be false for openai")
-        assert(settings.effectiveLLMConfig.modelName == settings.openAILLMModel, "modelName should match openAILLMModel")
+        assert(settings.isLLMRefinementActive == true, "isLLMRefinementActive should be true")
 
-        settings.llmProviderMode = .custom
+        // ローカル / カスタム 指定時
+        settings.userLLMBaseURL = "http://localhost:11434/v1"
+        settings.userLLMModel = "llama3.2"
         assert(settings.resolvedLLMProvider == .custom, "resolvedLLMProvider should be custom")
-        assert(settings.effectiveLLMConfig.isCustom == true, "isCustom should be true for custom")
-        assert(settings.effectiveLLMConfig.baseURL == settings.customLLMBaseURL, "baseURL should match customLLMBaseURL")
-        assert(settings.effectiveLLMConfig.modelName == settings.customLLMModel, "modelName should match customLLMModel")
+        assert(settings.effectiveLLMConfig.isCustom == true, "isCustom should be true for local LLM")
+        assert(settings.isLLMRefinementActive == true, "isLLMRefinementActive should be true")
 
-        // 狀態復元
-        settings.llmProviderMode = originalLLMMode
-        settings.selectedProvider = originalSelectedProvider
+        // 状態復元
+        settings.userLLMBaseURL = originalUserBaseURL
+        settings.userLLMModel = originalUserModel
+        settings.llmRefinementEnabled = originalRefinementEnabled
 
         // 10. AI語尾補完（「〜ですね」「〜ですか？」等のハルシネーション）の抑制テスト
         let hallucinated1 = LLMService.suppressHallucinatedEndings(
@@ -512,6 +609,7 @@ struct TestRunner {
         let settings = AppSettings.shared
 
         // 1. AppSettings デフォルト値確認
+        assert(settings.batchTranscriptionEnabled == false, "batchTranscriptionEnabled should be false by default")
         assert(settings.audioThresholdEnabled == true, "audioThresholdEnabled should be true by default")
         assert(settings.audioThresholdDB == -32.0, "audioThresholdDB should be -32.0 by default")
         assert(settings.audioTrimmingEnabled == true, "audioTrimmingEnabled should be true by default")
@@ -548,11 +646,12 @@ struct TestRunner {
             assertionFailure("Failed to write silence test audio: \(error)")
         }
 
-        // 小さな音の判定テスト: hasSpeech が false になること
+        // 小さな音・無音の判定テスト: hasSpeech が false かつ isSilence が true になること
         let silenceMetrics = service.analyze(audioFileURL: silenceURL, thresholdDB: -32.0)
         assert(!silenceMetrics.hasSpeech, "Silence/small sound should NOT be recognized as speech! Got maxRMS=\(silenceMetrics.maxWindowRMS_DB)dB")
+        assert(silenceMetrics.isSilence, "Silence file must be flagged as isSilence == true")
         assert(silenceMetrics.maxWindowRMS_DB < -32.0, "Silence RMS should be below -32dB")
-        print("  -> Small sound rejection passed: maxRMS=\(String(format: "%.1f", silenceMetrics.maxWindowRMS_DB))dB < -32.0dB")
+        print("  -> Small sound rejection passed: maxRMS=\(String(format: "%.1f", silenceMetrics.maxWindowRMS_DB))dB < -32.0dB, isSilence=\(silenceMetrics.isSilence)")
 
         // 3. 発話音声を含むファイル生成 (無音 0.4s + 音声 0.8s (振幅 0.1 = 約 -20dB) + 無音 0.4s)
         do {
@@ -575,13 +674,39 @@ struct TestRunner {
             assertionFailure("Failed to write speech test audio: \(error)")
         }
 
-        // 音声の判定テスト: hasSpeech が true になること
+        // 音声の判定テスト: hasSpeech が true かつ isSilence が false になること
         let speechMetrics = service.analyze(audioFileURL: speechURL, thresholdDB: -32.0)
         assert(speechMetrics.hasSpeech, "Simulated speech should be recognized as speech!")
+        assert(!speechMetrics.isSilence, "Normal speech must NOT be flagged as isSilence")
         assert(speechMetrics.maxWindowRMS_DB >= -32.0, "Speech RMS should be >= -32dB")
-        print("  -> Speech detection passed: maxRMS=\(String(format: "%.1f", speechMetrics.maxWindowRMS_DB))dB >= -32.0dB")
+        print("  -> Speech detection passed: maxRMS=\(String(format: "%.1f", speechMetrics.maxWindowRMS_DB))dB >= -32.0dB, isSilence=\(speechMetrics.isSilence)")
 
-        // 4. トリミングテスト: 発話前後の不要な微小音区間がトリミングされること
+        // 4. 短時間の単発クリック音／打鍵パルス（0.04秒の音のみ、持続しない音）のテスト
+        let clickURL = tempDir.appendingPathComponent("test_click_\(UUID().uuidString).m4a")
+        defer { try? FileManager.default.removeItem(at: clickURL) }
+        do {
+            let file = try AVAudioFile(forWriting: clickURL, settings: audioSettings)
+            let pcmFormat = file.processingFormat
+            let frameCount: AVAudioFrameCount = 16000 // 1.0秒
+            let buffer = AVAudioPCMBuffer(pcmFormat: pcmFormat, frameCapacity: frameCount)!
+            buffer.frameLength = frameCount
+            for i in 0..<Int(frameCount) {
+                // 40ms だけ瞬間的に大きな音（キーボード打鍵の「カチッ」音）
+                if i >= 4000 && i < 4640 {
+                    buffer.floatChannelData![0][i] = 0.2
+                } else {
+                    buffer.floatChannelData![0][i] = 0.0001
+                }
+            }
+            try file.write(from: buffer)
+            let clickMetrics = service.analyze(audioFileURL: clickURL, thresholdDB: -32.0)
+            assert(!clickMetrics.hasSpeech || clickMetrics.isSilence, "Short 40ms click/pulse must be rejected as speech or flagged as silence")
+            print("  -> Transient click/pulse rejection passed: audibleDuration=\(String(format: "%.3f", clickMetrics.audibleDurationSeconds))s, isSilence=\(clickMetrics.isSilence)")
+        } catch {
+            assertionFailure("Failed to write click test audio: \(error)")
+        }
+
+        // 5. トリミングテスト: 発話前後の不要な微小音区間がトリミングされること
         if let trimmedURL = service.trimLeadingTrailingNoise(audioFileURL: speechURL, thresholdDB: -32.0) {
             defer { try? FileManager.default.removeItem(at: trimmedURL) }
             if let trimmedFile = try? AVAudioFile(forReading: trimmedURL) {
@@ -792,6 +917,91 @@ struct TestRunner {
         let outRealBusiness2 = PunctuationService.shared.format(text: inRealBusiness2, isJapanese: true)
         assert(outRealBusiness2 == "新規開業ですね。", "Real business '新規開業ですね' should not be converted: got '\(outRealBusiness2)'")
 
+        // 11. 名詞直後の「改行」「開業」コマンド（「これはテスト開業次の行」「これはテスト 開業次の行」）の改行救済テスト
+        let inKaigyoNounInline1 = "これはテスト開業次の行"
+        let outKaigyoNounInline1 = PunctuationService.shared.format(text: inKaigyoNounInline1, isJapanese: true)
+        assert(outKaigyoNounInline1 == "これはテスト\n次の行", "Inline kaigyo after noun failed: got '\(outKaigyoNounInline1)'")
+
+        let inKaigyoNounInline2 = "これはテスト 開業次の行"
+        let outKaigyoNounInline2 = PunctuationService.shared.format(text: inKaigyoNounInline2, isJapanese: true)
+        assert(outKaigyoNounInline2 == "これはテスト\n次の行", "Inline kaigyo with space after noun failed: got '\(outKaigyoNounInline2)'")
+
+        // 12. カタカナ・表記揺れ（「あ、ビックリマーク！」「あ！マルカコトジ」）および文末判定と単語保護テスト
+        let inKatakanaExcl = "あ、ビックリマーク！"
+        let outKatakanaExcl = PunctuationService.shared.format(text: inKatakanaExcl, isJapanese: true)
+        assert(outKatakanaExcl == "あ！", "Katakana exclamation mark with trailing ! failed: got '\(outKatakanaExcl)'")
+
+        let inBareExcl1 = "あ、びっくりマーク"
+        let outBareExcl1 = PunctuationService.shared.format(text: inBareExcl1, isJapanese: true)
+        assert(outBareExcl1 == "あ！", "Trailing 'あ、びっくりマーク' failed: got '\(outBareExcl1)'")
+
+        let inBareExcl2 = "あびっくりマーク"
+        let outBareExcl2 = PunctuationService.shared.format(text: inBareExcl2, isJapanese: true)
+        assert(outBareExcl2 == "あ！", "Trailing 'あびっくりマーク' failed: got '\(outBareExcl2)'")
+
+        let inBareQuest = "あはてなマーク"
+        let outBareQuest = PunctuationService.shared.format(text: inBareQuest, isJapanese: true)
+        assert(outBareQuest == "あ？", "Trailing 'あはてなマーク' failed: got '\(outBareQuest)'")
+
+        // 13. 文中の名詞「びっくりマーク」「はてなマーク」の保護テスト（強制置換されないこと）
+        let inNounExcl1 = "びっくりマークの使い方"
+        let outNounExcl1 = PunctuationService.shared.format(text: inNounExcl1, isJapanese: true)
+        assert(outNounExcl1 == "びっくりマークの使い方", "Noun 'びっくりマークの使い方' should be preserved: got '\(outNounExcl1)'")
+
+        let inNounExcl2 = "びっくりマークも文書中に出てくるから"
+        let outNounExcl2 = PunctuationService.shared.format(text: inNounExcl2, isJapanese: true)
+        assert(outNounExcl2 == "びっくりマークも文書中に出てくるから", "Noun 'びっくりマークも文書中に出てくるから' should be preserved: got '\(outNounExcl2)'")
+
+        let inNounExcl3 = "ここにびっくりマークを入れてください"
+        let outNounExcl3 = PunctuationService.shared.format(text: inNounExcl3, isJapanese: true)
+        assert(outNounExcl3 == "ここにびっくりマークを入れてください", "Noun 'ここにびっくりマークを入れてください' should be preserved: got '\(outNounExcl3)'")
+
+        let inNounQuest = "はてなマークの使い方"
+        let outNounQuest = PunctuationService.shared.format(text: inNounQuest, isJapanese: true)
+        assert(outNounQuest == "はてなマークの使い方", "Noun 'はてなマークの使い方' should be preserved: got '\(outNounQuest)'")
+
+        let inKatakanaParen = "あ！マルカコトジ"
+        let outKatakanaParen = PunctuationService.shared.format(text: inKatakanaParen, isJapanese: true)
+        assert(outKatakanaParen == "あ！)", "Katakana close paren 'マルカコトジ' failed: got '\(outKatakanaParen)'")
+
+        // 14. 括弧内の余計な空白および連続括弧間の空白除去テスト
+        let inBracketSpace1 = "(テスト )"
+        let outBracketSpace1 = PunctuationService.shared.format(text: inBracketSpace1, isJapanese: true)
+        assert(outBracketSpace1 == "(テスト)", "Trailing space in paren failed: got '\(outBracketSpace1)'")
+
+        let inBracketSpace2 = "( テスト )"
+        let outBracketSpace2 = PunctuationService.shared.format(text: inBracketSpace2, isJapanese: true)
+        assert(outBracketSpace2 == "(テスト)", "Surrounding space in paren failed: got '\(outBracketSpace2)'")
+
+        let inBracketSpace3 = "(テスト ) (テスト )"
+        let outBracketSpace3 = PunctuationService.shared.format(text: inBracketSpace3, isJapanese: true)
+        assert(outBracketSpace3 == "(テスト)(テスト)", "Consecutive paren spaces failed: got '\(outBracketSpace3)'")
+
+        let inBracketSpace4 = "(テスト) テスト(テスト) テスト"
+        let outBracketSpace4 = PunctuationService.shared.format(text: inBracketSpace4, isJapanese: true)
+        assert(outBracketSpace4 == "(テスト)テスト(テスト)テスト", "Paren to Japanese space failed: got '\(outBracketSpace4)'")
+
+        // 15. 記号と音声コマンド重複の除去テスト（「お前な！びっくりマーク」➔「お前な！」、「本当ですか？はてなマーク」➔「本当ですか？」）
+        let inDupExcl1 = "彼は言った「お前な！びっくりマーク」"
+        let outDupExcl1 = PunctuationService.shared.format(text: inDupExcl1, isJapanese: true)
+        assert(outDupExcl1 == "彼は言った「お前な！」", "Duplicate 'お前な！びっくりマーク' failed: got '\(outDupExcl1)'")
+
+        let inDupExcl2 = "お前な！びっくりマーク"
+        let outDupExcl2 = PunctuationService.shared.format(text: inDupExcl2, isJapanese: true)
+        assert(outDupExcl2 == "お前な！", "Duplicate 'お前な！びっくりマーク' failed: got '\(outDupExcl2)'")
+
+        let inDupQuest1 = "本当ですか？はてなマーク"
+        let outDupQuest1 = PunctuationService.shared.format(text: inDupQuest1, isJapanese: true)
+        assert(outDupQuest1 == "本当ですか？", "Duplicate '本当ですか？はてなマーク' failed: got '\(outDupQuest1)'")
+
+        let inDupQuest2 = "本当ですか？クエスチョンマーク"
+        let outDupQuest2 = PunctuationService.shared.format(text: inDupQuest2, isJapanese: true)
+        assert(outDupQuest2 == "本当ですか？", "Duplicate '本当ですか？クエスチョンマーク' failed: got '\(outDupQuest2)'")
+
+        let inBracketEndExcl = "彼は言った「お前なびっくりマーク」"
+        let outBracketEndExcl = PunctuationService.shared.format(text: inBracketEndExcl, isJapanese: true)
+        assert(outBracketEndExcl == "彼は言った「お前な！」", "Bracket end exclamation mark failed: got '\(outBracketEndExcl)'")
+
         print("  -> Live Punctuation Formatting & PunctuationService passed!")
     }
 
@@ -843,14 +1053,13 @@ struct TestRunner {
         assert(llm.sanitizeQuickAskOutput("回答: 4") == "4", "Prefix removal failed")
         assert(llm.sanitizeQuickAskOutput("Answer: Paris") == "Paris", "Prefix removal failed")
 
-        // 不要な丁寧語語尾（〜です、〜になります等）の除去
-        assert(llm.sanitizeQuickAskOutput("trashです。") == "trash", "Polite ending removal failed")
-        assert(llm.sanitizeQuickAskOutput("trashです") == "trash", "Polite ending removal failed")
-        assert(llm.sanitizeQuickAskOutput("4になります。") == "4", "Polite ending removal failed")
-
         // 引用符の除去
         assert(llm.sanitizeQuickAskOutput("「trash」") == "trash", "Quotes removal failed")
         assert(llm.sanitizeQuickAskOutput("\"Paris\"") == "Paris", "Double quotes removal failed")
+
+        // 最大2行制限テスト（3行以上ある場合は最初の2行のみ残す）
+        let threeLines = "1行目です。\n2行目です。\n3行目は不要です。"
+        assert(llm.sanitizeQuickAskOutput(threeLines) == "1行目です。\n2行目です。", "Multi-line capping to 2 lines failed")
 
         // 空白または答えなし
         assert(llm.sanitizeQuickAskOutput("") == "[答えを持っていません。]", "Empty output fallback failed")
@@ -858,5 +1067,85 @@ struct TestRunner {
 
         print("  -> Quick Ask & Paste Shortcuts passed!")
     }
+
+    static func testPipelineLogger() {
+        print("[TEST] PipelineLogger (リアルタイムパイプラインログ記録)...")
+
+        let logger = PipelineLogger.shared
+        let logURL = logger.logFileURL
+
+        // テスト用のログ書き込み
+        logger.logSessionStart()
+        logger.logWhisperReceived(type: "テスト速報", text: "海人の中東派遣1年延長へ")
+        logger.logLLMInput(type: "テスト推敲", text: "海人の中東派遣1年延長へ")
+        logger.logLLMOutput(type: "テスト推敲", text: "海自の中東派遣1年延長へ")
+        logger.logSessionEnd(finalText: "海自の中東派遣1年延長へ")
+
+        // 非同期キューの書き込み完了を少し待機
+        Thread.sleep(forTimeInterval: 0.1)
+
+        assert(FileManager.default.fileExists(atPath: logURL.path), "Log file should exist at \(logURL.path)")
+
+        guard let content = try? String(contentsOf: logURL, encoding: .utf8) else {
+            fatalError("Failed to read log file at \(logURL.path)")
+        }
+
+        // 1. 2. 3. のラベルとそれぞれの前に改行があることを検証
+        assert(content.contains("1. Whisperから逐次送られてきた文字列 [テスト速報"), "Expected 1. Whisper label in log")
+        assert(content.contains("2. Whisperから推敲LLMへ送られる文字列 [テスト推敲"), "Expected 2. LLM input label in log")
+        assert(content.contains("3. 推敲LLMから修正され戻される文字列 [テスト推敲"), "Expected 3. LLM output label in log")
+        assert(content.contains("\n1. Whisperから逐次送られてきた文字列"), "Expected newline before 1.")
+        assert(content.contains("\n2. Whisperから推敲LLMへ送られる文字列"), "Expected newline before 2.")
+        assert(content.contains("\n3. 推敲LLMから修正され戻される文字列"), "Expected newline before 3.")
+        assert(content.contains("海人の中東派遣1年延長へ"), "Expected logged transcribed text")
+        assert(content.contains("海自の中東派遣1年延長へ"), "Expected logged refined text")
+
+        print("  -> PipelineLogger passed! Log location: \(logURL.path)")
+    }
+
+    @MainActor
+    static func testAudioDeviceService() {
+        print("[TEST] AudioDeviceService (マイク選択・ハードウェア列挙・自動フォールバック)...")
+
+        let service = AudioDeviceService.shared
+        service.refreshDevices()
+
+        // 1. デバイス一覧とデフォルトデバイスの取得検証
+        let devices = service.availableDevices
+        let defaultDev = service.systemDefaultDevice
+        print("  -> Detected \(devices.count) input devices. Default: [\(defaultDev?.name ?? "none")]")
+        assert(!devices.isEmpty || defaultDev != nil, "At least one input device or system default should be detected on macOS")
+
+        let originalUID = AppSettings.shared.selectedAudioDeviceUID
+        let originalName = AppSettings.shared.selectedAudioDeviceName
+
+        // 2. システムデフォルト選択テスト
+        service.selectDevice(uid: "", name: "システムデフォルト")
+        assert(service.isFallbackActive == false, "System default selection should not trigger fallback")
+        assert(service.effectiveDeviceName.contains("システムデフォルト"), "Effective device should indicate system default")
+
+        // 3. 存在しない未接続デバイス（例: 電源OFFのBluetoothイヤホン）選択時のフォールバックテスト
+        let fakeUID = "fake-wireless-earphone-uid-\(UUID().uuidString)"
+        let fakeName = "Wireless Headset (Test Unconnected Device)"
+        service.selectDevice(uid: fakeUID, name: fakeName)
+
+        assert(service.isFallbackActive == true, "Selecting non-existent device MUST trigger fallback")
+        assert(service.effectiveDeviceName.contains("代替") || service.effectiveDeviceName.contains("デフォルト"), "Effective device must indicate fallback")
+        assert(service.fallbackReason != nil, "Fallback reason should be explained")
+        print("  -> Fallback verified: \(service.fallbackReason ?? "")")
+
+        // 4. 実在するデバイスを選択したテスト
+        if let realDev = devices.first {
+            service.selectDevice(uid: realDev.id, name: realDev.name)
+            assert(service.isFallbackActive == false, "Real device should not trigger fallback")
+            assert(service.effectiveDeviceName == realDev.name, "Effective device should match selected real device")
+            print("  -> Real device selection verified: \(realDev.name)")
+        }
+
+        // 5. 状態復元
+        service.selectDevice(uid: originalUID, name: originalName)
+        print("  -> AudioDeviceService passed!")
+    }
 }
+
 

@@ -69,9 +69,18 @@ public final class LiveSpeechService: ObservableObject {
         self.latestJaText = ""
         self.latestEnText = ""
         self.detectedLanguageIsJapanese = !isExplicitEnglish
-        self.isDualMode = isAuto
+        self.isDualMode = isExplicitEnglish
 
         let engine = AVAudioEngine()
+
+        // 選択されたマイク（またはシステムデフォルトへのフォールバック）を設定
+        do {
+            try AudioDeviceService.shared.setupInputDevice(for: engine)
+        } catch {
+            NSLog("[VoiceIME] ⚠️ リアルタイム入力マイク設定エラー: %@", error.localizedDescription)
+            // デバイス設定でエラーになってもデフォルト状態で続行を試みる
+        }
+
         let inputNode = engine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
 
@@ -80,81 +89,21 @@ public final class LiveSpeechService: ObservableObject {
             return
         }
 
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.taskHint = .dictation
-        if !contextualStrings.isEmpty { request.contextualStrings = contextualStrings }
-        if #available(macOS 13.0, *) { request.addsPunctuation = true }
-        if #available(macOS 10.15, *), recognizer.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = false
-        }
-
-        self.recognitionRequest = request
         self.audioEngine = engine
 
-        // 親プロセスの音声認識タスク（日本語または英語明示）
-        self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            Task { @MainActor [weak self] in
-                guard let self = self, self.isRunning else { return }
-
-                if let result = result {
-                    let rawText = result.bestTranscription.formattedString
-                    let cleanText = Self.cleanTranscriptionText(rawText)
-
-                    if self.isDualMode {
-                        self.latestJaText = cleanText
-                        self.handleDualTranscriptionUpdate()
-                    } else {
-                        guard !cleanText.isEmpty else { return }
-                        let isJp = !isExplicitEnglish
-                        self.detectedLanguageIsJapanese = isJp
-                        let formatted = isJp ? Self.formatLivePunctuation(text: cleanText, isJapanese: true) : cleanText
-                        self.partialText = formatted
-                        self.onTextUpdate?(formatted)
-                    }
-                }
-
-                if let error = error {
-                    let nsError = error as NSError
-                    if nsError.domain != "kAFAssistantErrorDomain" || nsError.code != 203 {
-                        NSLog("[VoiceIME] ℹ️ SFSpeechRecognitionTask 停止/通知: %@", error.localizedDescription)
-                    }
-                }
-            }
-        }
-
-        // 自動判定モードの場合: 別プロセスで英語認識ヘルパーを立ち上げ、デュアル認識を行う
-        if isAuto, let execPath = Bundle.main.executablePath, FileManager.default.isExecutableFile(atPath: execPath) {
-            startEnglishHelperProcess(executablePath: execPath, format: recordingFormat)
-        }
-
-        // キャプチャ用に現在の helperStdinPipe と isDualMode をローカルに束縛
-        let currentHelperPipe = self.helperStdinPipe
-        let dualModeActive = self.isDualMode
-        let audioQueue = self.helperAudioQueue
-
-        // マイク入力バッファの取得と配信
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self, weak request] buffer, _ in
+        // マイク入力バッファの取得とパイプラインへの供給（Apple Speech のフェイク推論は行わず、Whisperからの戻り値のみを表示）
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
             guard self != nil else { return }
-            // 1. 親プロセスの認識器へバッファ供給（メインオーディオタップスレッド）
-            request?.append(buffer)
-
-            // 2. 英語ヘルパープロセスの stdin へ PCM Float32 (1ch: channelData[0]) を非同期シリアルキューで送信
-            // CoreAudio のリアルタイムスレッドをブロッキング I/O から完全に保護
-            if dualModeActive, let pipe = currentHelperPipe,
-               let channelData = buffer.floatChannelData, buffer.frameLength > 0 {
-                let byteCount = Int(buffer.frameLength) * MemoryLayout<Float>.size
-                let data = Data(bytes: channelData[0], count: byteCount)
-                audioQueue.async {
-                    try? pipe.fileHandleForWriting.write(contentsOf: data)
-                }
+            // 一括送信がOFF（累積紙芝居ストリーミングモード）の場合のみ、パイプラインへPCM供給
+            if !AppSettings.shared.batchTranscriptionEnabled {
+                StreamingChunkPipelineService.shared.appendAudioBuffer(buffer)
             }
         }
 
         do {
             try engine.start()
             self.isRunning = true
-            NSLog("[VoiceIME] 🎙️ リアルタイム音声認識エンジン開始 (%@, isAuto: %d)", localeIdentifier, isAuto ? 1 : 0)
+            NSLog("[VoiceIME] 🎙️ マイクオーディオエンジン開始 (Whisper直結モード)")
         } catch {
             NSLog("[VoiceIME] ⚠️ AVAudioEngine 開始失敗: %@", error.localizedDescription)
             stopLiveRecognition()

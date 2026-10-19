@@ -203,9 +203,9 @@ public final class AppState: ObservableObject {
                 if settings.floatingPreviewEnabled {
                     FloatingPreviewController.shared.setProcessing(mode: .speechInput)
                 }
-                // 発話末尾の単語・語尾・余韻（「〜と言及した」「〜ですよね」等）がマイクバッファから欠落するのを防ぐため、
-                // キー離脱から約220ms遅延させて録音を停止する
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [weak self] in
+                // 発話末尾の単語・語尾・余韻（「〜でしょう」「〜出ている」「〜ですよね」等）がマイクバッファから欠落するのを防ぐため、
+                // キー離脱から約420ms遅延させて録音を停止する
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) { [weak self] in
                     guard let self = self, self.phase == .recording, !self.isQuickAskActive else { return }
                     self.stopRecordingAndTranscribe()
                 }
@@ -322,8 +322,25 @@ public final class AppState: ObservableObject {
             NSLog("[VoiceIME] 🟣 AIクイック質問 録音開始")
 
             FloatingPreviewController.shared.showLiveRecording(mode: .quickAsk)
-            LiveSpeechService.shared.startLiveRecognition(languageCode: settings.language) { text in
-                FloatingPreviewController.shared.updateLiveText(text)
+
+            // AI会話でもWhisperからプレビューをリアルタイム更新（中間推敲は不要なのでisLLMEnabled: false）
+            let currentProvider = settings.selectedProvider
+            let currentConfig = settings.config(for: currentProvider)
+            let apiKey = keychain.loadAPIKey(for: currentProvider)
+            let effectiveLanguage = settings.language.isEmpty ? "ja" : settings.language
+
+            StreamingChunkPipelineService.shared.start(
+                whisperConfig: (baseURL: currentConfig.baseURL, apiKey: apiKey, model: currentConfig.modelName),
+                llmConfig: (baseURL: "", apiKey: nil, model: "", isCustom: false),
+                style: .casual,
+                isLLMEnabled: false,
+                whisperPrompt: "質問です。日本語で質問します。",
+                language: effectiveLanguage,
+                speechThresholdDB: settings.audioThresholdDB
+            )
+
+            LiveSpeechService.shared.startLiveRecognition(languageCode: settings.language) { _ in
+                // Apple Speech のフェイク推論は画面に出さず、Whisperから戻ってきた本物の結果のみを表示する
             }
 
             maxRecordingTimer?.invalidate()
@@ -359,14 +376,29 @@ public final class AppState: ObservableObject {
             return
         }
 
-        // 音声しきい値判定
+        // 音声しきい値・無音判定
+        let metrics = AudioAnalysisService.shared.analyze(
+            audioFileURL: audioURL,
+            thresholdDB: settings.audioThresholdDB
+        )
+
+        // 設定のON/OFFに関わらず、無音（または短時間のクリック音・打鍵ノイズ）はAPIへ送信しない
+        if metrics.isSilence {
+            NSLog("[VoiceIME] 🔇 AIクイック質問 無音検知: 送信をスキップしました (maxRMS: %.1f dB, peak: %.1f dB, 可聴時間: %.2f秒, 録音長: %.2f秒)",
+                  metrics.maxWindowRMS_DB, metrics.peakPowerDB, metrics.audibleDurationSeconds, metrics.totalDurationSeconds)
+            try? FileManager.default.removeItem(at: audioURL)
+            self.isQuickAskActive = false
+            self.phase = .idle
+            self.statusMessage = "無音のため質問をスキップしました"
+            FloatingPreviewController.shared.hide()
+            return
+        }
+
         var targetAudioURL = audioURL
         if settings.audioThresholdEnabled {
-            let metrics = AudioAnalysisService.shared.analyze(
-                audioFileURL: audioURL,
-                thresholdDB: settings.audioThresholdDB
-            )
             if !metrics.hasSpeech {
+                NSLog("[VoiceIME] AIクイック質問 音声除外: 音量レベルがしきい値未満 (maxRMS: %.1f dB, peak: %.1f dB, しきい値: %.1f dB)",
+                      metrics.maxWindowRMS_DB, metrics.peakPowerDB, settings.audioThresholdDB)
                 try? FileManager.default.removeItem(at: audioURL)
                 self.isQuickAskActive = false
                 self.phase = .idle
@@ -412,17 +444,29 @@ public final class AppState: ObservableObject {
             }
 
             do {
-                // 1. 音声認識で質問内容を取得
-                let questionText = try await self.api.transcribe(
-                    audioFileURL: targetAudioURL,
-                    baseURL: currentConfig.baseURL,
-                    apiKey: apiKey,
-                    model: currentConfig.modelName,
-                    mode: .transcriptions,
-                    prompt: "質問です。日本語で質問します。",
-                    language: language
-                )
-                let trimmedQuestion = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
+                // 1. パイプラインの最終確定テキスト（Whisperで即座にプレビューへ表示されたテキスト）を優先取得
+                var trimmedQuestion = ""
+                await withCheckedContinuation { continuation in
+                    StreamingChunkPipelineService.shared.finishAndFinalize { pipelineText in
+                        trimmedQuestion = pipelineText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        continuation.resume()
+                    }
+                }
+
+                // パイプラインが空だった場合のフォールバック（一括transcribe）
+                if trimmedQuestion.isEmpty {
+                    let questionText = try await self.api.transcribe(
+                        audioFileURL: targetAudioURL,
+                        baseURL: currentConfig.baseURL,
+                        apiKey: apiKey,
+                        model: currentConfig.modelName,
+                        mode: .transcriptions,
+                        prompt: "質問です。日本語で質問します。",
+                        language: language
+                    )
+                    trimmedQuestion = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+
                 guard !trimmedQuestion.isEmpty else {
                     self.isQuickAskActive = false
                     self.phase = .idle
@@ -430,6 +474,10 @@ public final class AppState: ObservableObject {
                     FloatingPreviewController.shared.hide()
                     return
                 }
+
+                // 確定した質問をプレビュー上に表示し、AI回答取得中を表示
+                FloatingPreviewController.shared.updateLiveText(trimmedQuestion)
+                FloatingPreviewController.shared.setProcessing(mode: .quickAsk)
 
                 NSLog("[VoiceIME] 🟣 AIクイック質問 認識結果: [%@] 送信先: [%@] モデル: [%@]", trimmedQuestion, quickAskConfig.baseURL, quickAskConfig.modelName)
 
@@ -489,12 +537,41 @@ public final class AppState: ObservableObject {
         do {
             _ = try recorder.startRecording()
             phase = .recording
+            PipelineLogger.shared.logSessionStart()
             statusMessage = settings.triggerMode == .pushToTalk ? "録音中... (キーを離すと入力)" : "録音中... (もう一度キーを押して停止)"
             errorMessage = nil
-            recordingStartTime = Date()
-            NSLog("[VoiceIME] 🎤 録音開始 (動作モード: %@)", settings.triggerMode.rawValue)
+            NSLog("[VoiceIME] 🎤 録音開始 (動作モード: %@, 一括送信: %d)", settings.triggerMode.rawValue, settings.batchTranscriptionEnabled ? 1 : 0)
 
-            // フローティングプレビューが有効な場合、リアルタイム音声認識とプレビューウィンドウを開始
+            // 一括送信がOFF（累積紙芝居ストリーミングモード）の場合、パイプラインを開始
+            if !settings.batchTranscriptionEnabled {
+                let currentProvider = settings.selectedProvider
+                let currentConfig = settings.config(for: currentProvider)
+                let currentLLMConfig = settings.effectiveLLMConfig
+                let resolvedLLMProvider = settings.resolvedLLMProvider
+                let llmApiKey = keychain.loadAPIKey(for: resolvedLLMProvider)
+                let apiKey = keychain.loadAPIKey(for: currentProvider)
+
+                let effectiveLanguage = settings.language.isEmpty ? "ja" : settings.language
+                let isLLM = settings.isLLMRefinementActive
+                let prompt: String?
+                if let custom = settings.promptHint.isEmpty ? nil : settings.promptHint {
+                    prompt = custom
+                } else if effectiveLanguage == "ja" {
+                    prompt = isLLM ? (settings.refinementStyle == .casual ? "こんにちは。そうですね、承知いたしました。" : "こんにちは。本件について報告いたします。") : "日本語の音声入力です。話された言葉を正確にそのまま文字起こしします。"
+                } else {
+                    prompt = nil
+                }
+
+                StreamingChunkPipelineService.shared.start(
+                    whisperConfig: (baseURL: currentConfig.baseURL, apiKey: apiKey, model: currentConfig.modelName),
+                    llmConfig: (baseURL: currentLLMConfig.baseURL, apiKey: llmApiKey, model: currentLLMConfig.modelName, isCustom: currentLLMConfig.isCustom),
+                    style: settings.refinementStyle,
+                    isLLMEnabled: isLLM,
+                    whisperPrompt: prompt,
+                    language: effectiveLanguage,
+                    speechThresholdDB: settings.audioThresholdDB
+                )
+            }
             if settings.floatingPreviewEnabled {
                 FloatingPreviewController.shared.showLiveRecording()
 
@@ -512,8 +589,8 @@ public final class AppState: ObservableObject {
                 LiveSpeechService.shared.startLiveRecognition(
                     languageCode: settings.language,
                     contextualStrings: contextWords
-                ) { text in
-                    FloatingPreviewController.shared.updateLiveText(text)
+                ) { _ in
+                    // Apple Speech のフェイク推論は画面に出さず、Whisperから戻ってきた本物の結果のみを表示する
                 }
             }
 
@@ -539,25 +616,21 @@ public final class AppState: ObservableObject {
         maxRecordingTimer?.invalidate()
         maxRecordingTimer = nil
 
-        // リアルタイムプレビューで最後に表示されていたテキストを取得・句読点補正を確定
         let isJapanese: Bool
         if settings.language == "ja" {
             isJapanese = true
         } else if settings.language.lowercased().starts(with: "en") {
             isJapanese = false
         } else {
-            isJapanese = LiveSpeechService.shared.detectedLanguageIsJapanese
-        }
-        let rawLive = LiveSpeechService.shared.partialText
-        let livePreviewText = PunctuationService.shared.format(text: rawLive, isJapanese: isJapanese)
-
-        // プレビューのテキストを最新の句読点付きに更新
-        if settings.floatingPreviewEnabled && !livePreviewText.isEmpty {
-            FloatingPreviewController.shared.updateLiveText(livePreviewText)
+            isJapanese = true
         }
 
-        // リアルタイム音声認識を停止し、プレビューを処理中フェーズへ
+        // リアルタイム音声取得を停止
         LiveSpeechService.shared.stopLiveRecognition()
+
+        // 画面のテキストは Whisper から戻ってきた本物の最新テキストを採用
+        let livePreviewText = StreamingChunkPipelineService.shared.latestRefinedText
+
         if settings.floatingPreviewEnabled {
             FloatingPreviewController.shared.setProcessing()
         }
@@ -575,17 +648,32 @@ public final class AppState: ObservableObject {
         NSLog("[VoiceIME] ⏹️ 録音停止 (しきい値: %.1f dB, 有効: %d)", settings.audioThresholdDB, settings.audioThresholdEnabled ? 1 : 0)
 
         // ==========================================
-        // 0. 音声しきい値判定（小さな音・環境雑音の除外）
+        // 0. 音声解析および無音・環境雑音判定
         // ==========================================
+        let metrics = AudioAnalysisService.shared.analyze(
+            audioFileURL: audioURL,
+            thresholdDB: settings.audioThresholdDB
+        )
+
+        // A. 絶対的な無音判定（ユーザー設定に関わらず、完全な無音・打鍵ノイズ・誤操作はWhisperに送らない）
+        if metrics.isSilence {
+            NSLog("[VoiceIME] 🔇 無音検知: Whisper送信をスキップしました (maxRMS: %.1f dB, peak: %.1f dB, 可聴時間: %.2f秒, 録音長: %.2f秒)",
+                  metrics.maxWindowRMS_DB, metrics.peakPowerDB, metrics.audibleDurationSeconds, metrics.totalDurationSeconds)
+            try? FileManager.default.removeItem(at: audioURL)
+            self.phase = .idle
+            self.statusMessage = "無音のため送信をスキップしました"
+            if self.settings.floatingPreviewEnabled {
+                FloatingPreviewController.shared.hide()
+            }
+            return
+        }
+
+        // B. ユーザー設定のしきい値判定
         var targetAudioURL = audioURL
         if settings.audioThresholdEnabled {
-            let metrics = AudioAnalysisService.shared.analyze(
-                audioFileURL: audioURL,
-                thresholdDB: settings.audioThresholdDB
-            )
-
             if !metrics.hasSpeech {
-                NSLog("[VoiceIME] 音声除外: 音量レベルがしきい値未満 (maxRMS: %.1f dB, peak: %.1f dB, しきい値: %.1f dB)", metrics.maxWindowRMS_DB, metrics.peakPowerDB, settings.audioThresholdDB)
+                NSLog("[VoiceIME] 音声除外: 音量レベルがしきい値未満 (maxRMS: %.1f dB, peak: %.1f dB, しきい値: %.1f dB)",
+                      metrics.maxWindowRMS_DB, metrics.peakPowerDB, settings.audioThresholdDB)
                 try? FileManager.default.removeItem(at: audioURL)
                 self.phase = .idle
                 self.statusMessage = "小さな音を検知したため無視しました"
@@ -620,21 +708,24 @@ public final class AppState: ObservableObject {
         let baseURL = currentConfig.baseURL
         let model = currentConfig.modelName
         let prompt = settings.promptHint.isEmpty ? nil : settings.promptHint
-        let language = settings.language.isEmpty ? nil : settings.language
+        let language = settings.language.isEmpty ? "ja" : settings.language
 
-        let isLLMEnabled = settings.llmRefinementEnabled
+        let isLLMEnabled = settings.isLLMRefinementActive
         let refinementStyle = settings.refinementStyle
-        let rules = settings.dictionaryRules
-        let restoreClipboard = settings.restoreClipboard
 
         // Whisper APIの初期プロンプト: 指定言語に応じた自然な句読点や語尾の脱落を防止
         let effectiveWhisperPrompt: String?
         if let customPrompt = prompt, !customPrompt.isEmpty {
             effectiveWhisperPrompt = customPrompt
         } else if language == "ja" {
-            effectiveWhisperPrompt = (refinementStyle == .casual)
-                ? "こんにちは。そうですね、承知いたしました。〜ですね。〜ですよ。〜と言及した。"
-                : "こんにちは。本件について報告いたします。〜と言及した。〜である。"
+            if !isLLMEnabled {
+                // 推敲OFF時は、話者が発話した語尾（「〜でしょう」「〜ですね」「〜と思います」等）を1文字も変えずに忠実に書き起こすニュートラルなプロンプト
+                effectiveWhisperPrompt = "日本語の音声入力です。話された言葉や語尾を正確に、自然な句読点を含めてそのまま文字起こしします。"
+            } else {
+                effectiveWhisperPrompt = (refinementStyle == .casual)
+                    ? "こんにちは。そうですね、承知いたしました。〜ですね。〜ですよ。〜と言及した。"
+                    : "こんにちは。本件について報告いたします。〜と言及した。〜である。"
+            }
         } else if language == "en" {
             effectiveWhisperPrompt = "Hello. Yes, I understand. Thank you."
         } else {
@@ -642,6 +733,93 @@ public final class AppState: ObservableObject {
             effectiveWhisperPrompt = nil
         }
 
+        if !settings.batchTranscriptionEnabled {
+            // 分割逐次送信モード
+            StreamingChunkPipelineService.shared.finishAndFinalize { [weak self] pipelineText in
+                Task { @MainActor [weak self] in
+                    guard let self = self else {
+                        try? FileManager.default.removeItem(at: targetAudioURL)
+                        return
+                    }
+                    let clean = pipelineText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !clean.isEmpty {
+                        try? FileManager.default.removeItem(at: targetAudioURL)
+                        self.finalizeAndPaste(
+                            text: clean,
+                            livePreviewText: isLLMEnabled ? clean : livePreviewText,
+                            isJapanese: isJapanese,
+                            totalStartTime: CFAbsoluteTimeGetCurrent(),
+                            fallbackNotices: []
+                        )
+                        return
+                    }
+                    // パイプライン結果が空の場合は一括送信へフォールバック
+                    self.executeBatchTranscriptionTask(
+                        targetAudioURL: targetAudioURL,
+                        mode: mode,
+                        currentProvider: currentProvider,
+                        currentConfig: currentConfig,
+                        currentLLMConfig: currentLLMConfig,
+                        resolvedLLMProvider: resolvedLLMProvider,
+                        llmApiKey: llmApiKey,
+                        llmProviderDisplayName: llmProviderDisplayName,
+                        apiKey: apiKey,
+                        baseURL: baseURL,
+                        model: model,
+                        effectiveWhisperPrompt: effectiveWhisperPrompt,
+                        language: language,
+                        isLLMEnabled: isLLMEnabled,
+                        refinementStyle: refinementStyle,
+                        livePreviewText: livePreviewText,
+                        isJapanese: isJapanese
+                    )
+                }
+            }
+            return
+        }
+
+        // 一括送信モード（推奨・文脈高精度）
+        executeBatchTranscriptionTask(
+            targetAudioURL: targetAudioURL,
+            mode: mode,
+            currentProvider: currentProvider,
+            currentConfig: currentConfig,
+            currentLLMConfig: currentLLMConfig,
+            resolvedLLMProvider: resolvedLLMProvider,
+            llmApiKey: llmApiKey,
+            llmProviderDisplayName: llmProviderDisplayName,
+            apiKey: apiKey,
+            baseURL: baseURL,
+            model: model,
+            effectiveWhisperPrompt: effectiveWhisperPrompt,
+            language: language,
+            isLLMEnabled: isLLMEnabled,
+            refinementStyle: refinementStyle,
+            livePreviewText: livePreviewText,
+            isJapanese: isJapanese
+        )
+    }
+
+    /// 録音された音声をまとめて一括送信して文字起こし・推敲を実行するメインパイプライン
+    private func executeBatchTranscriptionTask(
+        targetAudioURL: URL,
+        mode: SpeechAPIMode,
+        currentProvider: APIProvider,
+        currentConfig: (baseURL: String, modelName: String),
+        currentLLMConfig: (baseURL: String, modelName: String, isCustom: Bool),
+        resolvedLLMProvider: APIProvider,
+        llmApiKey: String?,
+        llmProviderDisplayName: String,
+        apiKey: String?,
+        baseURL: String,
+        model: String,
+        effectiveWhisperPrompt: String?,
+        language: String?,
+        isLLMEnabled: Bool,
+        refinementStyle: RefinementStyle,
+        livePreviewText: String,
+        isJapanese: Bool
+    ) {
         processingTask?.cancel()
         let taskToken = UUID()
         processingTaskToken = taskToken
@@ -661,6 +839,7 @@ public final class AppState: ObservableObject {
             let totalStartTime = CFAbsoluteTimeGetCurrent()
             var whisperDuration: Double = 0.0
             var llmDuration: Double = 0.0
+            let prompt = self.settings.promptHint.isEmpty ? nil : self.settings.promptHint
 
             do {
                 // ==========================================
@@ -844,13 +1023,19 @@ public final class AppState: ObservableObject {
                 }
 
                 self.lastTranscribedText = trimmedText
+                PipelineLogger.shared.logWhisperReceived(type: "一括送信認識", text: trimmedText)
 
-                // ==========================================
-                // 2. LLM による文章の意味理解・推敲（テキスト ➔ テキスト）
-                // ==========================================
-                var refinedText = trimmedText
+                // 音声認識テキストをLLMへ渡す前に、音声コマンド（改行・記号・括弧等）を事前解決する。
+                // これにより、LLMが「改行」や「びっくりマーク」を文字通りの日本語として
+                // 誤校正（「開業、次の行」「ビックリマーク！」等）するのを防止する。
+                let preprocessedText = PunctuationService.shared.format(
+                    text: trimmedText,
+                    isJapanese: isJapanese
+                )
+                var refinedText = preprocessedText
 
                 if isLLMEnabled && mode == .transcriptions {
+                    PipelineLogger.shared.logLLMInput(type: "一括送信推敲", text: preprocessedText)
                     self.phase = .refining
                     self.statusMessage = refinementStyle == .casual ? "AI推敲中(口語)..." : "AI推敲中(文章)..."
                     NSLog("[VoiceIME] 🤖 AI推敲リクエスト送信 (%@, モデル: %@, スタイル: %@)", llmProviderDisplayName, currentLLMConfig.modelName, refinementStyle.rawValue)
@@ -864,7 +1049,7 @@ public final class AppState: ObservableObject {
                             llmBackupProvider = self.keychain.hasAPIKey(for: .openai) ? .openai : nil
                         case .openai:
                             llmBackupProvider = self.keychain.hasAPIKey(for: .groq) ? .groq : nil
-                        case .custom:
+                        case .sarashina, .custom:
                             llmBackupProvider = nil
                         }
                     } else {
@@ -898,7 +1083,7 @@ public final class AppState: ObservableObject {
                                 group.addTask {
                                     do {
                                         let res = try await self.llm.refine(
-                                            text: trimmedText,
+                                            text: preprocessedText,
                                             baseURL: currentLLMConfig.baseURL,
                                             apiKey: llmApiKey,
                                             model: currentLLMConfig.modelName,
@@ -925,7 +1110,7 @@ public final class AppState: ObservableObject {
                                         NSLog("[VoiceIME] ⚡️ メインLLM(%@)応答待ち1.5秒超過: バックアップ(%@)へ並行リクエスト発射", resolvedLLMProvider.displayName, backup.displayName)
 
                                         let res = try await self.llm.refine(
-                                            text: trimmedText,
+                                            text: preprocessedText,
                                             baseURL: backupLLMConfig.baseURL,
                                             apiKey: backupKey,
                                             model: backupLLMConfig.modelName,
@@ -1008,15 +1193,15 @@ public final class AppState: ObservableObject {
                                 NSLog("[VoiceIME] ✨ バックアップAI推敲が勝利 (%.2f秒): [%@]", llmDuration, refinedText)
                             }
                         } catch {
-                            NSLog("[VoiceIME] ⚠️ ヘッジドAI推敲両系失敗: %@。生テキストを使用します", error.localizedDescription)
-                            refinedText = trimmedText
+                            NSLog("[VoiceIME] ⚠️ ヘッジドAI推敲両系失敗: %@。事前整形テキストを使用します", error.localizedDescription)
+                            refinedText = preprocessedText
                             self.lastUsedLLMProvider = nil
                         }
                     } else {
                         // バックアップ未設定、またはカスタムLLMの場合は単独で実行
                         do {
                             refinedText = try await self.llm.refine(
-                                text: trimmedText,
+                                text: preprocessedText,
                                 baseURL: currentLLMConfig.baseURL,
                                 apiKey: llmApiKey,
                                 model: currentLLMConfig.modelName,
@@ -1030,133 +1215,29 @@ public final class AppState: ObservableObject {
                             NSLog("[VoiceIME] ✨ AI推敲成功 (%.2f秒): [%@]", llmDuration, refinedText)
                         } catch {
                             let (summary, detail) = self.extractErrorSummary(error)
-                            NSLog("[VoiceIME] ⚠️ AI推敲エラー (%@): %@ (%@)。生テキストを使用します", llmProviderDisplayName, summary, detail)
-                            refinedText = trimmedText
+                            NSLog("[VoiceIME] ⚠️ AI推敲エラー (%@): %@ (%@)。事前整形テキストを使用します", llmProviderDisplayName, summary, detail)
+                            refinedText = preprocessedText
                             self.lastUsedLLMProvider = nil
                         }
                     }
+                    PipelineLogger.shared.logLLMOutput(type: "一括送信推敲", text: refinedText)
                 } else {
                     self.lastUsedLLMProvider = nil
                 }
 
                 // ==========================================
-                // 3. 画面プレビュー表示テキストとの句読点整合化・正規化
+                // 3. 確定テキストの最終整形（辞書適用・正規化）と対象アプリへのペースト
                 // ==========================================
-                let alignedText = PunctuationService.shared.alignPunctuation(
+                PipelineLogger.shared.logSessionEnd(finalText: refinedText)
+                self.finalizeAndPaste(
                     text: refinedText,
-                    referenceLiveText: livePreviewText,
-                    isJapanese: isJapanese
+                    livePreviewText: isLLMEnabled ? refinedText : livePreviewText,
+                    isJapanese: isJapanese,
+                    totalStartTime: totalStartTime,
+                    fallbackNotices: fallbackNotices
                 )
-                let normalizedText = LLMService.normalizePunctuation(for: alignedText)
+                return
 
-                // ==========================================
-                // 4. ユーザー独自の辞書置換ルールを適用
-                // ==========================================
-                let processedText = self.dictionary.apply(
-                    text: normalizedText,
-                    rules: rules
-                )
-                self.lastProcessedText = processedText
-
-                // プレビューウィンドウの内容も最新の確定テキストに同期（ペーストされる文字列と完全に一致）
-                if self.settings.floatingPreviewEnabled {
-                    FloatingPreviewController.shared.updateConfirmedText(processedText)
-                }
-
-                // ==========================================
-                // 5. テキスト出力（自動ペースト & フローティングプレビュー保留）
-                // ==========================================
-                // キャンセル済みなら、ユーザーの意図しないタイミングでペーストしない
-                if Task.isCancelled {
-                    self.phase = .idle
-                    self.statusMessage = "処理をキャンセルしました。"
-                    return
-                }
-
-                let totalElapsed = CFAbsoluteTimeGetCurrent() - totalStartTime
-                let timeStr = String(format: "%.1f秒", totalElapsed)
-                let completionNotice = fallbackNotices.isEmpty ? "" : " " + fallbackNotices.joined(separator: " ")
-                let completionMessage = "完了 (\(timeStr))" + completionNotice
-
-                // ==========================================
-                // 5. フォーカス状態の自動判定とテキスト出力
-                // ==========================================
-                let focusState = FocusDetectionService.shared.checkCurrentFocus()
-                NSLog("[VoiceIME] 🎯 フォーカス状態判定: %@", focusState.description)
-
-                switch focusState {
-                case .editableText(let role, let detail):
-                    // 【確実に入力エリア】
-                    // 1. 自動ペーストを実行
-                    // 2. ペースト完了時にウィンドウを非表示（閉じる）
-                    if self.settings.autoPasteEnabled {
-                        self.phase = .pasting
-                        self.statusMessage = "入力中..."
-                        NSLog("[VoiceIME] 🚀 確実な入力欄へ自動ペースト実行 (\(role): \(detail)): [%@]", processedText)
-
-                        self.paster.paste(text: processedText, restoreClipboard: restoreClipboard) { [weak self] in
-                            Task { @MainActor [weak self] in
-                                guard let self = self else { return }
-                                self.phase = .idle
-                                self.statusMessage = completionMessage
-                                // 入力欄へのペーストが完了したため、ウィンドウを自動で閉じる
-                                if self.settings.floatingPreviewEnabled {
-                                    FloatingPreviewController.shared.hide()
-                                }
-                                NSLog("[VoiceIME] ✅ 入力完了・プレビューウィンドウ消去")
-                            }
-                        }
-                    } else {
-                        if self.settings.floatingPreviewEnabled {
-                            FloatingPreviewController.shared.show(text: processedText, notice: "入力先を選択 ➔ \(self.settings.pasteShortcutDisplayString)")
-                        }
-                        self.phase = .idle
-                        self.statusMessage = completionMessage + " [\(self.settings.pasteShortcutDisplayString)で入力]"
-                    }
-
-                case .notEditable(let role, let detail):
-                    // 【明らかに入力不可（デスクトップ、ボタン、ブラウザWebページ全体等）】
-                    // 1. 自動ペーストはスキップして空振りを防止
-                    // 2. セキュリティ保護: 最大45秒間だけ一時クリップボードに保持（45秒後またはウィンドウ消去時に自動復元・消去）
-                    let tempDuration = self.settings.floatingPreviewDuration > 0 ? min(self.settings.floatingPreviewDuration, 45.0) : 45.0
-                    FloatingPreviewController.shared.setTemporaryClipboard(text: processedText, duration: tempDuration)
-
-                    // 3. ウィンドウを画面に残して案内
-                    if self.settings.floatingPreviewEnabled {
-                        FloatingPreviewController.shared.show(text: processedText, notice: "45秒間コピー有効: ⌘V または \(self.settings.pasteShortcutDisplayString)")
-                    }
-                    self.phase = .idle
-                    self.statusMessage = "\(completionMessage) [45秒限定コピー: ⌘V/\(self.settings.pasteShortcutDisplayString)で入力]"
-                    NSLog("[VoiceIME] ⚠️ 非入力要素（\(role): \(detail)）を検出。45秒限定でクリップボードに退避しウィンドウを残します")
-
-                case .ambiguous(let role, let detail):
-                    // 【判定微妙・Web/Slack/VSCode等】
-                    // セキュリティ保護: 最大45秒間だけ一時クリップボードに保持
-                    let tempDuration = self.settings.floatingPreviewDuration > 0 ? min(self.settings.floatingPreviewDuration, 45.0) : 45.0
-                    FloatingPreviewController.shared.setTemporaryClipboard(text: processedText, duration: tempDuration)
-
-                    if self.settings.floatingPreviewEnabled {
-                        FloatingPreviewController.shared.show(text: processedText, notice: "45秒間コピー有効: ⌘V または \(self.settings.pasteShortcutDisplayString)")
-                    }
-
-                    if self.settings.autoPasteEnabled {
-                        self.phase = .pasting
-                        self.statusMessage = "入力中..."
-                        NSLog("[VoiceIME] 🚀 判定微妙（\(role): \(detail)）のためペースト試行＋ウィンドウ保留: [%@]", processedText)
-
-                        self.paster.paste(text: processedText, restoreClipboard: restoreClipboard) { [weak self] in
-                            Task { @MainActor [weak self] in
-                                guard let self = self else { return }
-                                self.phase = .idle
-                                self.statusMessage = completionMessage
-                                NSLog("[VoiceIME] ✅ ペースト試行完了（ウィンドウは保留維持）")
-                            }
-                        }
-                    } else {
-                        self.phase = .idle
-                        self.statusMessage = completionMessage + " [\(self.settings.pasteShortcutDisplayString)で入力]"
-                    }
-                }
 
             } catch {
                 // URLSession のキャンセルは URLError(.cancelled) としてラップされて届くため、
@@ -1185,6 +1266,7 @@ public final class AppState: ObservableObject {
         FloatingPreviewController.shared.hide()
 
         recorder.cancelRecording()
+        StreamingChunkPipelineService.shared.cancel()
         isQuickAskActive = false
         phase = .idle
         statusMessage = "録音をキャンセルしました。"
@@ -1258,5 +1340,98 @@ VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を
             return "\(Date().timeIntervalSince1970)"
         }
         return "\(modDate.timeIntervalSince1970)"
+    }
+
+    /// 確定テキストの最終整形（辞書適用・正規化）と対象アプリへのペースト
+    public func finalizeAndPaste(
+        text: String,
+        livePreviewText: String = "",
+        isJapanese: Bool,
+        totalStartTime: CFAbsoluteTime,
+        fallbackNotices: [String] = []
+    ) {
+        let alignedText = PunctuationService.shared.alignPunctuation(
+            text: text,
+            referenceLiveText: livePreviewText,
+            isJapanese: isJapanese
+        )
+        let normalizedText = LLMService.normalizePunctuation(for: alignedText)
+        let processedText = self.dictionary.apply(
+            text: normalizedText,
+            rules: self.settings.dictionaryRules
+        )
+        self.lastProcessedText = processedText
+
+        if self.settings.floatingPreviewEnabled {
+            FloatingPreviewController.shared.updateConfirmedText(processedText)
+        }
+
+        let totalElapsed = CFAbsoluteTimeGetCurrent() - totalStartTime
+        let timeStr = String(format: "%.1f秒", totalElapsed)
+        let completionNotice = fallbackNotices.isEmpty ? "" : " " + fallbackNotices.joined(separator: " ")
+        let completionMessage = "完了 (\(timeStr))" + completionNotice
+
+        let focusState = FocusDetectionService.shared.checkCurrentFocus()
+        NSLog("[VoiceIME] 🎯 フォーカス状態判定: %@", focusState.description)
+
+        switch focusState {
+        case .editableText(let role, let detail):
+            if self.settings.autoPasteEnabled {
+                self.phase = .pasting
+                self.statusMessage = "入力中..."
+                NSLog("[VoiceIME] 🚀 確実な入力欄へ自動ペースト実行 (\(role): \(detail)): [%@]", processedText)
+
+                self.paster.paste(text: processedText, restoreClipboard: self.settings.restoreClipboard) { [weak self] in
+                    Task { @MainActor [weak self] in
+                        guard let self = self else { return }
+                        self.phase = .idle
+                        self.statusMessage = completionMessage
+                        if self.settings.floatingPreviewEnabled {
+                            FloatingPreviewController.shared.hide()
+                        }
+                        NSLog("[VoiceIME] ✅ 入力完了・プレビューウィンドウ消去")
+                    }
+                }
+            } else {
+                if self.settings.floatingPreviewEnabled {
+                    FloatingPreviewController.shared.show(text: processedText, notice: "入力先を選択 ➔ \(self.settings.pasteShortcutDisplayString)")
+                }
+                self.phase = .idle
+                self.statusMessage = completionMessage + " [\(self.settings.pasteShortcutDisplayString)で入力]"
+            }
+
+        case .notEditable(let role, let detail):
+            let tempDuration = self.settings.floatingPreviewDuration > 0 ? min(self.settings.floatingPreviewDuration, 45.0) : 45.0
+            FloatingPreviewController.shared.setTemporaryClipboard(text: processedText, duration: tempDuration)
+            if self.settings.floatingPreviewEnabled {
+                FloatingPreviewController.shared.show(text: processedText, notice: "45秒間コピー有効: ⌘V または \(self.settings.pasteShortcutDisplayString)")
+            }
+            self.phase = .idle
+            self.statusMessage = "\(completionMessage) [45秒限定コピー: ⌘V/\(self.settings.pasteShortcutDisplayString)で入力]"
+            NSLog("[VoiceIME] ⚠️ 非入力要素（\(role): \(detail)）を検出。45秒限定でクリップボードに退避しウィンドウを残します")
+
+        case .ambiguous(let role, let detail):
+            let tempDuration = self.settings.floatingPreviewDuration > 0 ? min(self.settings.floatingPreviewDuration, 45.0) : 45.0
+            FloatingPreviewController.shared.setTemporaryClipboard(text: processedText, duration: tempDuration)
+            if self.settings.floatingPreviewEnabled {
+                FloatingPreviewController.shared.show(text: processedText, notice: "45秒間コピー有効: ⌘V または \(self.settings.pasteShortcutDisplayString)")
+            }
+            if self.settings.autoPasteEnabled {
+                self.phase = .pasting
+                self.statusMessage = "入力中..."
+                NSLog("[VoiceIME] 🚀 判定微妙（\(role): \(detail)）のためペースト試行＋ウィンドウ保留: [%@]", processedText)
+                self.paster.paste(text: processedText, restoreClipboard: self.settings.restoreClipboard) { [weak self] in
+                    Task { @MainActor [weak self] in
+                        guard let self = self else { return }
+                        self.phase = .idle
+                        self.statusMessage = completionMessage
+                        NSLog("[VoiceIME] ✅ ペースト試行完了（ウィンドウは保留維持）")
+                    }
+                }
+            } else {
+                self.phase = .idle
+                self.statusMessage = "\(completionMessage) [45秒限定コピー: ⌘V/\(self.settings.pasteShortcutDisplayString)で入力]"
+            }
+        }
     }
 }

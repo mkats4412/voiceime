@@ -39,7 +39,7 @@ public struct FloatingPreviewView: View {
                 case .processing:
                     ProgressView()
                         .controlSize(.small)
-                    Text(controller.mode == .quickAsk ? "AI回答取得中..." : "AI推敲中...")
+                    Text(controller.mode == .quickAsk ? "AI回答取得中..." : (AppSettings.shared.isLLMRefinementActive ? "AI推敲中..." : "文字起こし中..."))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.primary)
 

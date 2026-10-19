@@ -60,19 +60,21 @@ public enum RefinementStyle: String, CaseIterable, Identifiable {
 }
 
 public enum LLMProviderMode: String, CaseIterable, Identifiable {
-    case sameAsSpeech = "sameAsSpeech"
-    case groq = "groq"
+    case sarashina = "sarashina"
     case openai = "openai"
     case custom = "custom"
+    case groq = "groq"
+    case sameAsSpeech = "sameAsSpeech"
 
     public var id: String { rawValue }
 
     public var title: String {
         switch self {
-        case .sameAsSpeech: return "音声認識と同一"
-        case .groq: return "Groq"
-        case .openai: return "OpenAI"
+        case .sarashina: return "Sarashina (日本語特化・高精度)"
+        case .openai: return "OpenAI (クラウド高品質)"
         case .custom: return "カスタム (ローカルLLM / 互換URL)"
+        case .groq: return "Groq (クラウド高速)"
+        case .sameAsSpeech: return "音声認識と同一"
         }
     }
 }
@@ -137,6 +139,14 @@ public final class AppSettings: ObservableObject {
         static let openAIModel = "voiceime_openai_model"
         static let openAILLMModel = "voiceime_openai_llm_model"
 
+        // ユーザー直接指定 LLM 設定 (未指定時は推敲を使用しない)
+        static let userLLMBaseURL = "voiceime_user_llm_baseURL"
+        static let userLLMModel = "voiceime_user_llm_model"
+
+        // Sarashina 設定
+        static let sarashinaBaseURL = "voiceime_sarashina_baseURL"
+        static let sarashinaModel = "voiceime_sarashina_model"
+
         // カスタム LLM 設定
         static let llmProviderMode = "voiceime_llmProviderMode"
         static let customLLMBaseURL = "voiceime_custom_llm_baseURL"
@@ -146,9 +156,13 @@ public final class AppSettings: ObservableObject {
         static let apiMode = "voiceime_apiMode"
         static let triggerMode = "voiceime_triggerMode"
         static let autoFallbackEnabled = "voiceime_autoFallbackEnabled"
+        static let batchTranscriptionEnabled = "voiceime_batchTranscriptionEnabled"
         static let llmRefinementEnabled = "voiceime_llmRefinementEnabled"
         static let refinementStyle = "voiceime_refinementStyle"
         static let promptHint = "voiceime_promptHint"
+        static let systemPromptCasual = "voiceime_systemPromptCasual"
+        static let systemPromptFormal = "voiceime_systemPromptFormal"
+        static let userPromptTemplate = "voiceime_userPromptTemplate"
         static let customVocabulary = "voiceime_customVocabulary"
         static let language = "voiceime_language"
         static let restoreClipboard = "voiceime_restoreClipboard"
@@ -181,6 +195,10 @@ public final class AppSettings: ObservableObject {
         static let pasteShortcutKeyCode = "voiceime_pasteShortcutKeyCode"
         static let pasteShortcutModifiers = "voiceime_pasteShortcutModifiers"
         static let pasteShortcutDisplayString = "voiceime_pasteShortcutDisplayString"
+
+        // 入力オーディオデバイス設定
+        static let selectedAudioDeviceUID = "voiceime_selectedAudioDeviceUID"
+        static let selectedAudioDeviceName = "voiceime_selectedAudioDeviceName"
     }
 
     private let defaults = UserDefaults.standard
@@ -215,11 +233,31 @@ public final class AppSettings: ObservableObject {
         didSet { defaults.set(openAILLMModel, forKey: Keys.openAILLMModel) }
     }
 
-    // MARK: - AI推敲 (LLM) プロバイダー設定
+    // MARK: - ユーザー直接指定 推敲 (LLM) 設定
 
-    /// AI推敲（文脈理解）のプロバイダーモード（音声認識と同一 / Groq / OpenAI / カスタム）
+    /// ユーザーが直接指定する推敲 Base URL (例: https://api.sarashina.ai/v1, https://api.openai.com/v1, http://localhost:11434/v1)
+    @Published public var userLLMBaseURL: String {
+        didSet { defaults.set(userLLMBaseURL, forKey: Keys.userLLMBaseURL) }
+    }
+
+    /// ユーザーが直接指定する推敲モデル名 (例: sarashina3-mini, gpt-4o-mini 等。未指定・空欄時は推敲を使用しない)
+    @Published public var userLLMModel: String {
+        didSet { defaults.set(userLLMModel, forKey: Keys.userLLMModel) }
+    }
+
+    /// AI推敲（文脈理解）のプロバイダーモード（後方互換用）
     @Published public var llmProviderMode: LLMProviderMode {
         didSet { defaults.set(llmProviderMode.rawValue, forKey: Keys.llmProviderMode) }
+    }
+
+    /// Sarashina Base URL
+    @Published public var sarashinaBaseURL: String {
+        didSet { defaults.set(sarashinaBaseURL, forKey: Keys.sarashinaBaseURL) }
+    }
+
+    /// Sarashina モデル名 (sarashina3-mini, sarashina3-nano)
+    @Published public var sarashinaModel: String {
+        didSet { defaults.set(sarashinaModel, forKey: Keys.sarashinaModel) }
     }
 
     /// カスタムLLM Base URL (Ollama, LM Studio, その他互換サーバー)
@@ -246,6 +284,11 @@ public final class AppSettings: ObservableObject {
         didSet { defaults.set(autoFallbackEnabled, forKey: Keys.autoFallbackEnabled) }
     }
 
+    /// 録音完了時に音声を分割せずまとめて一括送信するかどうか（true: 一括送信で文脈・漢字認識精度を最大化、false: 4.5〜7秒ごとの分割逐次送信）
+    @Published public var batchTranscriptionEnabled: Bool {
+        didSet { defaults.set(batchTranscriptionEnabled, forKey: Keys.batchTranscriptionEnabled) }
+    }
+
     /// AI（LLM）による文脈理解・句読点・推敲の有効化フラグ
     @Published public var llmRefinementEnabled: Bool {
         didSet { defaults.set(llmRefinementEnabled, forKey: Keys.llmRefinementEnabled) }
@@ -270,6 +313,44 @@ public final class AppSettings: ObservableObject {
             }
             VoiceIMEDiskSyncService.shared.exportToDisk(rules: dictionaryRules, vocabulary: customVocabulary)
         }
+    }
+
+    // MARK: - 推敲プロンプト設定 (prompts.json 連動)
+
+    @Published public var systemPromptCasual: String {
+        didSet {
+            defaults.set(systemPromptCasual, forKey: Keys.systemPromptCasual)
+            exportPromptsIfReady()
+        }
+    }
+
+    @Published public var systemPromptFormal: String {
+        didSet {
+            defaults.set(systemPromptFormal, forKey: Keys.systemPromptFormal)
+            exportPromptsIfReady()
+        }
+    }
+
+    @Published public var userPromptTemplate: String {
+        didSet {
+            defaults.set(userPromptTemplate, forKey: Keys.userPromptTemplate)
+            exportPromptsIfReady()
+        }
+    }
+
+    public func exportPromptsIfReady() {
+        let config = PromptConfig(
+            casualSystemPrompt: systemPromptCasual,
+            formalSystemPrompt: systemPromptFormal,
+            userPromptTemplate: userPromptTemplate
+        )
+        VoiceIMEDiskSyncService.shared.exportPromptsToDisk(config: config)
+    }
+
+    public func resetPromptsToDefaults() {
+        self.systemPromptCasual = PromptConfig.defaultCasualPrompt
+        self.systemPromptFormal = PromptConfig.defaultFormalPrompt
+        self.userPromptTemplate = PromptConfig.defaultUserPromptTemplate
     }
 
     @Published public var language: String {
@@ -357,6 +438,16 @@ public final class AppSettings: ObservableObject {
         didSet { defaults.set(audioTrimmingEnabled, forKey: Keys.audioTrimmingEnabled) }
     }
 
+    /// 選択中の入力オーディオデバイス UID (空文字の場合はシステムデフォルト)
+    @Published public var selectedAudioDeviceUID: String {
+        didSet { defaults.set(selectedAudioDeviceUID, forKey: Keys.selectedAudioDeviceUID) }
+    }
+
+    /// 選択中の入力オーディオデバイス表示名
+    @Published public var selectedAudioDeviceName: String {
+        didSet { defaults.set(selectedAudioDeviceName, forKey: Keys.selectedAudioDeviceName) }
+    }
+
     /// 画面下部にプレビュー・保留ウィンドウを表示（⌘+Enterでどこでも入力）
     @Published public var floatingPreviewEnabled: Bool {
         didSet { defaults.set(floatingPreviewEnabled, forKey: Keys.floatingPreviewEnabled) }
@@ -390,47 +481,41 @@ public final class AppSettings: ObservableObject {
         effectiveLLMConfig.modelName
     }
 
-    /// 実際に使用される推敲（LLM）プロバイダー
+    /// 実際に使用される推敲（LLM）プロバイダー (ユーザー指定URLから自動判定)
     public var resolvedLLMProvider: APIProvider {
-        switch llmProviderMode {
-        case .sameAsSpeech:
-            return selectedProvider
-        case .groq:
-            return .groq
-        case .openai:
+        let lower = userLLMBaseURL.lowercased()
+        if lower.contains("sarashina.ai") {
+            return .sarashina
+        } else if lower.contains("api.openai.com") {
             return .openai
-        case .custom:
+        } else if lower.contains("api.groq.com") {
+            return .groq
+        } else {
             return .custom
         }
     }
 
     /// 有効な推敲（LLM）設定 (baseURL, modelName, isCustom)
     public var effectiveLLMConfig: (baseURL: String, modelName: String, isCustom: Bool) {
-        switch llmProviderMode {
-        case .sameAsSpeech:
-            let cfg = llmConfig(for: selectedProvider)
-            return (cfg.baseURL, cfg.modelName, false)
-        case .groq:
-            return (groqBaseURL, groqLLMModel, false)
-        case .openai:
-            return (openAIBaseURL, openAILLMModel, false)
-        case .custom:
-            return (customLLMBaseURL, customLLMModel, true)
-        }
+        let trimmedModel = userLLMModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedURL = userLLMBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let url = trimmedURL.isEmpty ? "https://api.sarashina.ai/v1" : trimmedURL
+        let isCustom = !url.contains("api.openai.com") && !url.contains("api.groq.com")
+        return (url, trimmedModel, isCustom)
+    }
+
+    /// 推敲が実際に動作するか（モデル名が指定されており、かつ有効な場合のみtrue。未指定なら推敲を使用しない）
+    public var isLLMRefinementActive: Bool {
+        guard llmRefinementEnabled else { return false }
+        return !effectiveLLMConfig.modelName.isEmpty
     }
 
     /// 現在有効な推敲（LLM）プロバイダーの表示名
     public var effectiveLLMProviderDisplayName: String {
-        switch llmProviderMode {
-        case .sameAsSpeech:
-            return "\(selectedProvider.displayName) (音声認識と同一)"
-        case .groq:
-            return "Groq"
-        case .openai:
-            return "OpenAI"
-        case .custom:
-            return "カスタム (ローカルLLM/互換)"
-        }
+        let model = effectiveLLMConfig.modelName
+        guard !model.isEmpty else { return "未指定 (推敲を使用しない)" }
+        let provider = resolvedLLMProvider
+        return "\(provider.displayName): \(model)"
     }
 
     /// 会話（クイック質問）で実際に使用されるプロバイダー
@@ -495,6 +580,8 @@ public final class AppSettings: ObservableObject {
             return (groqBaseURL, groqModel)
         case .openai:
             return (openAIBaseURL, openAIModel)
+        case .sarashina:
+            return (sarashinaBaseURL, sarashinaModel)
         case .custom:
             return (customLLMBaseURL, customLLMModel)
         }
@@ -507,6 +594,8 @@ public final class AppSettings: ObservableObject {
             return (groqBaseURL, groqLLMModel)
         case .openai:
             return (openAIBaseURL, openAILLMModel)
+        case .sarashina:
+            return (sarashinaBaseURL, sarashinaModel)
         case .custom:
             return (customLLMBaseURL, customLLMModel)
         }
@@ -520,7 +609,7 @@ public final class AppSettings: ObservableObject {
             return KeychainService.shared.hasAPIKey(for: .openai) ? .openai : nil
         case .openai:
             return KeychainService.shared.hasAPIKey(for: .groq) ? .groq : nil
-        case .custom:
+        case .sarashina, .custom:
             return nil
         }
     }
@@ -537,8 +626,32 @@ public final class AppSettings: ObservableObject {
         self.openAIModel = defaults.string(forKey: Keys.openAIModel) ?? "whisper-1"
         self.openAILLMModel = defaults.string(forKey: Keys.openAILLMModel) ?? "gpt-4o-mini"
 
-        let savedLLMMode = defaults.string(forKey: Keys.llmProviderMode) ?? LLMProviderMode.sameAsSpeech.rawValue
-        self.llmProviderMode = LLMProviderMode(rawValue: savedLLMMode) ?? .sameAsSpeech
+        self.sarashinaBaseURL = defaults.string(forKey: Keys.sarashinaBaseURL) ?? "https://api.sarashina.ai/v1"
+        self.sarashinaModel = defaults.string(forKey: Keys.sarashinaModel) ?? "sarashina3-mini"
+
+        if let savedUserURL = defaults.object(forKey: Keys.userLLMBaseURL) as? String {
+            self.userLLMBaseURL = savedUserURL
+        } else if let savedCustomURL = defaults.string(forKey: Keys.customLLMBaseURL), !savedCustomURL.isEmpty {
+            self.userLLMBaseURL = savedCustomURL
+        } else {
+            self.userLLMBaseURL = "https://api.sarashina.ai/v1"
+        }
+
+        if let savedUserModel = defaults.object(forKey: Keys.userLLMModel) as? String {
+            self.userLLMModel = savedUserModel
+        } else if let savedCustomModel = defaults.string(forKey: Keys.customLLMModel), !savedCustomModel.isEmpty {
+            self.userLLMModel = savedCustomModel
+        } else {
+            self.userLLMModel = "sarashina3-mini"
+        }
+
+        let savedLLMMode = defaults.string(forKey: Keys.llmProviderMode) ?? LLMProviderMode.sarashina.rawValue
+        if savedLLMMode == LLMProviderMode.sameAsSpeech.rawValue {
+            // 推敲は別口指定に統一：音声認識と同一設定からSarashinaへ移行
+            self.llmProviderMode = .sarashina
+        } else {
+            self.llmProviderMode = LLMProviderMode(rawValue: savedLLMMode) ?? .sarashina
+        }
 
         self.customLLMBaseURL = defaults.string(forKey: Keys.customLLMBaseURL) ?? "http://localhost:11434/v1"
         self.customLLMModel = defaults.string(forKey: Keys.customLLMModel) ?? "llama3.2"
@@ -550,6 +663,7 @@ public final class AppSettings: ObservableObject {
         self.triggerMode = TriggerMode(rawValue: savedTrigger) ?? .pushToTalk
 
         self.autoFallbackEnabled = defaults.object(forKey: Keys.autoFallbackEnabled) != nil ? defaults.bool(forKey: Keys.autoFallbackEnabled) : true
+        self.batchTranscriptionEnabled = defaults.object(forKey: Keys.batchTranscriptionEnabled) != nil ? defaults.bool(forKey: Keys.batchTranscriptionEnabled) : false
         self.llmRefinementEnabled = defaults.object(forKey: Keys.llmRefinementEnabled) != nil ? defaults.bool(forKey: Keys.llmRefinementEnabled) : true
 
         let savedStyle = defaults.string(forKey: Keys.refinementStyle) ?? RefinementStyle.casual.rawValue
@@ -557,6 +671,10 @@ public final class AppSettings: ObservableObject {
 
         let savedHint = defaults.string(forKey: Keys.promptHint) ?? ""
         self.promptHint = savedHint
+
+        self.systemPromptCasual = defaults.string(forKey: Keys.systemPromptCasual) ?? PromptConfig.defaultCasualPrompt
+        self.systemPromptFormal = defaults.string(forKey: Keys.systemPromptFormal) ?? PromptConfig.defaultFormalPrompt
+        self.userPromptTemplate = defaults.string(forKey: Keys.userPromptTemplate) ?? PromptConfig.defaultUserPromptTemplate
 
         if let savedVocab = defaults.stringArray(forKey: Keys.customVocabulary) {
             self.customVocabulary = savedVocab
@@ -614,6 +732,10 @@ public final class AppSettings: ObservableObject {
         self.audioThresholdDB = savedThreshold ?? -32.0
         self.audioTrimmingEnabled = defaults.object(forKey: Keys.audioTrimmingEnabled) != nil ? defaults.bool(forKey: Keys.audioTrimmingEnabled) : true
 
+        // 入力マイク設定の読み込み（デフォルト: システムデフォルト）
+        self.selectedAudioDeviceUID = defaults.string(forKey: Keys.selectedAudioDeviceUID) ?? ""
+        self.selectedAudioDeviceName = defaults.string(forKey: Keys.selectedAudioDeviceName) ?? "システムデフォルト"
+
         self.floatingPreviewEnabled = defaults.object(forKey: Keys.floatingPreviewEnabled) != nil ? defaults.bool(forKey: Keys.floatingPreviewEnabled) : true
         self.autoPasteEnabled = defaults.object(forKey: Keys.autoPasteEnabled) != nil ? defaults.bool(forKey: Keys.autoPasteEnabled) : true
         self.floatingPreviewDuration = defaults.object(forKey: Keys.floatingPreviewDuration) as? Double ?? 45.0
@@ -638,8 +760,11 @@ public final class AppSettings: ObservableObject {
         var cleaned = rules.filter { rule in
             !rule.pattern.contains("まる") &&
             !rule.pattern.contains("てん") &&
-            rule.pattern != "はてな" &&
-            rule.pattern != "びっくり" &&
+            !rule.pattern.contains("はてな") &&
+            !rule.pattern.contains("びっくり") &&
+            !rule.pattern.contains("感嘆符") &&
+            !rule.pattern.contains("疑問符") &&
+            !rule.pattern.contains("クエスチョン") &&
             rule.pattern != "マック" &&
             rule.pattern != "ウインドウズ" &&
             rule.pattern != "マクド" &&
@@ -708,40 +833,40 @@ public final class AppSettings: ObservableObject {
             DictionaryRule(pattern: "(?:さんてん|三点)[ 　]*(?:リーダー|りーだー)", replacement: "…", isRegex: true, isEnabled: true),
 
             // 3. 鍵括弧 」 閉じ (「かっことじ」一般形より先に評価)
-            DictionaryRule(pattern: "([と取][じちぢ]|閉じ?)[ 　]*(?:かぎ|鍵)[ 　]*(?:かっこ|括弧|カッコ)|(?:かぎ|鍵)[ 　]*(?:かっこ|括弧|カッコ)[ 　]*([と取][じちぢ]|閉じ?)|[Cc]lose quote", replacement: "」", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:[かカ][ぎギ]|鍵)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|(?:[かカ][ぎギ]|鍵)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose quote)", replacement: "」", isRegex: true, isEnabled: true),
 
             // 4. 鍵括弧 「 開き (「ひらきかっこ」一般形より先に評価、名詞単体の「鍵括弧」は保護)
-            DictionaryRule(pattern: "(?:ひらき|開き)[ 　]*(?:かぎ|鍵)[ 　]*(?:かっこ|括弧|カッコ)|[Oo]pen quote", replacement: "「", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:[かカ][ぎギ]|鍵)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|[Oo]pen quote)[ 　]*", replacement: "「", isRegex: true, isEnabled: true),
 
             // 5. 角括弧 ] 閉じ (ブラケット / 角括弧)
-            DictionaryRule(pattern: "([と取][じちぢ]|閉じ?)[ 　]*(?:(?:ブラケット|ぶらけっと)|(?:かく|角)[ 　]*(?:かっこ|括弧|カッコ))|(?:(?:ブラケット|ぶらけっと)|(?:かく|角)[ 　]*(?:かっこ|括弧|カッコ))[ 　]*([と取][じちぢ]|閉じ?)|[Cc]lose bracket", replacement: "]", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:(?:[ブぶ][ラら][ケけ][ッっ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|(?:(?:[ブぶ][ラら][ケけ][ッっ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose bracket)", replacement: "]", isRegex: true, isEnabled: true),
 
             // 6. 角括弧 [ 開き (ブラケット / 角括弧)
-            DictionaryRule(pattern: "(?:ひらき|開き)[ 　]*(?:(?:ブラケット|ぶらけっと)|(?:かく|角)[ 　]*(?:かっこ|括弧|カッコ))|[Oo]pen bracket", replacement: "[", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:(?:[ブぶ][ラら][ケけ][ッっ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|[Oo]pen bracket)[ 　]*", replacement: "[", isRegex: true, isEnabled: true),
 
             // 7. 波括弧 } 閉じ (ブレース / 波括弧)
-            DictionaryRule(pattern: "([と取][じちぢ]|閉じ?)[ 　]*(?:(?:ブレース|ぶれーす)|(?:なみ|波)[ 　]*(?:かっこ|括弧|カッコ))|(?:(?:ブレース|ぶれーす)|(?:なみ|波)[ 　]*(?:かっこ|括弧|カッコ))[ 　]*([と取][じちぢ]|閉じ?)|[Cc]lose brace", replacement: "}", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:(?:[ブぶ][レれ][ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|(?:(?:[ブぶ][レれ][ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose brace)", replacement: "}", isRegex: true, isEnabled: true),
 
             // 8. 波括弧 { 開き (ブレース / 波括弧)
-            DictionaryRule(pattern: "(?:ひらき|開き)[ 　]*(?:(?:ブレース|ぶれーす)|(?:なみ|波)[ 　]*(?:かっこ|括弧|カッコ))|[Oo]pen brace", replacement: "{", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:(?:[ブぶ][レれ][ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|[Oo]pen brace)[ 　]*", replacement: "{", isRegex: true, isEnabled: true),
 
-            // 9. 丸括弧 ) 閉じ (とじかっこ / とじまるかっこ / まるかっことじ / かっことじ)
-            DictionaryRule(pattern: "([と取][じちぢ]|閉じ?)[ 　]*(?:まる|丸)?[ 　]*(?:かっこ|括弧|カッコ)|(?:まる|丸)?[ 　]*(?:かっこ|括弧|カッコ)[ 　]*([と取][じちぢ]|閉じ?)|[Cc]lose parenthesis", replacement: ")", isRegex: true, isEnabled: true),
+            // 9. 丸括弧 ) 閉じ (とじかっこ / とじまるかっこ / まるかっことじ / マルカコトジ)
+            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose parenthesis)", replacement: ")", isRegex: true, isEnabled: true),
 
             // 10. 丸括弧 ( 開き (ひらきかっこ / ひらきまるかっこ。名詞単体の「丸括弧」「かっこ」は保護)
-            DictionaryRule(pattern: "(?:ひらき|開き)[ 　]*(?:まる|丸)?[ 　]*(?:かっこ|括弧|カッコ)|[Oo]pen parenthesis", replacement: "(", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|[Oo]pen parenthesis)[ 　]*", replacement: "(", isRegex: true, isEnabled: true),
 
             // 11. ダブルクォート "
-            DictionaryRule(pattern: "((?:(?:ひらき|開き|[と取][じちぢ]|閉じ)[ 　]*)?(?:ダブル|だぶる)[ 　]*(?:ク[ォオ]ー?[トド]|コー[トド]|くぉーと|くおーと)(?:[ 　]*(?:[と取][じちぢ]|閉じ))?|[Oo]pen double quote|[Cc]lose double quote|double quote)", replacement: "\"", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "((?:(?:[ひヒ][らラ][きキ]|開き|[と取ト][じちぢジ]|閉じ)[ 　]*)?(?:[ダだ][ブぶ][ルる])[ 　]*(?:[クく][ォオぉお]ー?[トどド]|コー[トどド]|くぉーと|くおーと)(?:[ 　]*(?:[と取ト][じちぢジ]|閉じ))?|[Oo]pen double quote|[Cc]lose double quote|double quote)", replacement: "\"", isRegex: true, isEnabled: true),
 
             // 12. シングルクォート '
-            DictionaryRule(pattern: "((?:(?:ひらき|開き|[と取][じちぢ]|閉じ)[ 　]*)?(?:シングル|しんぐる)[ 　]*(?:ク[ォオ]ー?[トド]|コー[トド]|くぉーと|くおーと)(?:[ 　]*(?:[と取][じちぢ]|閉じ))?|[Oo]pen single quote|[Cc]lose single quote|single quote)", replacement: "'", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "((?:(?:[ひヒ][らラ][きキ]|開き|[と取ト][じちぢジ]|閉じ)[ 　]*)?(?:[シし][ンん][グぐ][ルる])[ 　]*(?:[クく][ォオぉお]ー?[トどド]|コー[トどド]|くぉーと|くおーと)(?:[ 　]*(?:[と取ト][じちぢジ]|閉じ))?|[Oo]pen single quote|[Cc]lose single quote|single quote)", replacement: "'", isRegex: true, isEnabled: true),
 
-            // 13. 日本語の直後にある感嘆符 (！)（前後に勝手に入った「。」「、」「.」を巻き込んで「！」に置換）
-            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[ 　]*([!！]|びっくりまーく|びっくりマーク|感嘆符)[ 　]*[。、\\.,]*", replacement: "！", isRegex: true, isEnabled: true),
+            // 13. 日本語の直後にある感嘆符 (！)（前後に混入した「。」「、」を除去して単一の「！」に正規化。※名詞の「びっくりマーク」は破壊しない）
+            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[ 　]*[!！]+[ 　]*[。、\\.,]*", replacement: "！", isRegex: true, isEnabled: true),
 
-            // 14. 日本語の直後にある疑問符 (？)（前後に勝手に入った「。」「、」「.」を巻き込んで「？」に置換）
-            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[ 　]*([?？]|はてなまーく|はてなマーク|疑問符|クエスチョンマーク)[ 　]*[。、\\.,]*", replacement: "？", isRegex: true, isEnabled: true),
+            // 14. 日本語の直後にある疑問符 (？)（前後に混入した「。」「、」を除去して単一の「？」に正規化。※名詞の「はてなマーク」は破壊しない）
+            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[ 　]*[?？]+[ 　]*[。、\\.,]*", replacement: "？", isRegex: true, isEnabled: true),
 
             // 15. 英語・英字向けの感嘆符 (!)（前後に勝手に入ったピリオド「.」やカンマ「,」を巻き込んで半角「!」に置換）
             DictionaryRule(pattern: "[。、\\.,]*\\s*(!|[Ee]xclamation mark)\\s*[。、\\.,]*", replacement: "!", isRegex: true, isEnabled: true),
@@ -819,6 +944,14 @@ public final class AppSettings: ObservableObject {
             if let vocab = VoiceIMEDiskSyncService.shared.importVocabularyFromDisk() {
                 self.customVocabulary = vocab
                 self.defaults.set(vocab, forKey: Keys.customVocabulary)
+            }
+            if let prompts = VoiceIMEDiskSyncService.shared.importPromptsFromDisk() {
+                self.systemPromptCasual = prompts.casualSystemPrompt
+                self.systemPromptFormal = prompts.formalSystemPrompt
+                self.userPromptTemplate = prompts.userPromptTemplate
+                self.defaults.set(prompts.casualSystemPrompt, forKey: Keys.systemPromptCasual)
+                self.defaults.set(prompts.formalSystemPrompt, forKey: Keys.systemPromptFormal)
+                self.defaults.set(prompts.userPromptTemplate, forKey: Keys.userPromptTemplate)
             }
             self.defaults.synchronize()
         }

@@ -10,12 +10,38 @@ public struct AudioAnalysisMetrics {
     public let peakPowerDB: Float
     /// 音声全体の平均 RMS 音量 (dBFS)
     public let averageRMS_DB: Float
-    /// 発話開始位置（秒）
+    /// 発話開始位置（秒、thresholdDB 基準）
     public let speechStartSeconds: Double?
-    /// 発話終了位置（秒）
+    /// 発話終了位置（秒、thresholdDB 基準）
     public let speechEndSeconds: Double?
+    /// 発話持続時間（秒、thresholdDB 基準）
+    public let speechDurationSeconds: Double
+    /// 可聴音声持続時間（秒、絶対フロア -48.0 dBFS 基準）
+    public let audibleDurationSeconds: Double
     /// 音声全体の長さ（秒）
     public let totalDurationSeconds: Double
+
+    /// 無音・極小環境音・打鍵ノイズパルス・極短時間録音など、発話が存在しない状態かどうか
+    /// （ユーザーのしきい値設定に関わらず、Whisper API への送信を防止する絶対ガード判定）
+    public var isSilence: Bool {
+        // 1. 録音時間が極端に短い（0.25秒未満 = キーの誤押し・チョン押し）
+        if totalDurationSeconds < 0.25 {
+            return true
+        }
+        // 2. 音声全体のピーク音量が極小（-48.0 dBFS 未満 = 静寂・環境ノイズフロア）
+        if peakPowerDB < -48.0 {
+            return true
+        }
+        // 3. 最大RMS音量が極小（-50.0 dBFS 未満）
+        if maxWindowRMS_DB < -50.0 {
+            return true
+        }
+        // 4. -48dBFS を超える持続的な音が 0.12秒未満（単発クリック・打鍵音のみ）
+        if audibleDurationSeconds < 0.12 {
+            return true
+        }
+        return false
+    }
 }
 
 public final class AudioAnalysisService {
@@ -26,14 +52,16 @@ public final class AudioAnalysisService {
     /// 録音ファイルの音量を解析し、声としての音量（しきい値）に達しているかを判定する
     public func analyze(audioFileURL: URL, thresholdDB: Float) -> AudioAnalysisMetrics {
         guard let file = try? AVAudioFile(forReading: audioFileURL) else {
-            // ファイル読み込みに失敗した場合は、誤って発話を遮断しないよう安全に hasSpeech: true でフォールバック
+            // ファイル読み込みに失敗した場合は、無駄な API 送信を行わないよう安全に無音として扱う
             return AudioAnalysisMetrics(
-                hasSpeech: true,
-                maxWindowRMS_DB: 0,
-                peakPowerDB: 0,
-                averageRMS_DB: 0,
+                hasSpeech: false,
+                maxWindowRMS_DB: -100,
+                peakPowerDB: -100,
+                averageRMS_DB: -100,
                 speechStartSeconds: nil,
                 speechEndSeconds: nil,
+                speechDurationSeconds: 0,
+                audibleDurationSeconds: 0,
                 totalDurationSeconds: 0
             )
         }
@@ -49,6 +77,8 @@ public final class AudioAnalysisService {
                 averageRMS_DB: -100,
                 speechStartSeconds: nil,
                 speechEndSeconds: nil,
+                speechDurationSeconds: 0,
+                audibleDurationSeconds: 0,
                 totalDurationSeconds: 0
             )
         }
@@ -57,12 +87,14 @@ public final class AudioAnalysisService {
               (try? file.read(into: buffer)) != nil,
               let channels = buffer.floatChannelData else {
             return AudioAnalysisMetrics(
-                hasSpeech: true,
-                maxWindowRMS_DB: 0,
-                peakPowerDB: 0,
-                averageRMS_DB: 0,
+                hasSpeech: false,
+                maxWindowRMS_DB: -100,
+                peakPowerDB: -100,
+                averageRMS_DB: -100,
                 speechStartSeconds: nil,
                 speechEndSeconds: nil,
+                speechDurationSeconds: 0,
+                audibleDurationSeconds: 0,
                 totalDurationSeconds: 0
             )
         }
@@ -92,12 +124,20 @@ public final class AudioAnalysisService {
         var maxRMS: Float = -100.0
         var firstSpeechFrame: Int?
         var lastSpeechFrame: Int?
+        var firstAudibleFrame: Int?
+        var lastAudibleFrame: Int?
+
+        let absoluteAudibleFloorDB: Float = -48.0
 
         if totalFrames <= windowSize {
             maxRMS = avgRMS_DB
             if maxRMS >= thresholdDB {
                 firstSpeechFrame = 0
                 lastSpeechFrame = totalFrames
+            }
+            if maxRMS >= absoluteAudibleFloorDB {
+                firstAudibleFrame = 0
+                lastAudibleFrame = totalFrames
             }
         } else {
             var pos = 0
@@ -116,11 +156,30 @@ public final class AudioAnalysisService {
                     if firstSpeechFrame == nil { firstSpeechFrame = pos }
                     lastSpeechFrame = pos + windowSize
                 }
+                if rmsDB >= absoluteAudibleFloorDB {
+                    if firstAudibleFrame == nil { firstAudibleFrame = pos }
+                    lastAudibleFrame = pos + windowSize
+                }
                 pos += stepSize
             }
         }
 
-        let hasSpeech = (firstSpeechFrame != nil)
+        let speechDuration: Double
+        if let first = firstSpeechFrame, let last = lastSpeechFrame, last > first {
+            speechDuration = Double(last - first) / Double(sampleRate)
+        } else {
+            speechDuration = 0.0
+        }
+
+        let audibleDuration: Double
+        if let first = firstAudibleFrame, let last = lastAudibleFrame, last > first {
+            audibleDuration = Double(last - first) / Double(sampleRate)
+        } else {
+            audibleDuration = 0.0
+        }
+
+        // hasSpeech は指定された thresholdDB を超え、かつ単発打鍵パルス（0.10s未満）ではないこと
+        let hasSpeech = (firstSpeechFrame != nil) && (speechDuration >= 0.10)
         let startSec = firstSpeechFrame.map { Double($0) / Double(sampleRate) }
         let endSec = lastSpeechFrame.map { Double($0) / Double(sampleRate) }
 
@@ -131,6 +190,8 @@ public final class AudioAnalysisService {
             averageRMS_DB: avgRMS_DB,
             speechStartSeconds: startSec,
             speechEndSeconds: endSec,
+            speechDurationSeconds: speechDuration,
+            audibleDurationSeconds: audibleDuration,
             totalDurationSeconds: totalDuration
         )
     }
@@ -140,7 +201,7 @@ public final class AudioAnalysisService {
         audioFileURL: URL,
         thresholdDB: Float,
         leadingMarginSeconds: Double = 0.15,
-        trailingMarginSeconds: Double = 0.60
+        trailingMarginSeconds: Double = 0.70
     ) -> URL? {
         guard let file = try? AVAudioFile(forReading: audioFileURL) else { return nil }
         let format = file.processingFormat
@@ -159,6 +220,10 @@ public final class AudioAnalysisService {
         var firstSpeechFrame: Int?
         var lastSpeechFrame: Int?
 
+        // 語尾（「〜でしょう」「〜出ている」「〜ですよね」等）の減衰・息づかいを確実に拾うため、
+        // 終了判定の感度は -48.0 dBFS まで高感度に設定
+        let trailingThresholdDB = min(thresholdDB, -48.0)
+
         var pos = 0
         while pos + windowSize <= totalFrames {
             var sumSq: Float = 0.0
@@ -170,6 +235,8 @@ public final class AudioAnalysisService {
             let rmsDB = rms > 1e-5 ? 20.0 * log10(rms) : -100.0
             if rmsDB >= thresholdDB {
                 if firstSpeechFrame == nil { firstSpeechFrame = pos }
+            }
+            if rmsDB >= trailingThresholdDB && firstSpeechFrame != nil {
                 lastSpeechFrame = pos + windowSize
             }
             pos += stepSize
@@ -179,17 +246,17 @@ public final class AudioAnalysisService {
             return nil
         }
 
-        // 先頭（150ms）と末尾（350ms）のマージンを確保。
-        // 特に語尾の終助詞（〜ね、〜よ等）のフェードアウトや息づかいが脱落しないよう末尾マージンを十分に確保する。
+        // 先頭（150ms）と末尾（700ms）のマージンを確保。
+        // 特に語尾の終助詞（〜でしょう、〜ね等）のフェードアウトや息づかいが脱落しないよう末尾マージンを十分に確保する。
         let leadingMarginFrames = Int(sampleRate * Float(leadingMarginSeconds))
         let trailingMarginFrames = Int(sampleRate * Float(trailingMarginSeconds))
         let startFrame = max(0, first - leadingMarginFrames)
         let endFrame = min(totalFrames, last + trailingMarginFrames)
         let trimmedLength = endFrame - startFrame
 
-        // 削る部分が前後合計で 150ms 未満なら、再エンコードのコストを避けて元のファイルをそのまま使用
+        // 削る部分が前後合計で 100ms 未満なら、再エンコードのコストを避けて元のファイルをそのまま使用
         let totalTrimmedFrames = startFrame + (totalFrames - endFrame)
-        let minTrimFramesToJustify = Int(sampleRate * 0.15)
+        let minTrimFramesToJustify = Int(sampleRate * 0.10)
         if totalTrimmedFrames < minTrimFramesToJustify {
             return nil
         }

@@ -3,6 +3,7 @@ import SwiftUI
 public struct MenuBarView: View {
     @ObservedObject var appState = AppState.shared
     @ObservedObject var settings = AppSettings.shared
+    @ObservedObject var audioDevices = AudioDeviceService.shared
 
     var openSettingsAction: () -> Void
     var quitAction: () -> Void
@@ -53,6 +54,94 @@ public struct MenuBarView: View {
                 .font(.caption)
                 .padding(.horizontal, 4)
             }
+
+            // 入力マイク選択 & 状態表示 (ワイヤレスイヤホン等の選択・フォールバック検知)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: audioDevices.isFallbackActive ? "exclamationmark.triangle.fill" : "mic.fill")
+                        .foregroundColor(audioDevices.isFallbackActive ? .orange : .secondary)
+                        .font(.system(size: 11))
+
+                    Text("マイク:")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+
+                    // メニューバーからのマイク選択メニュー (言語・モード行と揃えた左寄せスタイル)
+                    Menu {
+                        let defaultName = audioDevices.systemDefaultDevice?.name ?? "未検出"
+                        Button(action: {
+                            audioDevices.selectDevice(uid: "", name: "システムデフォルト")
+                        }) {
+                            HStack {
+                                Text("システムデフォルト (\(defaultName))")
+                                if settings.selectedAudioDeviceUID.isEmpty || settings.selectedAudioDeviceUID == "default" {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        ForEach(audioDevices.availableDevices) { device in
+                            Button(action: {
+                                audioDevices.selectDevice(uid: device.id, name: device.name)
+                            }) {
+                                HStack {
+                                    Text(device.name + (device.isSystemDefault ? " (システム既定)" : ""))
+                                    if settings.selectedAudioDeviceUID == device.id {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        Button(action: {
+                            audioDevices.refreshDevices()
+                        }) {
+                            Label("マイク一覧を更新", systemImage: "arrow.clockwise")
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(audioDevices.effectiveDeviceName)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(audioDevices.isFallbackActive ? .orange : .primary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 8))
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2.5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(audioDevices.isFallbackActive ? Color.orange.opacity(0.15) : Color(NSColor.controlBackgroundColor))
+                        )
+                    }
+                    .menuStyle(.borderlessButton)
+                    .help("入力マイクを選択（クリックで切替）")
+
+                    Spacer()
+                }
+
+                // 選択したマイクが見つからずシステムデフォルトにフォールバック中の警告
+                if audioDevices.isFallbackActive {
+                    HStack(spacing: 4) {
+                        Image(systemName: "info.circle.fill")
+                            .foregroundColor(.orange)
+                            .font(.system(size: 9))
+                        Text("「\(settings.selectedAudioDeviceName)」未検出 ➔ 代替入力中")
+                            .font(.system(size: 9.5))
+                            .foregroundColor(.orange)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .padding(.horizontal, 2)
+                }
+            }
+            .padding(.horizontal, 4)
 
             // 言語クイック切り替え
             HStack(spacing: 6) {
@@ -143,40 +232,78 @@ public struct MenuBarView: View {
                 .padding(.horizontal, 4)
             }
 
-            // 口語モード / 文章モード切替（文字起こし & AI推敲ON時）
-            if settings.apiMode == .transcriptions && settings.llmRefinementEnabled {
+            // AI推敲 ON/OFF（チェックボックス）および スタイル切替
+            if settings.apiMode == .transcriptions {
                 HStack(spacing: 6) {
-                    Text("推敲:")
+                    Toggle("推敲:", isOn: $settings.llmRefinementEnabled)
+                        .toggleStyle(.checkbox)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
 
-                    Button("口語") {
-                        settings.refinementStyle = .casual
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: settings.refinementStyle == .casual ? .bold : .regular))
-                    .foregroundColor(settings.refinementStyle == .casual ? .accentColor : .primary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(settings.refinementStyle == .casual ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
-                    )
-                    .help("語尾や口語ニュアンスをそのまま維持（チャット・会話向け）")
+                    if settings.isLLMRefinementActive {
+                        Button("口語") {
+                            settings.refinementStyle = .casual
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: settings.refinementStyle == .casual ? .bold : .regular))
+                        .foregroundColor(settings.refinementStyle == .casual ? .accentColor : .primary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(settings.refinementStyle == .casual ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
+                        )
+                        .help("語尾や口語ニュアンスをそのまま維持（チャット・会話向け）")
 
-                    Button("文章") {
-                        settings.refinementStyle = .formal
+                        Button("文章") {
+                            settings.refinementStyle = .formal
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: settings.refinementStyle == .formal ? .bold : .regular))
+                        .foregroundColor(settings.refinementStyle == .formal ? .accentColor : .primary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(settings.refinementStyle == .formal ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
+                        )
+                        .help("整った標準的な書き言葉に推敲（メール・報告書向け）")
+
+                        Text("(\(settings.effectiveLLMConfig.modelName))")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(providerColor(for: settings.resolvedLLMProvider))
+                    } else {
+                        Text(settings.llmRefinementEnabled ? "OFF (未指定)" : "OFF")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
                     }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: settings.refinementStyle == .formal ? .bold : .regular))
-                    .foregroundColor(settings.refinementStyle == .formal ? .accentColor : .primary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(settings.refinementStyle == .formal ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
-                    )
-                    .help("整った標準的な書き言葉に推敲（メール・報告書向け）")
+
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+
+                // 一括送信 ON/OFF（チェックボックス）
+                HStack(spacing: 6) {
+                    Toggle("一括:", isOn: $settings.batchTranscriptionEnabled)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+
+                    if settings.batchTranscriptionEnabled {
+                        Text("ON")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(.accentColor)
+                        Text("(終了時一括)")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("OFF")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                        Text("(累積・紙芝居)")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.accentColor)
+                    }
 
                     Spacer()
                 }
@@ -361,13 +488,14 @@ public struct MenuBarView: View {
             }
         }
         .padding(10)
-        .frame(width: 220)
+        .frame(width: 250)
     }
 
     private func providerColor(for provider: APIProvider) -> Color {
         switch provider {
         case .groq: return .orange
         case .openai: return .green
+        case .sarashina: return .pink
         case .custom: return .purple
         }
     }

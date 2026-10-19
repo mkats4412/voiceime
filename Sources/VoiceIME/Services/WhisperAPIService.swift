@@ -174,7 +174,7 @@ public final class WhisperAPIService {
                 let text: String
             }
             let decoded = try JSONDecoder().decode(TranscriptionResponse.self, from: data)
-            return decoded.text
+            return Self.sanitizeWhisperOutput(decoded.text)
         } catch {
             throw APIError.parsingError(error)
         }
@@ -304,5 +304,25 @@ public final class WhisperAPIService {
 
         let subdata = data.subdata(in: startIndex..<data.count)
         return String(data: subdata, encoding: .utf8) ?? collapsed
+    }
+
+    /// Whisper APIの出力テキストから、無音・微小ノイズ特有の既知のハルシネーション（"Thank you.", "ご視聴ありがとうございました" 等）を文頭・文末・文中問わず完全除去
+    public static func sanitizeWhisperOutput(_ text: String) -> String {
+        var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !result.isEmpty else { return "" }
+
+        let hallucinationPatterns = [
+            "(?i)[ \t]*(?:Thank you(?: very much)?|Thanks for watching|Subtitles by[^\n\r]*)[ \t\\.\\,\\!\\?]*",
+            "[ \t]*(?:ご視聴ありがとうございました|ご視聴ありがとうござい[ました]*|視聴ありがとうございました|チャンネル登録(?:よろしく[お願いたし]*|お願い[いたし]*)*)[ \t。、！？\\.]*"
+        ]
+        for pattern in hallucinationPatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+                let range = NSRange(result.startIndex..., in: result)
+                result = regex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "")
+                result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        return result
     }
 }

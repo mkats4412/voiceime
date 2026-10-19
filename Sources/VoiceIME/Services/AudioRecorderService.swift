@@ -32,12 +32,12 @@ public final class AudioRecorderService: NSObject, AVAudioRecorderDelegate {
         let fileName = "voiceime_\(UUID().uuidString).m4a"
         let fileURL = tempDir.appendingPathComponent(fileName)
 
-        // Whisperに最適化されたAACモノラル16kHz設定
+        // WhisperおよびmacOS CoreAudioネイティブ入力に最適化されたAACモノラル44.1kHz設定
         let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 16000.0,
+            AVSampleRateKey: 44100.0,
             AVNumberOfChannelsKey: 1,
-            AVEncoderBitRateKey: 32000,
+            AVEncoderBitRateKey: 64000,
             AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
         ]
 

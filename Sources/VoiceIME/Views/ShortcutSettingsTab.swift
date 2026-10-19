@@ -6,6 +6,7 @@ public struct ShortcutSettingsTab: View {
     @ObservedObject var appState = AppState.shared
     @ObservedObject var launchAtLogin = LaunchAtLoginService.shared
     @ObservedObject var micTester = MicrophoneLevelTester.shared
+    @ObservedObject var audioDevices = AudioDeviceService.shared
 
     public struct ShortcutPreset: Identifiable {
         public let id = UUID()
@@ -395,7 +396,102 @@ public struct ShortcutSettingsTab: View {
 
                 Divider()
 
-                // セクション2: 音声入力しきい値 (小さな音の除外 / ノイズゲート)
+                // セクション2: 入力マイク設定 (ワイヤレスイヤホン等の選択と自動フォールバック)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("入力マイク")
+                            .font(.headline)
+                        Spacer()
+                        Button(action: {
+                            audioDevices.refreshDevices()
+                        }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.clockwise")
+                                Text("マイク一覧を更新")
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .foregroundColor(.accentColor)
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("使用するマイク:")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+
+                            Picker("", selection: Binding(
+                                get: { settings.selectedAudioDeviceUID },
+                                set: { newUID in
+                                    if micTester.isTesting {
+                                        micTester.stopTesting()
+                                    }
+                                    if newUID.isEmpty || newUID == "default" {
+                                        audioDevices.selectDevice(uid: "", name: "システムデフォルト")
+                                    } else if let dev = audioDevices.availableDevices.first(where: { $0.id == newUID }) {
+                                        audioDevices.selectDevice(uid: dev.id, name: dev.name)
+                                    }
+                                }
+                            )) {
+                                let defaultName = audioDevices.systemDefaultDevice?.name ?? "未検出"
+                                Text("システムデフォルト (\(defaultName))").tag("")
+
+                                ForEach(audioDevices.availableDevices) { device in
+                                    Text(device.name + (device.isSystemDefault ? " (システム既定)" : "")).tag(device.id)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
+
+                            Text("※ 選択したマイク（ワイヤレスイヤホン等）が切断・未検出の場合は、自動的にシステムデフォルトのマイクで録音を行います。")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        // 現在の実効ステータス・フォールバック警告表示
+                        HStack(spacing: 8) {
+                            if audioDevices.isFallbackActive {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.orange)
+                                    .font(.subheadline)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("自動フォールバック中: \(audioDevices.effectiveDeviceName)")
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.orange)
+                                    if let reason = audioDevices.fallbackReason {
+                                        Text(reason)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            } else {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                    .font(.subheadline)
+                                Text("現在有効なマイク: \(audioDevices.effectiveDeviceName)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(audioDevices.isFallbackActive ? Color.orange.opacity(0.12) : Color.green.opacity(0.08))
+                        )
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                    )
+                }
+
+                Divider()
+
+                // セクション3: 音声入力しきい値 (小さな音の除外 / ノイズゲート)
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         Text("音声入力しきい値 (ノイズゲート)")

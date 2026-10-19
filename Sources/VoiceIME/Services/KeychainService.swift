@@ -4,6 +4,7 @@ import Security
 public enum APIProvider: String, CaseIterable, Identifiable {
     case groq = "groq"
     case openai = "openai"
+    case sarashina = "sarashina"
     case custom = "custom"
 
     public var id: String { rawValue }
@@ -12,6 +13,7 @@ public enum APIProvider: String, CaseIterable, Identifiable {
         switch self {
         case .groq: return "Groq"
         case .openai: return "OpenAI"
+        case .sarashina: return "Sarashina"
         case .custom: return "カスタム"
         }
     }
@@ -20,6 +22,7 @@ public enum APIProvider: String, CaseIterable, Identifiable {
         switch self {
         case .groq: return "voiceime_groq_api_key"
         case .openai: return "voiceime_openai_api_key"
+        case .sarashina: return "voiceime_sarashina_api_key"
         case .custom: return "voiceime_custom_llm_api_key"
         }
     }
@@ -175,6 +178,23 @@ public final class KeychainService {
             lock.unlock()
             return legacy
         }
+
+        // Sarashina の場合、既存のカスタムキー (voiceime_custom_llm_api_key) があればフォールバック
+        if provider == .sarashina, let customKey = loadAPIKey(for: .custom), !customKey.isEmpty {
+            lock.lock()
+            memoryCache[.sarashina] = customKey
+            lock.unlock()
+            return customKey
+        }
+
+        // カスタムの場合、Sarashinaキーがあればフォールバック
+        if provider == .custom, let sarashinaKey = loadAPIKey(for: .sarashina), !sarashinaKey.isEmpty {
+            lock.lock()
+            memoryCache[.custom] = sarashinaKey
+            lock.unlock()
+            return sarashinaKey
+        }
+
         return nil
     }
 
@@ -221,6 +241,28 @@ public final class KeychainService {
                 kSecMatchLimit as String: kSecMatchLimitOne
             ]
             return SecItemCopyMatching(legacyQuery as CFDictionary, nil) == errSecSuccess
+        }
+
+        // Sarashina の場合、カスタムキーの存在もチェック
+        if provider == .sarashina {
+            let customQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: APIProvider.custom.accountKey,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            return SecItemCopyMatching(customQuery as CFDictionary, nil) == errSecSuccess
+        }
+
+        // カスタムの場合、Sarashinaキーの存在もチェック
+        if provider == .custom {
+            let sarashinaQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: APIProvider.sarashina.accountKey,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            return SecItemCopyMatching(sarashinaQuery as CFDictionary, nil) == errSecSuccess
         }
 
         return false
