@@ -23,6 +23,7 @@ public final class FloatingPreviewController: ObservableObject {
     @Published public var isVisible: Bool = false
     @Published public var copySuccess: Bool = false
     @Published public var customNotice: String? = nil
+    private var hasPipelineText: Bool = false
 
     private struct PasteboardBackupItem {
         let types: [NSPasteboard.PasteboardType]
@@ -82,6 +83,7 @@ public final class FloatingPreviewController: ObservableObject {
         self.phase = .liveRecording
         self.currentText = ""
         self.copySuccess = false
+        self.hasPipelineText = false
 
         if panel == nil {
             setupPanel()
@@ -107,12 +109,17 @@ public final class FloatingPreviewController: ObservableObject {
     /// リアルタイム音声認識テキストの逐次更新（Appleローカル音声認識等）
     public func updateLiveText(_ text: String) {
         guard phase == .liveRecording else { return }
+        // すでにWhisperパイプラインからの高精度テキストが届いている場合は、AppleSpeechによる上書きを防ぐ
+        guard !hasPipelineText else { return }
         self.currentText = text
     }
 
-    /// 累積紙芝居ストリーミングパイプラインからのリアルタイム＆処理中テキスト更新
+    /// 累積紙芝居ストリーミングパイプラインからのリアルタイム＆処理中テキスト更新（Whisper API からの速報・確定テキスト）
     public func updatePipelineText(_ text: String) {
         guard phase == .liveRecording || phase == .processing else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        self.hasPipelineText = true
         self.currentText = text
     }
 

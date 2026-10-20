@@ -19,9 +19,9 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
     private var isRunning: Bool = false
 
     // 息継ぎ検知 & レート制限パラメータ
-    private let minIntervalSeconds: Double = 2.4 // 1分間に最大約25回レート制限
+    private let minIntervalSeconds: Double = 1.2 // 途中Whisperの最低インターバル
     private var silenceThresholdRMS: Float = 0.015 // 音声入力しきい値と連動（デフォルト約 -36 dBFS）
-    private let minSilenceDuration: Double = 0.20 // 約0.20秒以上の無音（息継ぎ）
+    private let minSilenceDuration: Double = 0.12 // 約0.12秒以上の小休止・息継ぎ
     private var speechThresholdDB: Float = -38.0
 
     // 状態管理
@@ -65,7 +65,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             self.currentProcessingTask?.cancel()
             self.currentProcessingTask = nil
             self.pcmDataBuffer.removeAll(keepingCapacity: true)
-            self.lastTriggerTime = CFAbsoluteTimeGetCurrent()
+            self.lastTriggerTime = 0.0
             self.lastTriggerSampleCount = 0
             self.recentRMS = 0.0
             self.silentFrameCount = 0
@@ -134,19 +134,25 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             let totalAudioDuration = Double(totalSamples) / self.sampleRate
 
             // トリガー条件:
-            // A. 録音開始から最低1.2秒以上経過
-            // B. 息継ぎ（無音 0.20秒以上）検知、または息継ぎがなくても新発話が2.2秒以上溜まったら定期トリガー
-            // C. 前回の送信から2.4秒以上経過（レート制限保護）
-            // D. 前回送信時から新しい発話が0.8秒以上存在
-            // E. 現在通信中（isTranscribing）でない
-            let hasMinimumInitialAudio = (totalAudioDuration >= 1.2)
-            let isBreathPause = (silentDuration >= self.minSilenceDuration)
-            let isLongContinuousSpeech = (newAudioDuration >= 2.2)
-            let shouldTriggerBySpeech = (isBreathPause || isLongContinuousSpeech)
-            let isRateLimitSatisfied = (timeSinceLastTrigger >= self.minIntervalSeconds)
-            let hasSufficientNewAudio = (newAudioDuration >= 0.8)
+            // A. 初回トリガー (lastTriggerSampleCount == 0):
+            //    録音開始から0.6秒以上の音声があり、息継ぎ・小休止(0.10秒以上) または 0.9秒以上の発話があれば即座に第1回Whisperを送信！
+            // B. 2回目以降 (lastTriggerSampleCount > 0):
+            //    前回送信から1.2秒以上経過し、新発話が0.5秒以上あり、息継ぎ(0.12秒以上) または 1.3秒以上の連続発話があれば送信！
+            let isFirstTrigger = (self.lastTriggerSampleCount == 0)
+            let shouldTrigger: Bool
 
-            if hasMinimumInitialAudio && shouldTriggerBySpeech && isRateLimitSatisfied && hasSufficientNewAudio && !self.isTranscribing {
+            if isFirstTrigger {
+                let hasInitialAudio = (totalAudioDuration >= 0.6)
+                let hasPauseOrContinuous = (silentDuration >= 0.10 || totalAudioDuration >= 0.9)
+                shouldTrigger = hasInitialAudio && hasPauseOrContinuous && !self.isTranscribing
+            } else {
+                let isRateLimitSatisfied = (timeSinceLastTrigger >= self.minIntervalSeconds)
+                let hasSufficientNewAudio = (newAudioDuration >= 0.5)
+                let hasPauseOrContinuous = (silentDuration >= self.minSilenceDuration || newAudioDuration >= 1.3)
+                shouldTrigger = isRateLimitSatisfied && hasSufficientNewAudio && hasPauseOrContinuous && !self.isTranscribing
+            }
+
+            if shouldTrigger {
                 self.lastTriggerTime = now
                 self.lastTriggerSampleCount = totalSamples
                 self.processCumulativePaperTheater(to: totalSamples)
@@ -165,7 +171,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         // 🌟 核心: 常に「0秒（発話の最初）」から現在までの音声を取り出し、前後の無音をトリミング！
         let cumulativeBytes = pcmDataBuffer.subdata(in: 0..<endByte)
         let trimmedBytes = Self.trimSilence(pcmData: cumulativeBytes, sampleRate: sampleRate, speechThresholdDB: speechThresholdDB)
-        guard trimmedBytes.count >= Int(sampleRate * 0.2) * 2 else { return }
+        guard trimmedBytes.count >= Int(sampleRate * 0.15) * 2 else { return }
         let wavData = createWAV(from: trimmedBytes, sampleRate: Int(sampleRate))
 
         let tempDir = FileManager.default.temporaryDirectory
@@ -180,9 +186,9 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         let totalDuration = Double(endSample) / sampleRate
         let threshold = self.speechThresholdDB
 
-        // VAD（声が含まれているか）
+        // VAD（完全な無音・ノイズのみをガード）
         let metrics = AudioAnalysisService.shared.analyze(audioFileURL: tempFile, thresholdDB: threshold)
-        if metrics.isSilence || !metrics.hasSpeech {
+        if metrics.isSilence {
             try? FileManager.default.removeItem(at: tempFile)
             return
         }
