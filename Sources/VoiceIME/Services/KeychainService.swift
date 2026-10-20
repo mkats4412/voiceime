@@ -94,9 +94,15 @@ public final class KeychainService {
         return false
     }
 
-    /// ウォームアップ処理（以前は起動時にキーチェーンのキーを一斉読取してパスワード画面を誘発していたため、完全廃止）
+    /// アプリ起動時に登録済みAPIキーをKeychainから事前読み込み
+    /// これにより、macOSのKeychain認証ダイアログ（初回アクセス許可）をアプリ起動時に表示・解決させ、
+    /// 音声入力中の画面ダイアログによる割り込みや待機遅延を防止します。
     public func warmUp() {
-        // パスワードプロンプト防止のため、起動時の一斉読み込みは行わない
+        for provider in APIProvider.allCases {
+            if hasAPIKey(for: provider) {
+                _ = loadAPIKey(for: provider)
+            }
+        }
     }
 
     /// 指定したプロバイダのAPIキーを保存
