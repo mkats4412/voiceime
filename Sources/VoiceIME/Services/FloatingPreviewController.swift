@@ -109,8 +109,6 @@ public final class FloatingPreviewController: ObservableObject {
     /// リアルタイム音声認識テキストの逐次更新（Appleローカル音声認識等）
     public func updateLiveText(_ text: String) {
         guard phase == .liveRecording else { return }
-        // すでにWhisperパイプラインからの高精度テキストが届いている場合は、AppleSpeechによる上書きを防ぐ
-        guard !hasPipelineText else { return }
         self.currentText = text
     }
 
@@ -119,7 +117,6 @@ public final class FloatingPreviewController: ObservableObject {
         guard phase == .liveRecording || phase == .processing else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        self.hasPipelineText = true
         self.currentText = text
     }
 
