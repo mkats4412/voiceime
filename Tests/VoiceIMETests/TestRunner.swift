@@ -1105,6 +1105,19 @@ struct TestRunner {
         assert(content.contains("海人の中東派遣1年延長へ"), "Expected logged transcribed text")
         assert(content.contains("海自の中東派遣1年延長へ"), "Expected logged refined text")
 
+        // ログ無効化 (OFF) のテスト
+        UserDefaults.standard.set(false, forKey: "voiceime_pipelineLoggingEnabled")
+        assert(!logger.isLoggingEnabled, "isLoggingEnabled should be false")
+        let lengthBefore = (try? String(contentsOf: logURL, encoding: .utf8))?.count ?? 0
+        logger.logDebug("This message should not be logged when disabled")
+        Thread.sleep(forTimeInterval: 0.1)
+        let lengthAfter = (try? String(contentsOf: logURL, encoding: .utf8))?.count ?? 0
+        assert(lengthBefore == lengthAfter, "Log should not grow when disabled")
+
+        // ログ有効化 (ON) に戻す
+        UserDefaults.standard.set(true, forKey: "voiceime_pipelineLoggingEnabled")
+        assert(logger.isLoggingEnabled, "isLoggingEnabled should be true")
+
         print("  -> PipelineLogger passed! Log location: \(logURL.path)")
     }
 

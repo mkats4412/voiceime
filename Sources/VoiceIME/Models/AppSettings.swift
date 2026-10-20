@@ -199,6 +199,9 @@ public final class AppSettings: ObservableObject {
         // 入力オーディオデバイス設定
         static let selectedAudioDeviceUID = "voiceime_selectedAudioDeviceUID"
         static let selectedAudioDeviceName = "voiceime_selectedAudioDeviceName"
+
+        // ログ出力設定
+        static let pipelineLoggingEnabled = "voiceime_pipelineLoggingEnabled"
     }
 
     private let defaults = UserDefaults.standard
@@ -461,6 +464,11 @@ public final class AppSettings: ObservableObject {
     /// プレビューウィンドウの自動非表示秒数（0の場合は手動で閉じるまで表示）
     @Published public var floatingPreviewDuration: Double {
         didSet { defaults.set(floatingPreviewDuration, forKey: Keys.floatingPreviewDuration) }
+    }
+
+    /// パイプラインログ (~/.voiceime/pipeline.log) の記録フラグ (デフォルト: true)
+    @Published public var pipelineLoggingEnabled: Bool {
+        didSet { defaults.set(pipelineLoggingEnabled, forKey: Keys.pipelineLoggingEnabled) }
     }
 
     // MARK: - プロパティ連携ヘルパー
@@ -739,6 +747,7 @@ public final class AppSettings: ObservableObject {
         self.floatingPreviewEnabled = defaults.object(forKey: Keys.floatingPreviewEnabled) != nil ? defaults.bool(forKey: Keys.floatingPreviewEnabled) : true
         self.autoPasteEnabled = defaults.object(forKey: Keys.autoPasteEnabled) != nil ? defaults.bool(forKey: Keys.autoPasteEnabled) : true
         self.floatingPreviewDuration = defaults.object(forKey: Keys.floatingPreviewDuration) as? Double ?? 45.0
+        self.pipelineLoggingEnabled = defaults.object(forKey: Keys.pipelineLoggingEnabled) != nil ? defaults.bool(forKey: Keys.pipelineLoggingEnabled) : true
 
         // Load dictionary rules with auto-migration (古い単語破壊ルールや旧記号ルールを自動除去・アップグレード)
         if let data = defaults.data(forKey: Keys.dictionaryRules),
@@ -988,6 +997,7 @@ public final class AppSettings: ObservableObject {
         audioThresholdEnabled = true
         audioThresholdDB = -32.0
         audioTrimmingEnabled = true
+        pipelineLoggingEnabled = true
         dictionaryRules = AppSettings.defaultDictionaryRules
     }
 }

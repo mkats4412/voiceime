@@ -11,6 +11,19 @@ public final class PipelineLogger: @unchecked Sendable {
         VoiceIMEDiskSyncService.shared.baseDirectory.appendingPathComponent("pipeline.log")
     }
 
+    /// パイプラインログが有効かどうか (UserDefaults "voiceime_pipelineLoggingEnabled" と連動)
+    public var isLoggingEnabled: Bool {
+        UserDefaults.standard.object(forKey: "voiceime_pipelineLoggingEnabled") as? Bool ?? true
+    }
+
+    /// ログファイルをクリア
+    public func clearLog() {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            try? FileManager.default.removeItem(at: self.logFileURL)
+        }
+    }
+
     private let dateFormatter: DateFormatter = {
         let df = DateFormatter()
         df.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
@@ -93,6 +106,7 @@ public final class PipelineLogger: @unchecked Sendable {
     }
 
     private func appendToFile(_ string: String) {
+        guard isLoggingEnabled else { return }
         guard let data = string.data(using: .utf8) else { return }
         let url = logFileURL
         let dir = url.deletingLastPathComponent()

@@ -670,6 +670,51 @@ public struct ShortcutSettingsTab: View {
                             .fill(Color(NSColor.controlBackgroundColor))
                     )
                 }
+
+                Divider()
+
+                // セクション6: パイプラインログ
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("開発・診断ログ")
+                        .font(.headline)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("パイプラインログ (~/.voiceime/pipeline.log) を記録する", isOn: $settings.pipelineLoggingEnabled)
+                            .font(.subheadline)
+
+                        HStack(spacing: 8) {
+                            Image(systemName: "doc.text.magnifyingglass")
+                                .foregroundColor(.blue)
+                            Text("リアルタイム音声認識や推敲の経過ログを ~/.voiceime/pipeline.log に記録します。MCPテストやトラブルシューティングに利用できます。")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        HStack(spacing: 12) {
+                            Button(action: {
+                                let logURL = PipelineLogger.shared.logFileURL
+                                NSWorkspace.shared.activateFileViewerSelecting([logURL])
+                            }) {
+                                Label("ログファイルを表示", systemImage: "folder")
+                                    .font(.caption)
+                            }
+
+                            Button(action: {
+                                PipelineLogger.shared.clearLog()
+                            }) {
+                                Label("ログをクリア", systemImage: "trash")
+                                    .font(.caption)
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                    )
+                }
             }
             .padding(18)
         }

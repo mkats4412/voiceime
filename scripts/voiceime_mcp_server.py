@@ -10,14 +10,22 @@ AI Agent (Claude Desktop, Cursor, Windsurf, Cline 等) から直接操作する�
 import sys
 import json
 import os
+import re
 import uuid
+import subprocess
+import mimetypes
+import urllib.request
+import urllib.error
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 VOICEIME_DIR = Path.home() / ".voiceime"
 DICT_FILE = VOICEIME_DIR / "dictionary.json"
 VOCAB_FILE = VOICEIME_DIR / "vocabulary.json"
 PROMPTS_FILE = VOICEIME_DIR / "prompts.json"
+API_KEYS_FILE = VOICEIME_DIR / "api_keys.json"
+LOG_FILE = VOICEIME_DIR / "pipeline.log"
 
 DEFAULT_CASUAL_PROMPT = """あなたは音声認識テキストの校正・推敲エキスパートです（口語モード）。
 話者の語尾・文体・口語ニュアンスを維持しながら、音声入力特有の誤字脱字、聞き間違い、同音異義語の誤変換、言い直し・重複を文脈から見つけ出し、自然で読みやすい文章に修正してください。
@@ -347,6 +355,404 @@ def tool_reload_voiceime(args: Dict[str, Any]) -> str:
     except Exception as e:
         return f"再読み込みトリガー中にエラーが発生しました: {e}"
 
+# ==========================================
+# ログ設定・API キー・設定連携ヘルパー
+# ==========================================
+
+def load_api_keys() -> Dict[str, str]:
+    if not API_KEYS_FILE.exists():
+        return {}
+    try:
+        with open(API_KEYS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception as e:
+        sys.stderr.write(f"[VoiceIME MCP] Error loading api_keys.json: {e}\n")
+        return {}
+
+def get_app_setting(key: str, default: Any = None) -> Any:
+    try:
+        res = subprocess.run(
+            ["defaults", "read", "com.voiceime.app", key],
+            capture_output=True, text=True, check=True
+        )
+        val = res.stdout.strip()
+        if val in ("1", "true", "YES"):
+            return True
+        elif val in ("0", "false", "NO"):
+            return False
+        return val
+    except Exception:
+        return default
+
+def set_app_setting(key: str, value: Any) -> bool:
+    try:
+        if isinstance(value, bool):
+            arg = "-bool"
+            val_str = "true" if value else "false"
+        elif isinstance(value, int):
+            arg = "-int"
+            val_str = str(value)
+        elif isinstance(value, float):
+            arg = "-float"
+            val_str = str(value)
+        else:
+            arg = "-string"
+            val_str = str(value)
+        subprocess.run(
+            ["defaults", "write", "com.voiceime.app", key, arg, val_str],
+            capture_output=True, check=True
+        )
+        return True
+    except Exception as e:
+        sys.stderr.write(f"[VoiceIME MCP] Error setting defaults {key}: {e}\n")
+        return False
+
+def is_pipeline_logging_enabled() -> bool:
+    val = get_app_setting("voiceime_pipelineLoggingEnabled", True)
+    return bool(val)
+
+def log_to_pipeline(message: str):
+    if not is_pipeline_logging_enabled():
+        return
+    try:
+        ensure_voiceime_dir()
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(message)
+    except Exception as e:
+        sys.stderr.write(f"[VoiceIME MCP] Error writing to pipeline.log: {e}\n")
+
+def apply_dictionary_rules(text: str) -> str:
+    rules = load_dictionary()
+    result = text
+    for rule in rules:
+        if not rule.get("isEnabled", True):
+            continue
+        pattern = rule.get("pattern", "")
+        replacement = rule.get("replacement", "")
+        if not pattern:
+            continue
+        try:
+            if rule.get("isRegex", False):
+                result = re.sub(pattern, replacement, result)
+            else:
+                result = result.replace(pattern, replacement)
+        except Exception as e:
+            sys.stderr.write(f"[VoiceIME MCP] Regex error for pattern '{pattern}': {e}\n")
+    return result
+
+def call_whisper_api(
+    audio_path: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+    language: Optional[str] = None,
+    prompt: Optional[str] = None
+) -> str:
+    url = base_url.rstrip("/")
+    if not url.endswith("/audio/transcriptions"):
+        url = f"{url}/audio/transcriptions"
+
+    path_obj = Path(audio_path)
+    if not path_obj.exists():
+        raise FileNotFoundError(f"音声ファイルが見つかりません: {audio_path}")
+
+    filename = path_obj.name
+    mime_type, _ = mimetypes.guess_type(audio_path)
+    if not mime_type:
+        mime_type = "audio/wav"
+
+    with open(audio_path, "rb") as f:
+        file_bytes = f.read()
+
+    boundary = f"----VoiceIMEMCPBoundary{uuid.uuid4().hex}"
+    body = bytearray()
+
+    def add_field(name: str, val: str):
+        nonlocal body
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        body.extend(f"{val}\r\n".encode("utf-8"))
+
+    add_field("model", model)
+    add_field("response_format", "json")
+    if language:
+        add_field("language", language)
+    if prompt:
+        add_field("prompt", prompt)
+
+    # file field
+    body.extend(f"--{boundary}\r\n".encode("utf-8"))
+    body.extend(f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode("utf-8"))
+    body.extend(f"Content-Type: {mime_type}\r\n\r\n".encode("utf-8"))
+    body.extend(file_bytes)
+    body.extend(b"\r\n")
+
+    body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "User-Agent": "VoiceIME/1.0 (Macintosh; Mac OS X)"
+    }
+
+    req = urllib.request.Request(url, data=bytes(body), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            resp_body = resp.read().decode("utf-8")
+            data = json.loads(resp_body)
+            return data.get("text", "").strip()
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Whisper API エラー ({e.code}): {err_msg}")
+    except Exception as e:
+        raise RuntimeError(f"Whisper API リクエスト失敗: {e}")
+
+def call_llm_refinement(
+    text: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+    style: str = "casual",
+    prompt_hint: Optional[str] = None
+) -> str:
+    url = base_url.rstrip("/")
+    if not url.endswith("/chat/completions"):
+        url = f"{url}/chat/completions"
+
+    prompts = load_prompts()
+    if style == "formal":
+        system_prompt = prompts.get("formal_system_prompt", DEFAULT_FORMAL_PROMPT)
+    else:
+        system_prompt = prompts.get("casual_system_prompt", DEFAULT_CASUAL_PROMPT)
+
+    if prompt_hint:
+        system_prompt += f"\n\n【文脈・用語ヒント】\n{prompt_hint}"
+
+    user_template = prompts.get("user_prompt_template", DEFAULT_USER_TEMPLATE)
+    user_content = user_template.replace("{input}", text)
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
+        "temperature": 0.3
+    }
+
+    data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "User-Agent": "VoiceIME/1.0 (Macintosh; Mac OS X)"
+    }
+
+    req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp_body = resp.read().decode("utf-8")
+            data = json.loads(resp_body)
+            choices = data.get("choices", [])
+            if not choices:
+                return text
+            raw_content = choices[0].get("message", {}).get("content", "").strip()
+
+            # <formatted_text> タグからの抽出
+            tag_match = re.search(r"<formatted_text>(.*?)</formatted_text>", raw_content, re.DOTALL)
+            if tag_match:
+                extracted = tag_match.group(1).strip()
+                return extracted if extracted else text
+            return raw_content
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"LLM 推敲 API エラー ({e.code}): {err_msg}")
+    except Exception as e:
+        raise RuntimeError(f"LLM 推敲 API リクエスト失敗: {e}")
+
+# ==========================================
+# 音声テスト・ログ管理ツール実装
+# ==========================================
+
+def tool_transcribe_audio(args: Dict[str, Any]) -> str:
+    audio_path = args.get("audio_path", "").strip()
+    if not audio_path:
+        return json.dumps({"status": "error", "message": "audio_path が指定されていません。"}, ensure_ascii=False)
+
+    path_obj = Path(audio_path).expanduser().resolve()
+    if not path_obj.exists():
+        return json.dumps({"status": "error", "message": f"音声ファイルが見つかりません: {path_obj}"}, ensure_ascii=False)
+
+    api_keys = load_api_keys()
+
+    # 1. Whisper 設定の取得
+    selected_provider = str(get_app_setting("voiceime_selectedProvider", "groq")).lower()
+    if selected_provider == "openai":
+        whisper_base_url = "https://api.openai.com/v1"
+        whisper_model = str(get_app_setting("voiceime_openaiModel", "whisper-1"))
+        whisper_api_key = api_keys.get("openai") or api_keys.get("voiceime_openai_api_key", "")
+    else: # groq
+        whisper_base_url = "https://api.groq.com/openai/v1"
+        whisper_model = str(get_app_setting("voiceime_groqModel", "whisper-large-v3-turbo"))
+        whisper_api_key = api_keys.get("groq") or api_keys.get("voiceime_groq_api_key", "")
+
+    if not whisper_api_key:
+        return json.dumps({"status": "error", "message": f"プロバイダ '{selected_provider}' の API キーが登録されていません (~/.voiceime/api_keys.json)"}, ensure_ascii=False)
+
+    # 言語設定
+    lang = args.get("language")
+    if lang is None:
+        saved_lang = str(get_app_setting("voiceime_language", ""))
+        lang = saved_lang if saved_lang else None
+    elif lang.strip() == "" or lang.lower() == "auto":
+        lang = None
+
+    prompt_hint = args.get("prompt_hint")
+
+    # ログ記録開始
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    log_to_pipeline(f"\n==================================================\n[{now_str}] 🎙️ 音声入力セッション開始 (MCP テスト: {path_obj.name})\n==================================================\n")
+
+    start_time = datetime.now()
+    try:
+        # Whisper 実行
+        whisper_raw = call_whisper_api(
+            audio_path=str(path_obj),
+            base_url=whisper_base_url,
+            api_key=whisper_api_key,
+            model=whisper_model,
+            language=lang,
+            prompt=prompt_hint
+        )
+        rec_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        log_to_pipeline(f"\n\n1. Whisperから逐次送られてきた文字列 [MCPテスト速報 - {rec_time_str}]:\n{whisper_raw}\n")
+
+        # 辞書置換
+        dict_applied = apply_dictionary_rules(whisper_raw)
+
+        # 推敲設定
+        refine_arg = args.get("refinement_enabled")
+        if refine_arg is not None:
+            is_refine_enabled = bool(refine_arg)
+        else:
+            is_refine_enabled = bool(get_app_setting("voiceime_llmRefinementEnabled", False))
+
+        style = args.get("refinement_style") or str(get_app_setting("voiceime_refinementStyle", "casual"))
+
+        refined_text = None
+        final_text = dict_applied
+
+        if is_refine_enabled and dict_applied:
+            llm_provider_mode = str(get_app_setting("voiceime_llmProviderMode", selected_provider)).lower()
+            if llm_provider_mode == "openai":
+                llm_base_url = "https://api.openai.com/v1"
+                llm_model = str(get_app_setting("voiceime_openai_llm_model", "gpt-4o-mini"))
+                llm_api_key = api_keys.get("openai") or api_keys.get("voiceime_openai_api_key", "")
+            elif llm_provider_mode == "custom":
+                llm_base_url = str(get_app_setting("voiceime_custom_llm_baseURL", "https://api.sarashina.ai/v1"))
+                llm_model = str(get_app_setting("voiceime_custom_llm_model", "sarashina3-mini"))
+                llm_api_key = api_keys.get("custom") or api_keys.get("sarashina") or api_keys.get("voiceime_custom_llm_api_key", "")
+            else: # groq
+                llm_base_url = "https://api.groq.com/openai/v1"
+                llm_model = str(get_app_setting("voiceime_groq_llm_model", "qwen/qwen3.8-27b"))
+                llm_api_key = api_keys.get("groq") or api_keys.get("voiceime_groq_api_key", "")
+
+            if llm_api_key and llm_model:
+                input_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                log_to_pipeline(f"\n\n2. Whisperから推敲LLMへ送られる文字列 [MCP推敲入力 - {input_time_str}]:\n{dict_applied}\n")
+
+                llm_result = call_llm_refinement(
+                    text=dict_applied,
+                    base_url=llm_base_url,
+                    api_key=llm_api_key,
+                    model=llm_model,
+                    style=style,
+                    prompt_hint=prompt_hint
+                )
+                output_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                log_to_pipeline(f"\n\n3. 推敲LLMから修正され戻される文字列 [MCP推敲出力 - {output_time_str}]:\n{llm_result}\n")
+
+                refined_text = llm_result
+                final_text = apply_dictionary_rules(llm_result)
+
+        end_time = datetime.now()
+        end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        duration = (end_time - start_time).total_seconds()
+        log_to_pipeline(f"\n==================================================\n[{end_time_str}] ✅ 音声入力セッション完了 (確定出力テキスト - {duration:.2f}秒)\n{final_text}\n==================================================\n")
+
+        response = {
+            "status": "success",
+            "audio_file": str(path_obj),
+            "whisper_raw_text": whisper_raw,
+            "dictionary_applied_text": dict_applied,
+            "refined_text": refined_text,
+            "final_text": final_text,
+            "refinement_enabled": is_refine_enabled,
+            "refinement_style": style if is_refine_enabled else None,
+            "whisper_model": whisper_model,
+            "duration_seconds": round(duration, 3),
+            "pipeline_log_file": str(LOG_FILE)
+        }
+        return json.dumps(response, ensure_ascii=False, indent=2)
+
+    except Exception as e:
+        err_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        log_to_pipeline(f"\n[{err_time_str}] ❌ MCP音声テストエラー: {e}\n")
+        return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False, indent=2)
+
+def tool_get_pipeline_logging(args: Dict[str, Any]) -> str:
+    enabled = is_pipeline_logging_enabled()
+    exists = LOG_FILE.exists()
+    size = LOG_FILE.stat().st_size if exists else 0
+    mod_time = datetime.fromtimestamp(LOG_FILE.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S") if exists else None
+
+    result = {
+        "logging_enabled": enabled,
+        "log_file_path": str(LOG_FILE),
+        "file_exists": exists,
+        "file_size_bytes": size,
+        "last_modified": mod_time
+    }
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+def tool_set_pipeline_logging(args: Dict[str, Any]) -> str:
+    enabled = args.get("enabled")
+    if enabled is None:
+        return "エラー: 'enabled' (boolean: true または false) を指定してください。"
+    val = bool(enabled)
+    if set_app_setting("voiceime_pipelineLoggingEnabled", val):
+        status_str = "有効 (ON)" if val else "無効 (OFF)"
+        return f"パイプラインログ記録 (~/.voiceime/pipeline.log) を {status_str} に設定しました。(VoiceIMEアプリにも即座に反映されます)"
+    else:
+        return "エラー: ログ設定の更新に失敗しました。"
+
+def tool_get_latest_pipeline_log(args: Dict[str, Any]) -> str:
+    max_lines = args.get("max_lines", 50)
+    try:
+        max_lines = max(1, int(max_lines))
+    except (ValueError, TypeError):
+        max_lines = 50
+
+    if not LOG_FILE.exists():
+        return "ログファイル (~/.voiceime/pipeline.log) はまだ作成されていません。"
+
+    try:
+        with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+            tail_lines = lines[-max_lines:]
+            return "".join(tail_lines)
+    except Exception as e:
+        return f"ログ読み込みエラー: {e}"
+
+def tool_clear_pipeline_log(args: Dict[str, Any]) -> str:
+    try:
+        ensure_voiceime_dir()
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("")
+        return "パイプラインログ (~/.voiceime/pipeline.log) を正常にクリアしました。"
+    except Exception as e:
+        return f"ログクリア中にエラーが発生しました: {e}"
+
 TOOLS = [
     {
         "name": "list_vocabulary",
@@ -513,6 +919,80 @@ TOOLS = [
             "type": "object",
             "properties": {}
         }
+    },
+    {
+        "name": "transcribe_audio",
+        "description": "音声ファイルを VoiceIME の Whisper 音声認識＆辞書置換＆AI推敲パイプラインに投入して文字起こしをテスト・実行します。ログ記録が有効な場合は ~/.voiceime/pipeline.log にもセッションログが記録されます。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "audio_path": {
+                    "type": "string",
+                    "description": "文字起こしする音声ファイル (WAV, MP3, M4A, AAC, FLAC, OGG等) の絶対パス (必須)"
+                },
+                "language": {
+                    "type": "string",
+                    "description": "音声言語コード (例: 'ja', 'en', 'auto'。省略時はVoiceIMEの現在設定) (任意)"
+                },
+                "refinement_enabled": {
+                    "type": "boolean",
+                    "description": "AI推敲 (LLM) を適用するかどうか (true/false。省略時はVoiceIMEの現在設定) (任意)"
+                },
+                "refinement_style": {
+                    "type": "string",
+                    "enum": ["casual", "formal"],
+                    "description": "推敲スタイル ('casual': 口語・会話向け, 'formal': 文章・報告書向け。省略時は現在設定) (任意)"
+                },
+                "prompt_hint": {
+                    "type": "string",
+                    "description": "Whisper API に与えるコンテキスト・プロンプトヒント (任意)"
+                }
+            },
+            "required": ["audio_path"]
+        }
+    },
+    {
+        "name": "get_pipeline_logging",
+        "description": "VoiceIME のリアルタイムパイプラインログ (~/.voiceime/pipeline.log) の記録状態 (有効/無効、ファイルサイズ等) を取得します。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {}
+        }
+    },
+    {
+        "name": "set_pipeline_logging",
+        "description": "VoiceIME のリアルタイムパイプラインログ (~/.voiceime/pipeline.log) の記録を有効化 (ON) または無効化 (OFF) に設定します。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "true: ログ記録を有効化 (ON), false: ログ記録を停止 (OFF)"
+                }
+            },
+            "required": ["enabled"]
+        }
+    },
+    {
+        "name": "get_latest_pipeline_log",
+        "description": "パイプラインログ (~/.voiceime/pipeline.log) の最新内容（末尾N行）を取得します。音声認識・推敲テストの判定に利用できます。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "max_lines": {
+                    "type": "integer",
+                    "description": "取得する末尾行数 (デフォルト: 50)"
+                }
+            }
+        }
+    },
+    {
+        "name": "clear_pipeline_log",
+        "description": "パイプラインログ (~/.voiceime/pipeline.log) を空にクリアします。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {}
+        }
     }
 ]
 
@@ -527,7 +1007,12 @@ TOOL_MAP = {
     "reload_voiceime": tool_reload_voiceime,
     "get_llm_prompts": tool_get_llm_prompts,
     "set_llm_prompts": tool_set_llm_prompts,
-    "reset_llm_prompts": tool_reset_llm_prompts
+    "reset_llm_prompts": tool_reset_llm_prompts,
+    "transcribe_audio": tool_transcribe_audio,
+    "get_pipeline_logging": tool_get_pipeline_logging,
+    "set_pipeline_logging": tool_set_pipeline_logging,
+    "get_latest_pipeline_log": tool_get_latest_pipeline_log,
+    "clear_pipeline_log": tool_clear_pipeline_log
 }
 
 def handle_json_rpc(line: str):
