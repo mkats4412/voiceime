@@ -38,3 +38,8 @@ main
 *.p12
 *.pem
 *.mobileprovision
+
+# Python
+__pycache__/
+*.pyc
+
