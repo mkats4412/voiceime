@@ -90,10 +90,6 @@ public final class AppState: ObservableObject {
     private init() {
         setupHotkey()
         setupModifierKeyMonitors()
-        // アプリ起動とAppKitランループの開始完了後に、Keychainアクセスの事前案内とウォームアップを実行
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            self?.promptKeychainWarmupIfNeeded()
-        }
     }
 
     deinit {
@@ -1299,14 +1295,6 @@ public final class AppState: ObservableObject {
             return ("タイムアウト (応答なし)", "リクエストがタイムアウトしました。")
         }
         return ("エラー", error.localizedDescription)
-    }
-
-    /// アプリ起動時に登録済みAPIキーを事前キャッシュ（不要なモーダル案内は表示しない）
-    @MainActor
-    public func promptKeychainWarmupIfNeeded() {
-        guard keychain.hasAnyAPIKey() else { return }
-        // バックグラウンドで事前読み込みのみ実施（モーダルダイアログでユーザーを妨げない）
-        keychain.warmUp()
     }
 
     /// 確定テキストの最終整形（辞書適用・正規化）と対象アプリへのペースト

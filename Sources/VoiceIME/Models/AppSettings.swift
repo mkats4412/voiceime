@@ -827,10 +827,10 @@ public final class AppSettings: ObservableObject {
     public static var symbolDictionaryRules: [DictionaryRule] {
         [
             // 1. 二連三点リーダー …… (三点リーダーより先に評価)
-            DictionaryRule(pattern: "(?:にれん|二連|[2２]連)[ 　]*(?:さんてん|三点|[3３]点)[ 　]*(?:リーダー|りーだー)", replacement: "……", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:にれん|二連|[2２]連)[ 　]*(?:さんてん|三点|[3３]点)[ 　]*(?:リーダー|りーだー)(?:[ 　]*[、。](?![、。]))?", replacement: "……", isRegex: true, isEnabled: true),
 
             // 2. 三点リーダー …
-            DictionaryRule(pattern: "(?:さんてん|三点|[3３]点)[ 　]*(?:リーダー|りーだー)", replacement: "…", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:さんてん|三点|[3３]点)[ 　]*(?:リーダー|りーだー)(?:[ 　]*[、。](?![、。]))?", replacement: "…", isRegex: true, isEnabled: true),
 
             // 3. 鍵括弧 」 閉じ (「かっことじ」一般形より先に評価)
             DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:[かカ][ぎギ]|鍵)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|(?:[かカ][ぎギ]|鍵)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose quote)", replacement: "」", isRegex: true, isEnabled: true),

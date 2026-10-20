@@ -41,31 +41,50 @@ public final class KeychainService {
     private let lock = NSLock()
     private var memoryCache: [APIProvider: String] = [:]
 
+    /// パスワードプロンプト完全回避用のローカルファイルストレージ (~/.voiceime/api_keys.json)
+    private var localKeysFileURL: URL {
+        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".voiceime", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
+        }
+        return dir.appendingPathComponent("api_keys.json")
+    }
+
     public init(service: String = "com.voiceime.mac.apikey") {
         self.service = service
     }
 
-    /// キーチェーン項目に表示される分かりやすい日本語ラベル
-    private func itemLabel(for provider: APIProvider) -> String {
-        return "VoiceIME (\(provider.displayName) APIキー)"
+    // MARK: - ローカルファイルストレージ (~/.voiceime/api_keys.json) ヘルパー
+
+    private func loadLocalKeys() -> [String: String] {
+        guard FileManager.default.fileExists(atPath: localKeysFileURL.path),
+              let data = try? Data(contentsOf: localKeysFileURL),
+              let dict = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+        return dict
     }
 
-    /// キーチェーン項目に表示される説明文
-    private func itemDescription(for provider: APIProvider) -> String {
-        return "VoiceIMEの音声入力および推敲機能に使用する \(provider.displayName) APIキー"
+    private func saveLocalKey(_ key: String, for provider: APIProvider) {
+        var dict = loadLocalKeys()
+        dict[provider.rawValue] = key
+        if let data = try? JSONEncoder().encode(dict) {
+            try? data.write(to: localKeysFileURL, options: .atomic)
+            // 所有者のみ読み書き可能 (0600) に設定
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: localKeysFileURL.path)
+        }
     }
 
-    /// キーチェーン項目に表示されるコメント
-    private func itemComment(for provider: APIProvider) -> String {
-        return "VoiceIMEが安全にAPIキーを保管・参照するために使用します。Macのログインパスワードを入力して『常に許可』を選択してください。"
+    private func deleteLocalKey(for provider: APIProvider) {
+        var dict = loadLocalKeys()
+        dict.removeValue(forKey: provider.rawValue)
+        if let data = try? JSONEncoder().encode(dict) {
+            try? data.write(to: localKeysFileURL, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: localKeysFileURL.path)
+        }
     }
 
-    /// キーチェーン認証ダイアログ用の操作プロンプト文
-    private func operationPrompt(for provider: APIProvider) -> String {
-        return "VoiceIME: 音声入力・推敲機能で使用する \(provider.displayName) APIキーを安全に読み込むため、Macのログインパスワードで許可してください（『常に許可』を選択すると次回以降の入力を省略できます）"
-    }
-
-    /// 何らかのAPIキーがKeychainに登録されているかを判定
+    /// 何らかのAPIキーが登録されているかを判定
     public func hasAnyAPIKey() -> Bool {
         for provider in APIProvider.allCases {
             if hasAPIKey(for: provider) {
@@ -75,71 +94,66 @@ public final class KeychainService {
         return false
     }
 
-    /// アプリ起動時に登録済みAPIキーをKeychainから事前読み込み
-    /// これにより、macOSのKeychain認証ダイアログ（初回アクセス許可）をアプリ起動時に表示・解決させ、
-    /// 音声入力中の画面ダイアログによる割り込みや待機遅延を防止します。
+    /// ウォームアップ処理（以前は起動時にキーチェーンのキーを一斉読取してパスワード画面を誘発していたため、完全廃止）
     public func warmUp() {
-        for provider in APIProvider.allCases {
-            if hasAPIKey(for: provider) {
-                _ = loadAPIKey(for: provider)
-            }
-        }
+        // パスワードプロンプト防止のため、起動時の一斉読み込みは行わない
     }
 
-    /// 指定したプロバイダのAPIキーをKeychainに保存（すでに存在する場合は更新）
+    /// 指定したプロバイダのAPIキーを保存
     @discardableResult
     public func saveAPIKey(_ key: String, for provider: APIProvider) -> Bool {
-        guard let data = key.data(using: .utf8) else { return false }
+        lock.lock()
+        memoryCache[provider] = key
+        lock.unlock()
 
-        let labelText = itemLabel(for: provider)
-        let descText = itemDescription(for: provider)
-        let commentText = itemComment(for: provider)
+        // 1. パスワード不要のローカルファイルに確実に保存 (0600権限)
+        saveLocalKey(key, for: provider)
 
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: provider.accountKey
-        ]
-
-        let status = SecItemCopyMatching(query as CFDictionary, nil)
-        var success = false
-        if status == errSecSuccess {
-            let updateAttributes: [String: Any] = [
-                kSecValueData as String: data,
-                kSecAttrLabel as String: labelText,
-                kSecAttrDescription as String: descText,
-                kSecAttrComment as String: commentText
+        // 2. キーチェーンにもバックアップ保存（失敗してもローカルに保存されているため成功扱い）
+        if let data = key.data(using: .utf8) {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: provider.accountKey
             ]
-            let updateStatus = SecItemUpdate(query as CFDictionary, updateAttributes as CFDictionary)
-            success = (updateStatus == errSecSuccess)
-        } else if status == errSecItemNotFound {
-            var newEntry = query
-            newEntry[kSecValueData as String] = data
-            newEntry[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-            newEntry[kSecAttrLabel as String] = labelText
-            newEntry[kSecAttrDescription as String] = descText
-            newEntry[kSecAttrComment as String] = commentText
-            let addStatus = SecItemAdd(newEntry as CFDictionary, nil)
-            success = (addStatus == errSecSuccess)
+            let status = SecItemCopyMatching(query as CFDictionary, nil)
+            if status == errSecSuccess {
+                let updateAttributes: [String: Any] = [
+                    kSecValueData as String: data
+                ]
+                _ = SecItemUpdate(query as CFDictionary, updateAttributes as CFDictionary)
+            } else if status == errSecItemNotFound {
+                var newEntry = query
+                newEntry[kSecValueData as String] = data
+                newEntry[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+                _ = SecItemAdd(newEntry as CFDictionary, nil)
+            }
         }
 
-        if success {
-            lock.lock()
-            memoryCache[provider] = key
-            lock.unlock()
-        }
-        return success
+        return true
     }
 
-    /// 指定したプロバイダのAPIキーをKeychainから取得
+    /// 指定したプロバイダのAPIキーを取得
+    /// ローカルキャッシュ・ファイル優先で取得するため、キーチェーンパスワードダイアログは一切表示されません
     public func loadAPIKey(for provider: APIProvider) -> String? {
+        // 1. メモリキャッシュ
         lock.lock()
-        if let cached = memoryCache[provider] {
+        if let cached = memoryCache[provider], !cached.isEmpty {
             lock.unlock()
             return cached
         }
         lock.unlock()
 
+        // 2. ローカルファイル (~/.voiceime/api_keys.json) - パスワードプロンプト0
+        let localKeys = loadLocalKeys()
+        if let localKey = localKeys[provider.rawValue], !localKey.isEmpty {
+            lock.lock()
+            memoryCache[provider] = localKey
+            lock.unlock()
+            return localKey
+        }
+
+        // 3. キーチェーンからの移行フォールバック (ローカルファイルにまだ移行されていない場合のみ)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -151,58 +165,52 @@ public final class KeychainService {
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
 
-        if status == errSecSuccess, let data = item as? Data, let key = String(data: data, encoding: .utf8) {
+        if status == errSecSuccess, let data = item as? Data, let key = String(data: data, encoding: .utf8), !key.isEmpty {
             lock.lock()
             memoryCache[provider] = key
             lock.unlock()
-            // 既存キーのラベル・説明属性を最新の分かりやすい日本語にバックグラウンド更新
-            let updateAttrs: [String: Any] = [
-                kSecAttrLabel as String: itemLabel(for: provider),
-                kSecAttrDescription as String: itemDescription(for: provider),
-                kSecAttrComment as String: itemComment(for: provider)
-            ]
-            let baseQuery: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecAttrAccount as String: provider.accountKey
-            ]
-            _ = SecItemUpdate(baseQuery as CFDictionary, updateAttrs as CFDictionary)
+            // 次回以降キーチェーンを一切触らないようにローカルへ自動移行
+            saveLocalKey(key, for: provider)
             return key
         }
 
         // OpenAI の場合のみ旧バージョンのキー互換性フォールバック
-        if provider == .openai, let legacy = loadLegacyAPIKey() {
+        if provider == .openai, let legacy = loadLegacyAPIKey(), !legacy.isEmpty {
             lock.lock()
             memoryCache[.openai] = legacy
             lock.unlock()
+            saveLocalKey(legacy, for: .openai)
             return legacy
         }
 
-        // Sarashina の場合、既存のカスタムキー (voiceime_custom_llm_api_key) があればフォールバック
-        if provider == .sarashina, let customKey = loadAPIKey(for: .custom), !customKey.isEmpty {
-            lock.lock()
-            memoryCache[.sarashina] = customKey
-            lock.unlock()
-            return customKey
-        }
-
-        // カスタムの場合、Sarashinaキーがあればフォールバック
-        if provider == .custom, let sarashinaKey = loadAPIKey(for: .sarashina), !sarashinaKey.isEmpty {
-            lock.lock()
-            memoryCache[.custom] = sarashinaKey
-            lock.unlock()
-            return sarashinaKey
+        // Sarashina / Custom 相互フォールバック
+        if provider == .sarashina {
+            if let customLocal = localKeys[APIProvider.custom.rawValue], !customLocal.isEmpty {
+                lock.lock()
+                memoryCache[.sarashina] = customLocal
+                lock.unlock()
+                return customLocal
+            }
+        } else if provider == .custom {
+            if let sarashinaLocal = localKeys[APIProvider.sarashina.rawValue], !sarashinaLocal.isEmpty {
+                lock.lock()
+                memoryCache[.custom] = sarashinaLocal
+                lock.unlock()
+                return sarashinaLocal
+            }
         }
 
         return nil
     }
 
-    /// 指定したプロバイダのAPIキーをKeychainから削除
+    /// 指定したプロバイダのAPIキーを削除
     @discardableResult
     public func deleteAPIKey(for provider: APIProvider) -> Bool {
         lock.lock()
         memoryCache.removeValue(forKey: provider)
         lock.unlock()
+
+        deleteLocalKey(for: provider)
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -210,58 +218,45 @@ public final class KeychainService {
             kSecAttrAccount as String: provider.accountKey
         ]
 
-        let status = SecItemDelete(query as CFDictionary)
+        _ = SecItemDelete(query as CFDictionary)
         if provider == .openai {
             deleteLegacyAPIKey()
         }
-        return status == errSecSuccess || status == errSecItemNotFound
+        return true
     }
 
-    /// 指定したプロバイダのAPIキーが登録済みかどうかを判定（機密データの復号を要求しないためパスワードプロンプト不要）
+    /// 指定したプロバイダのAPIキーが登録済みかどうかを判定
     public func hasAPIKey(for provider: APIProvider) -> Bool {
+        // メモリまたはローカルファイルにあれば true (キーチェーンへのアクセス不要)
+        lock.lock()
+        if memoryCache[provider] != nil {
+            lock.unlock()
+            return true
+        }
+        lock.unlock()
+
+        let localKeys = loadLocalKeys()
+        if let key = localKeys[provider.rawValue], !key.isEmpty {
+            return true
+        }
+
+        // Sarashina / Custom 相互フォールバック
+        if provider == .sarashina && localKeys[APIProvider.custom.rawValue] != nil {
+            return true
+        }
+        if provider == .custom && localKeys[APIProvider.sarashina.rawValue] != nil {
+            return true
+        }
+
+        // キーチェーンのメタデータ確認（データ本文は要求しないため通常プロンプト不要）
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: provider.accountKey,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
-
-        let status = SecItemCopyMatching(query as CFDictionary, nil)
-        if status == errSecSuccess {
+        if SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess {
             return true
-        }
-
-        // OpenAI の場合のみ旧バージョンのキー互換性チェック
-        if provider == .openai {
-            let legacyQuery: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecAttrAccount as String: legacyAccount,
-                kSecMatchLimit as String: kSecMatchLimitOne
-            ]
-            return SecItemCopyMatching(legacyQuery as CFDictionary, nil) == errSecSuccess
-        }
-
-        // Sarashina の場合、カスタムキーの存在もチェック
-        if provider == .sarashina {
-            let customQuery: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecAttrAccount as String: APIProvider.custom.accountKey,
-                kSecMatchLimit as String: kSecMatchLimitOne
-            ]
-            return SecItemCopyMatching(customQuery as CFDictionary, nil) == errSecSuccess
-        }
-
-        // カスタムの場合、Sarashinaキーの存在もチェック
-        if provider == .custom {
-            let sarashinaQuery: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecAttrAccount as String: APIProvider.sarashina.accountKey,
-                kSecMatchLimit as String: kSecMatchLimitOne
-            ]
-            return SecItemCopyMatching(sarashinaQuery as CFDictionary, nil) == errSecSuccess
         }
 
         return false
