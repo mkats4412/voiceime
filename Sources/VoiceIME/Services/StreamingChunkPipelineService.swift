@@ -27,6 +27,8 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
     // 状態管理
     private var lastTriggerTime: CFAbsoluteTime = 0.0
     private var lastTriggerSampleCount: Int = 0
+    private var speechFramesSinceLastTrigger: Int = 0
+    private var totalSpeechFrameCount: Int = 0
     private var recentRMS: Float = 0.0
     private var silentFrameCount: Int = 0
     private var isTranscribing: Bool = false
@@ -68,6 +70,8 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             self.pcmDataBuffer.removeAll(keepingCapacity: true)
             self.lastTriggerTime = 0.0
             self.lastTriggerSampleCount = 0
+            self.speechFramesSinceLastTrigger = 0
+            self.totalSpeechFrameCount = 0
             self.recentRMS = 0.0
             self.silentFrameCount = 0
             self.latestRefinedText = ""
@@ -120,43 +124,51 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             self.recentRMS = rms
             self.pcmDataBuffer.append(int16Data)
 
-            if rms < self.silenceThresholdRMS {
-                self.silentFrameCount += frameLength
-            } else {
+            let isSpeech = (rms >= self.silenceThresholdRMS)
+            if isSpeech {
                 self.silentFrameCount = 0
+                self.speechFramesSinceLastTrigger += frameLength
+                self.totalSpeechFrameCount += frameLength
+            } else {
+                self.silentFrameCount += frameLength
             }
 
-            // 2. 息継ぎ（無音 0.28秒以上）＆ レート制限（3.2秒間隔）の判定
+            // 2. 息継ぎ（無音・小休止）＆ レート制限＆新発話の判定
             let totalSamples = self.pcmDataBuffer.count / 2
+            let totalAudioDuration = Double(totalSamples) / self.sampleRate
+            let totalSpeechDuration = Double(self.totalSpeechFrameCount) / self.sampleRate
+            let newSpeechDuration = Double(self.speechFramesSinceLastTrigger) / self.sampleRate
             let silentDuration = Double(self.silentFrameCount) / self.sampleRate
             let now = CFAbsoluteTimeGetCurrent()
             let timeSinceLastTrigger = now - self.lastTriggerTime
-            let newAudioDuration = Double(totalSamples - self.lastTriggerSampleCount) / self.sampleRate
-            let totalAudioDuration = Double(totalSamples) / self.sampleRate
 
             // トリガー条件:
             // A. 初回トリガー (lastTriggerSampleCount == 0):
-            //    録音開始から0.6秒以上の音声があり、息継ぎ・小休止(0.10秒以上) または 0.9秒以上の発話があれば即座に第1回Whisperを送信！
+            //    録音開始から有声の発話が0.35秒以上あり、かつ息継ぎ・小休止(0.10秒以上) または 0.8秒以上の発話があれば即座に第1回Whisperを送信！
+            //    ※ 無音（沈黙）のまま放置されている場合は絶対に送信しない！
             // B. 2回目以降 (lastTriggerSampleCount > 0):
-            //    前回送信から1.2秒以上経過し、新発話が0.5秒以上あり、息継ぎ(0.12秒以上) または 1.3秒以上の連続発話があれば送信！
+            //    前回送信から新たに有声の発話が0.35秒以上追加され、かつ前回送信から1.2秒以上経過し、
+            //    かつ息継ぎ(0.10秒以上) または 1.2秒以上の連続発話があれば送信！
+            //    ※ 話し終えて沈黙している間は newSpeechDuration が増えないため、同じ音声が無駄に再送信されるのを100%防止！
             let isFirstTrigger = (self.lastTriggerSampleCount == 0)
             let shouldTrigger: Bool
 
             if isFirstTrigger {
-                let hasInitialAudio = (totalAudioDuration >= 0.6)
-                let hasPauseOrContinuous = (silentDuration >= 0.10 || totalAudioDuration >= 0.9)
-                shouldTrigger = hasInitialAudio && hasPauseOrContinuous && !self.isTranscribing
+                let hasInitialSpeech = (totalSpeechDuration >= 0.35)
+                let hasPauseOrContinuous = (silentDuration >= 0.10 || totalSpeechDuration >= 0.8)
+                shouldTrigger = hasInitialSpeech && hasPauseOrContinuous && !self.isTranscribing
             } else {
                 let isRateLimitSatisfied = (timeSinceLastTrigger >= self.minIntervalSeconds)
-                let hasSufficientNewAudio = (newAudioDuration >= 0.5)
-                let hasPauseOrContinuous = (silentDuration >= self.minSilenceDuration || newAudioDuration >= 1.3)
-                shouldTrigger = isRateLimitSatisfied && hasSufficientNewAudio && hasPauseOrContinuous && !self.isTranscribing
+                let hasSufficientNewSpeech = (newSpeechDuration >= 0.35)
+                let hasPauseOrContinuous = (silentDuration >= self.minSilenceDuration || newSpeechDuration >= 1.2)
+                shouldTrigger = isRateLimitSatisfied && hasSufficientNewSpeech && hasPauseOrContinuous && !self.isTranscribing
             }
 
             if shouldTrigger {
                 self.lastTriggerTime = now
                 self.lastTriggerSampleCount = totalSamples
-                PipelineLogger.shared.logDebug("⚡ 紙芝居トリガー成立! (totalAudio: \(String(format: "%.2f", totalAudioDuration))s, silent: \(String(format: "%.2f", silentDuration))s, isFirst: \(isFirstTrigger))")
+                self.speechFramesSinceLastTrigger = 0
+                PipelineLogger.shared.logDebug("⚡ 紙芝居トリガー成立! (totalAudio: \(String(format: "%.2f", totalAudioDuration))s, totalSpeech: \(String(format: "%.2f", totalSpeechDuration))s, newSpeech: \(String(format: "%.2f", newSpeechDuration))s, silent: \(String(format: "%.2f", silentDuration))s, isFirst: \(isFirstTrigger))")
                 self.processCumulativePaperTheater(to: totalSamples)
             }
         }
