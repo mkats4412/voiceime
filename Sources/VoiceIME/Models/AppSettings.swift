@@ -854,10 +854,10 @@ public final class AppSettings: ObservableObject {
             DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:(?:[ブぶ][ラら][ケけ][ッっ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|[Oo]pen bracket)[ 　]*", replacement: "[", isRegex: true, isEnabled: true),
 
             // 7. 波括弧 } 閉じ (ブレース / 波括弧)
-            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:(?:[ブぶ][レれ][ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|(?:(?:[ブぶ][レれ][ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose brace)", replacement: "}", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:(?:[ブぶ][レれ][イい]?[ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|(?:(?:[ブぶ][レれ][イい]?[ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose brace)", replacement: "}", isRegex: true, isEnabled: true),
 
             // 8. 波括弧 { 開き (ブレース / 波括弧)
-            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:(?:[ブぶ][レれ][ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|[Oo]pen brace)[ 　]*", replacement: "{", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:(?:[ブぶ][レれ][イい]?[ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|[Oo]pen brace)[ 　]*", replacement: "{", isRegex: true, isEnabled: true),
 
             // 9. 丸括弧 ) 閉じ (とじかっこ / とじまるかっこ / まるかっことじ / マルカコトジ)
             DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose paren(?:theses|s|thesis)?)", replacement: ")", isRegex: true, isEnabled: true),
