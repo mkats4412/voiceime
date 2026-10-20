@@ -339,8 +339,8 @@ public final class AppState: ObservableObject {
                 speechThresholdDB: settings.audioThresholdDB
             )
 
-            LiveSpeechService.shared.startLiveRecognition(languageCode: settings.language) { liveText in
-                FloatingPreviewController.shared.updateLiveText(liveText)
+            LiveSpeechService.shared.startLiveRecognition(languageCode: settings.language) { _ in
+                // Apple Speech のフェイク推論は画面に出さず、Whisperから戻ってきた本物の結果のみを表示する
             }
 
             maxRecordingTimer?.invalidate()
@@ -595,8 +595,8 @@ public final class AppState: ObservableObject {
                 LiveSpeechService.shared.startLiveRecognition(
                     languageCode: settings.language,
                     contextualStrings: contextWords
-                ) { liveText in
-                    FloatingPreviewController.shared.updateLiveText(liveText)
+                ) { _ in
+                    // Apple Speech のフェイク推論は画面に出さず、Whisperから戻ってきた本物の結果のみを表示する
                 }
             }
 

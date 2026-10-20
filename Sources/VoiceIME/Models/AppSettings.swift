@@ -875,13 +875,13 @@ public final class AppSettings: ObservableObject {
             DictionaryRule(pattern: "[。、\\.,]*\\s*(\\?|[Qq]uestion mark)\\s*[。、\\.,]*", replacement: "?", isRegex: true, isEnabled: true),
 
             // 17. ピリオド → 半角ピリオド (.)（日英ゆらぎ吸収・前後の空白除去）
-            DictionaryRule(pattern: "[ 　]*(?:ピリオド|ぴりおど|[Pp]eriod)[ 　]*", replacement: ".", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:[、。])?[ 　]*(?:ピリオド|ぴりおど|[Pp]eriod)(?:[ 　]*[、。](?![、。]))?", replacement: ".", isRegex: true, isEnabled: true),
 
             // 18. カンマ → 読点 (、)（日英ゆらぎ吸収・前後の空白除去）
             DictionaryRule(pattern: "(?:[、。])?[ 　]*(?:カンマ|かんま|[Cc]omma)(?:[ 　]*[、。](?![、。]))?", replacement: "、", isRegex: true, isEnabled: true),
 
             // 19. まる/〇 → 句点 (。)。直前に。があれば重ねず単一。に(実質何もしない)。後ろに区切り・文末が必要
-            DictionaryRule(pattern: "(?:。)?[ 　]*(?:まる|マル|丸|〇)(?:[ 　]*[、。](?![、。])|(?=[ 　。、，．.,!?！？「」『』（）()\\[\\]{}…\\s]|$))", replacement: "。", isRegex: true, isEnabled: true)
+            DictionaryRule(pattern: "(?:。)?[ 　]*(?:まる|マル|丸|〇|◯)(?:[ 　]*[、。](?![、。])|(?=[ 　。、，．.,!?！？「」『』（）()\\[\\]{}…\\s]|$))", replacement: "。", isRegex: true, isEnabled: true)
         ]
     }
 

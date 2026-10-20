@@ -12,9 +12,10 @@
 1. **CoreAudio / AVAudioEngine**:
    - `engine.inputNode.auAudioUnit.setDeviceID` の呼び出しは絶対禁止（エラー `-10868` でクラッシュします）。
    - `inputNode.installTap` には必ず `inputNode.outputFormat(forBus: 0)` を渡すこと。
-2. **Push-to-Talk リアルタイム出力**:
-   - キー（`Ctrl+Space`）を押している最中（手を離す前）に、話した言葉がリアルタイムにフローティング画面に出力され、**「目視確認できる状態」** を絶対に維持すること。
-   - コールバックを空にしたり、排他フラグでプレビュー更新を阻害してはいけません。
+2. **Push-to-Talk リアルタイム出力（Whisperストリーミング表示の厳守）**:
+   - macOS 標準の STT（Apple Speech / SFSpeechRecognizer）の出力を画面に出すのは厳禁。画面には **Whisper（StreamingChunkPipelineService）からの認識結果のみ** を出力すること。
+   - `LiveSpeechService.shared.startLiveRecognition` のコールバックは `{ _ in }` とし、Apple STT でプレビューを上書きしてはいけません。
+   - キー（`Ctrl+Space`）を押している最中（手を離す前）に、Whisperから届いた速報（`updatePipelineText`）がリアルタイムにフローティング画面に出力され、**「目視確認できる状態」** を絶対に維持すること。
 3. **キーチェーン認証ガイダンス**:
    - アプリ差し替え後の初回起動時には「VoiceIME: macOS キーチェーン認証のご案内」モーダルを出し、起動時に事前認証（`warmUp`）を完了させること。
    - ただし `--mcp`（MCP サーバー）モードでは GUI を起動せず完全サイレント動作とすること。

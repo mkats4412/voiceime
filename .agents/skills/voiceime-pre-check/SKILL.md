@@ -24,12 +24,14 @@ VoiceIME のソースコードを変更・リファクタリング・最適化�
 * **SFSpeechRecognizer の過剰ガード禁止**:
   * `SFSpeechRecognizer.authorizationStatus() == .authorized` だけでタスク生成をスキップしてはいけません（`.notDetermined` の初動リクエストが死にます）。
 
-### 2. Push-to-Talk リアルタイム表示（UXの絶対防衛線）
+### 2. Push-to-Talk リアルタイム表示（Whisperストリーミング表示の厳守）
 * **必須挙動**:
-  * ユーザーがキー（例: `Ctrl+Space`）を押しながら話している最中（手を離す前）に、話した言葉がリアルタイムでフローティング画面に随時出力され、**「目視確認できる状態」** でなければなりません。
-* **禁止事項**:
-  * `LiveSpeechService` の `startLiveRecognition` コールバックを空（`{ _ in }`）にしないこと。必ず `FloatingPreviewController.shared.updateLiveText(text)` へ渡してください。
-  * 「キーを離した瞬間に一瞬文字が出てすぐペーストされて消える」状態はデグレ（バグ）です。話している最中に出力されている必要があります。
+  * ユーザーがキー（例: `Ctrl+Space`）を押しながら話している最中（手を離す前）に、**Whisper（StreamingChunkPipelineService）から返ってきた認識結果** がリアルタイムでフローティング画面に随時出力され、**「目視確認できる状態」** でなければなりません。
+* **厳格なルール（macOS STT の表示禁止）**:
+  * macOS 標準の STT（Apple Speech / SFSpeechRecognizer）の不完全な出力を画面に出してはいけません。
+  * `LiveSpeechService` の `startLiveRecognition` コールバックは必ず `{ _ in }` のままにし、Apple STT で `FloatingPreviewController.shared.updateLiveText` を上書きしないこと。
+  * 画面に表示するのは、`StreamingChunkPipelineService` から `updatePipelineText` で届く本物の Whisper 結果のみです。
+  * 「キーを離した瞬間に一瞬文字が出てすぐペーストされて消える」状態はデグレ（バグ）です。話している最中に Whisper の途中結果（息継ぎ速報）が随時出力されている必要があります。
   * `FloatingPreviewController` のテキスト更新を排他ロック等でブロックしないこと。
 
 ### 3. macOS キーチェーン認証と起動時ガイダンス

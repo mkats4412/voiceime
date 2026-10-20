@@ -19,8 +19,9 @@
    - `SFSpeechRecognizer.authorizationStatus() == .authorized` だけでタスク生成を弾いてしまうと、初回権限（`.notDetermined`）の際にタスクが生成されず、画面へのリアルタイム文字起こしが停止します。
    - `guard let recognizer = recognizer, recognizer.isAvailable else { return }` の最小限チェックに留めてください。
 
-4. **マイクタップ内のコールバックを空にしないこと**
-   - `LiveSpeechService.startLiveRecognition` の `onUpdate` コールバックは、必ず `FloatingPreviewController.shared.updateLiveText(text)` へ繋ぎ、ユーザーがキーを押して話している最中にゼロ遅延で画面へ文字が出力される状態を維持してください。
+4. **macOS 標準の STT（Apple Speech / SFSpeechRecognizer）の出力を画面に出さないこと**
+   - 画面に表示するのは **Whisper（StreamingChunkPipelineService）からの高品質な認識結果のみ** です。
+   - `LiveSpeechService.startLiveRecognition` の `onUpdate` コールバックは `{ _ in }` とし、Apple STT の不完全な認識結果でフローティングプレビューを上書き・汚染してはいけません。
 
 ---
 
@@ -28,11 +29,11 @@
 
 ### 🎯 必須要件
 - **ユーザー体験の核心**:
-  - キー（例: `Ctrl+Space`）を押しながら話している最中（手をキーボードから離す前）に、話した言葉がリアルタイムにフローティング画面へ表示され、**「話した内容を目視確認できる」** こと。
+  - キー（例: `Ctrl+Space`）を押しながら話している最中（手をキーボードから離す前）に、**Whisper API から逐次返ってくる認識結果** がリアルタイムにフローティング画面へ表示され、**「話した内容を目視確認できる」** こと。
   - 内容を確認した上で手を離すと、Whisper / AI推敲を経た確定テキストが自動ペーストされます。
 - **注意点**:
   - キーを押している最中に画面が空のまま放置され、キーを離した瞬間に一瞬だけ文字が出てすぐ消える（ペーストされる）挙動は、ユーザーから「確認できず意味がない」と判定されます。
-  - `FloatingPreviewController` のテキスト更新（`updateLiveText` / `updatePipelineText`）を排他フラグ等でブロックしないようにしてください。
+  - `StreamingChunkPipelineService` からのテキスト更新（`updatePipelineText`）を排他フラグ等でブロックしないようにしてください。
 
 ---
 
