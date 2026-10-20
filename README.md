@@ -69,12 +69,13 @@ VoiceIME は単語登録や置換ルールを AI Agent から直接操作でき�
 {
   "mcpServers": {
     "voiceime": {
-      "command": "python3",
-      "args": ["/Users/YOUR_USER/.voiceime/mcp_server.py"]
+      "command": "/Applications/VoiceIME.app/Contents/MacOS/VoiceIME",
+      "args": ["--mcp"]
     }
   }
 }
 ```
+※ `python3 ~/.voiceime/mcp_server.py` の直接指定でも同様に動作します。どちらもパスワード入力不要で即座に応答します。
 * **主なツール**:
   * `list_vocabulary` / `add_vocabulary` / `remove_vocabulary`: 単語登録の取得・追加・削除
   * `list_dictionary_rules` / `add_dictionary_rule` / `remove_dictionary_rule` / `update_dictionary_rule`: 置換ルールの取得・追加・削除・更新

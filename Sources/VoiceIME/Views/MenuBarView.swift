@@ -29,17 +29,20 @@ public struct MenuBarView: View {
             Button(action: {
                 appState.toggleRecording()
             }) {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     Image(systemName: appState.phase == .recording ? "stop.circle.fill" : "mic.fill")
+                        .font(.system(size: 12))
                     Text(appState.phase == .recording ? "録音を停止" : "音声入力を開始")
-                        .font(.system(size: 13))
-                    Spacer()
+                        .font(.system(size: 12))
+                        .lineLimit(1)
+                    Spacer(minLength: 2)
                     Text(settings.hotkeyDisplayString)
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(appState.phase == .recording ? .white : .secondary)
+                        .lineLimit(1)
                 }
                 .padding(.vertical, 4)
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 6)
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -144,7 +147,7 @@ public struct MenuBarView: View {
             .padding(.horizontal, 4)
 
             // 言語クイック切り替え
-            HStack(spacing: 6) {
+            HStack(spacing: 4) {
                 Text("言語:")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
@@ -156,7 +159,7 @@ public struct MenuBarView: View {
                 .buttonStyle(.plain)
                 .font(.system(size: 11, weight: (settings.apiMode == .transcriptions && settings.language.isEmpty) ? .bold : .regular))
                 .foregroundColor((settings.apiMode == .transcriptions && settings.language.isEmpty) ? .accentColor : .primary)
-                .padding(.horizontal, 6)
+                .padding(.horizontal, 5)
                 .padding(.vertical, 2)
                 .background(
                     RoundedRectangle(cornerRadius: 4)
@@ -169,7 +172,7 @@ public struct MenuBarView: View {
                 .buttonStyle(.plain)
                 .font(.system(size: 11, weight: settings.language == "ja" ? .bold : .regular))
                 .foregroundColor(settings.language == "ja" ? .accentColor : .primary)
-                .padding(.horizontal, 6)
+                .padding(.horizontal, 5)
                 .padding(.vertical, 2)
                 .background(
                     RoundedRectangle(cornerRadius: 4)
@@ -183,7 +186,7 @@ public struct MenuBarView: View {
                 .buttonStyle(.plain)
                 .font(.system(size: 11, weight: (settings.apiMode == .transcriptions && settings.language == "en") ? .bold : .regular))
                 .foregroundColor((settings.apiMode == .transcriptions && settings.language == "en") ? .accentColor : .primary)
-                .padding(.horizontal, 6)
+                .padding(.horizontal, 5)
                 .padding(.vertical, 2)
                 .background(
                     RoundedRectangle(cornerRadius: 4)
@@ -196,7 +199,7 @@ public struct MenuBarView: View {
 
             // 入力モード切替（日本語選択時に通常入力と英文翻訳を選択可能）
             if settings.language == "ja" {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     Text("モード:")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
@@ -207,7 +210,7 @@ public struct MenuBarView: View {
                     .buttonStyle(.plain)
                     .font(.system(size: 11, weight: settings.apiMode == .transcriptions ? .bold : .regular))
                     .foregroundColor(settings.apiMode == .transcriptions ? .accentColor : .primary)
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, 5)
                     .padding(.vertical, 2)
                     .background(
                         RoundedRectangle(cornerRadius: 4)
@@ -220,7 +223,7 @@ public struct MenuBarView: View {
                     .buttonStyle(.plain)
                     .font(.system(size: 11, weight: settings.apiMode == .translations ? .bold : .regular))
                     .foregroundColor(settings.apiMode == .translations ? .accentColor : .primary)
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, 5)
                     .padding(.vertical, 2)
                     .background(
                         RoundedRectangle(cornerRadius: 4)
@@ -234,7 +237,7 @@ public struct MenuBarView: View {
 
             // AI推敲 ON/OFF（チェックボックス）および スタイル切替
             if settings.apiMode == .transcriptions {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     Toggle("推敲:", isOn: $settings.llmRefinementEnabled)
                         .toggleStyle(.checkbox)
                         .font(.system(size: 11))
@@ -247,13 +250,13 @@ public struct MenuBarView: View {
                         .buttonStyle(.plain)
                         .font(.system(size: 11, weight: settings.refinementStyle == .casual ? .bold : .regular))
                         .foregroundColor(settings.refinementStyle == .casual ? .accentColor : .primary)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(
                             RoundedRectangle(cornerRadius: 4)
                                 .fill(settings.refinementStyle == .casual ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
                         )
-                        .help("語尾や口語ニュアンスをそのまま維持（チャット・会話向け）")
+                        .help("語尾や口語ニュアンスをそのまま維持（チャット・会話向け）\n推敲モデル: \(settings.effectiveLLMConfig.modelName)")
 
                         Button("文章") {
                             settings.refinementStyle = .formal
@@ -261,17 +264,18 @@ public struct MenuBarView: View {
                         .buttonStyle(.plain)
                         .font(.system(size: 11, weight: settings.refinementStyle == .formal ? .bold : .regular))
                         .foregroundColor(settings.refinementStyle == .formal ? .accentColor : .primary)
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(
                             RoundedRectangle(cornerRadius: 4)
                                 .fill(settings.refinementStyle == .formal ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
                         )
-                        .help("整った標準的な書き言葉に推敲（メール・報告書向け）")
+                        .help("整った標準的な書き言葉に推敲（メール・報告書向け）\n推敲モデル: \(settings.effectiveLLMConfig.modelName)")
 
-                        Text("(\(settings.effectiveLLMConfig.modelName))")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(providerColor(for: settings.resolvedLLMProvider))
+                        Circle()
+                            .fill(providerColor(for: settings.resolvedLLMProvider))
+                            .frame(width: 5, height: 5)
+                            .help("推敲モデル: \(settings.effectiveLLMConfig.modelName)")
                     } else {
                         Text(settings.llmRefinementEnabled ? "OFF (未指定)" : "OFF")
                             .font(.system(size: 11))
@@ -283,7 +287,7 @@ public struct MenuBarView: View {
                 .padding(.horizontal, 4)
 
                 // 一括送信 ON/OFF（チェックボックス）
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     Toggle("一括:", isOn: $settings.batchTranscriptionEnabled)
                         .toggleStyle(.checkbox)
                         .font(.system(size: 11))
@@ -293,16 +297,18 @@ public struct MenuBarView: View {
                         Text("ON")
                             .font(.system(size: 11, weight: .bold))
                             .foregroundColor(.accentColor)
-                        Text("(終了時一括)")
+                        Text("(一括)")
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
+                            .lineLimit(1)
                     } else {
                         Text("OFF")
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
-                        Text("(累積・紙芝居)")
+                        Text("(累積)")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundColor(.accentColor)
+                            .lineLimit(1)
                     }
 
                     Spacer()
@@ -488,7 +494,7 @@ public struct MenuBarView: View {
             }
         }
         .padding(10)
-        .frame(width: 250)
+        .frame(width: 190)
     }
 
     private func providerColor(for provider: APIProvider) -> Color {

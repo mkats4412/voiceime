@@ -6,11 +6,11 @@ public struct PermissionsTab: View {
     public init() {}
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("システムアクセス権限")
+                Text("アクセス権限")
                     .font(.headline)
-                Text("VoiceIME が音声を録音し、他のアプリケーションへ自動入力するために以下の権限が必要です。")
+                Text("音声録音と入力欄への自動ペーストに必要な権限です。")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -18,13 +18,13 @@ public struct PermissionsTab: View {
             // 1. マイク権限カード
             HStack(spacing: 14) {
                 Image(systemName: permissionService.isMicrophoneAuthorized ? "mic.fill" : "mic.slash.fill")
-                    .font(.system(size: 26))
+                    .font(.system(size: 24))
                     .foregroundColor(permissionService.isMicrophoneAuthorized ? .green : .orange)
-                    .frame(width: 40)
+                    .frame(width: 36)
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
-                        Text("マイクへのアクセス")
+                        Text("マイク")
                             .font(.subheadline)
                             .fontWeight(.semibold)
                         if permissionService.isMicrophoneAuthorized {
@@ -48,7 +48,7 @@ public struct PermissionsTab: View {
                         }
                     }
 
-                    Text("ユーザーの音声を録音して文字起こしするために必要です。")
+                    Text("音声入力の録音に使用")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -71,7 +71,7 @@ public struct PermissionsTab: View {
                     }
                 } else {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.title2)
+                        .font(.title3)
                         .foregroundColor(.green)
                 }
             }
@@ -84,13 +84,13 @@ public struct PermissionsTab: View {
             // 2. アクセシビリティ権限カード
             HStack(spacing: 14) {
                 Image(systemName: permissionService.isAccessibilityAuthorized ? "keyboard.fill" : "keyboard")
-                    .font(.system(size: 26))
+                    .font(.system(size: 24))
                     .foregroundColor(permissionService.isAccessibilityAuthorized ? .green : .orange)
-                    .frame(width: 40)
+                    .frame(width: 36)
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack {
-                        Text("アクセシビリティ (自動入力)")
+                        Text("アクセシビリティ")
                             .font(.subheadline)
                             .fontWeight(.semibold)
                         if permissionService.isAccessibilityAuthorized {
@@ -114,7 +114,7 @@ public struct PermissionsTab: View {
                         }
                     }
 
-                    Text("現在アクティブな入力フィールドへ Cmd+V で自動ペーストするために必要です。")
+                    Text("入力欄への自動ペーストに使用")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -135,7 +135,7 @@ public struct PermissionsTab: View {
                     }
                 } else {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.title2)
+                        .font(.title3)
                         .foregroundColor(.green)
                 }
             }
@@ -152,7 +152,7 @@ public struct PermissionsTab: View {
                 Button(action: {
                     permissionService.checkPermissions()
                 }) {
-                    Label("権限状態を再チェック", systemImage: "arrow.clockwise")
+                    Label("状態を再確認", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.bordered)
             }

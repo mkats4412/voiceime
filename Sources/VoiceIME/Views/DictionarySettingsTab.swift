@@ -66,21 +66,21 @@ public struct DictionarySettingsTab: View {
 
     public var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 18) {
 
                 // ==========================================
-                // ~/.voiceime 外部連携 (AI Agent / JSON編集)
+                // ~/.voiceime 外部連携
                 // ==========================================
                 HStack(spacing: 12) {
                     Image(systemName: "folder.badge.gearshape")
-                        .font(.title2)
+                        .font(.title3)
                         .foregroundColor(.accentColor)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("~/.voiceime 連携 (AI Agent & JSON同期)")
+                        Text("ローカル同期 (~/.voiceime)")
                             .font(.subheadline)
                             .fontWeight(.medium)
-                        Text("単語登録と置換ルールは ~/.voiceime/ にJSON形式で自動同期され、AI Agent等から直接編集可能です。")
+                        Text("単語と置換ルールを ~/.voiceime/ とJSON自動同期")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -90,7 +90,7 @@ public struct DictionarySettingsTab: View {
                     Button {
                         VoiceIMEDiskSyncService.shared.openFolderInFinder()
                     } label: {
-                        Label("フォルダを開く", systemImage: "folder")
+                        Label("フォルダ", systemImage: "folder")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -98,30 +98,30 @@ public struct DictionarySettingsTab: View {
                     Button {
                         settings.reloadFromDisk()
                     } label: {
-                        Label("JSONから再読込", systemImage: "arrow.clockwise")
+                        Label("再読込", systemImage: "arrow.clockwise")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 }
-                .padding(10)
+                .padding(12)
                 .background(
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: 10)
                         .fill(Color.accentColor.opacity(0.08))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: 10)
                         .stroke(Color.accentColor.opacity(0.2), lineWidth: 1)
                 )
 
                 // ==========================================
-                // セクション1: 読み不要のAI単語登録
+                // セクション1: 単語登録
                 // ==========================================
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         Image(systemName: "tag.fill")
                             .foregroundColor(.accentColor)
                             .font(.system(size: 14))
-                        Text("単語登録 (読みの入力は不要)")
+                        Text("単語登録")
                             .font(.headline)
 
                         Spacer()
@@ -143,14 +143,13 @@ public struct DictionarySettingsTab: View {
                         }
                     }
 
-                    Text("人名・社名・製品名・専門用語などを登録しておくと、AIが聞き間違いを防ぎ、最初から正しいスペルや漢字で入力されます。（※「読みがな」を教える必要はありません。カンマや改行区切りで複数の一括追加も可能です）")
+                    Text("専門用語や固有名詞を登録（読みがな不要、カンマ区切りで一括追加可）")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
 
                     // 単語追加フォーム
                     HStack(spacing: 8) {
-                        TextField(focusedField == .newWord ? "" : "単語を入力 (例: VoiceIME, Kubernetes, 齋藤)...", text: $vm.newWordInput)
+                        TextField(focusedField == .newWord ? "" : "単語を入力 (例: VoiceIME, Kubernetes)...", text: $vm.newWordInput)
                             .focused($focusedField, equals: .newWord)
                             .textFieldStyle(.roundedBorder)
                             .onSubmit {
@@ -171,14 +170,13 @@ public struct DictionarySettingsTab: View {
                                 Spacer()
                                 VStack(spacing: 4) {
                                     Image(systemName: "text.badge.plus")
-                                        .font(.system(size: 24))
+                                        .font(.system(size: 20))
                                         .foregroundColor(.secondary.opacity(0.6))
-                                    Text("登録されている単語はありません。\n上のフォームからよく使う用語を追加してください。")
+                                    Text("登録されている単語はありません")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
-                                        .multilineTextAlignment(.center)
                                 }
-                                .padding(.vertical, 20)
+                                .padding(.vertical, 16)
                                 Spacer()
                             }
                             .frame(maxWidth: .infinity)
@@ -202,7 +200,7 @@ public struct DictionarySettingsTab: View {
                                 .padding(8)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            .frame(minHeight: 70, maxHeight: 120)
+                            .frame(minHeight: 60, maxHeight: 110)
                             .background(
                                 RoundedRectangle(cornerRadius: 8)
                                     .fill(Color(NSColor.controlBackgroundColor).opacity(0.5))
@@ -225,14 +223,14 @@ public struct DictionarySettingsTab: View {
                 )
 
                 // ==========================================
-                // セクション2: 自動テキスト置換ルール
+                // セクション2: 置換ルール
                 // ==========================================
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         Image(systemName: "arrow.triangle.2.circlepath")
                             .foregroundColor(.orange)
                             .font(.system(size: 14))
-                        Text("自動テキスト置換ルール (特殊な置換・コマンド)")
+                        Text("置換ルール")
                             .font(.headline)
 
                         Spacer()
@@ -246,21 +244,20 @@ public struct DictionarySettingsTab: View {
                                 .background(Capsule().fill(Color.secondary.opacity(0.15)))
                         }
 
-                        Button("初期ルールに戻す") {
+                        Button("初期化") {
                             settings.resetDictionaryRules()
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                     }
 
-                    Text("音声入力完了後、略称を正式名称に展開したり、改行などのコマンドに強制変換します。（※例: \"アニソン\" ➔ \"アニメソング\"、\"改行\" ➔ \\n）")
+                    Text("音声入力後の置換やコマンド変換（例: 改行 ➔ \\n）")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
 
                     // 置換ルール追加フォーム
                     HStack(spacing: 8) {
-                        TextField(focusedField == .newPattern ? "" : "置換前 (例: アニソン)", text: $vm.newPattern)
+                        TextField(focusedField == .newPattern ? "" : "置換前", text: $vm.newPattern)
                             .focused($focusedField, equals: .newPattern)
                             .textFieldStyle(.roundedBorder)
 
@@ -268,7 +265,7 @@ public struct DictionarySettingsTab: View {
                             .foregroundColor(.secondary)
                             .font(.caption)
 
-                        TextField(focusedField == .newReplacement ? "" : "置換後 (例: アニメソング, \\nで改行)", text: $vm.newReplacement)
+                        TextField(focusedField == .newReplacement ? "" : "置換後", text: $vm.newReplacement)
                             .focused($focusedField, equals: .newReplacement)
                             .textFieldStyle(.roundedBorder)
 
@@ -286,17 +283,16 @@ public struct DictionarySettingsTab: View {
                     // 登録済みルール一覧
                     ScrollView {
                         if settings.dictionaryRules.isEmpty {
-                            Text("置換ルールが登録されていません。上のフォームから追加してください。")
+                            Text("置換ルールはありません")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                                .frame(maxWidth: .infinity, minHeight: 110)
+                                .frame(maxWidth: .infinity, minHeight: 80)
                         } else {
                             VStack(spacing: 6) {
                                 ForEach($settings.dictionaryRules) { $rule in
                                     HStack(spacing: 8) {
                                         Toggle("", isOn: $rule.isEnabled)
                                             .labelsHidden()
-                                            .help("有効/無効の切り替え")
 
                                         TextField(focusedField == .rulePattern(rule.id) ? "" : "置換前", text: $rule.pattern)
                                             .focused($focusedField, equals: .rulePattern(rule.id))
@@ -307,7 +303,7 @@ public struct DictionarySettingsTab: View {
                                             .foregroundColor(.secondary)
                                             .font(.caption)
 
-                                        TextField(focusedField == .ruleReplacement(rule.id) ? "" : "置換後 (\\nで改行)", text: $rule.replacement)
+                                        TextField(focusedField == .ruleReplacement(rule.id) ? "" : "置換後", text: $rule.replacement)
                                             .focused($focusedField, equals: .ruleReplacement(rule.id))
                                             .textFieldStyle(.roundedBorder)
                                             .frame(maxWidth: 160)
@@ -335,7 +331,7 @@ public struct DictionarySettingsTab: View {
                             }
                         }
                     }
-                    .frame(height: 130)
+                    .frame(height: 120)
                     .padding(8)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
@@ -344,11 +340,11 @@ public struct DictionarySettingsTab: View {
 
                     // リアルタイム置換テスト
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("リアルタイム置換プレビュー (キーボード入力):")
+                        Text("テスト入力:")
                             .font(.subheadline)
                             .fontWeight(.medium)
 
-                        TextField(focusedField == .testInput ? "" : "キーボードで入力してテスト...", text: $vm.testInput)
+                        TextField(focusedField == .testInput ? "" : "入力してテスト...", text: $vm.testInput)
                             .focused($focusedField, equals: .testInput)
                             .textFieldStyle(.roundedBorder)
 
@@ -365,7 +361,7 @@ public struct DictionarySettingsTab: View {
                                 .background(
                                     RoundedRectangle(cornerRadius: 6)
                                         .fill(Color.secondary.opacity(0.1))
-                                )
+                                    )
                         }
                     }
                 }
@@ -381,8 +377,7 @@ public struct DictionarySettingsTab: View {
 
                 Spacer(minLength: 10)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .padding(18)
         }
     }
 

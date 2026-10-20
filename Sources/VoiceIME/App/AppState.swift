@@ -1301,51 +1301,12 @@ public final class AppState: ObservableObject {
         return ("エラー", error.localizedDescription)
     }
 
-    /// アプリ更新後や初回起動時に、macOSのキーチェーンアクセス認証について親切に事前案内する
+    /// アプリ起動時に登録済みAPIキーを事前キャッシュ（不要なモーダル案内は表示しない）
     @MainActor
     public func promptKeychainWarmupIfNeeded() {
         guard keychain.hasAnyAPIKey() else { return }
-
-        let currentModDate = fetchExecutableModificationTimestamp()
-        let lastModDate = UserDefaults.standard.string(forKey: "voiceime_last_executable_mod_date")
-
-        let isRecompiledOrNew = (lastModDate == nil || lastModDate != currentModDate)
-
-        if isRecompiledOrNew {
-            let alert = NSAlert()
-            alert.messageText = "VoiceIME: macOS キーチェーン認証のご案内"
-            alert.informativeText = """
-VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を安全に暗号化保護するため、macOSのキーチェーンを使用しています。
-
-アプリの更新・起動に伴い、この直後に macOS のシステムダイアログが表示されます。
-
-【入力するパスワード】
-お手元の Mac のログインパスワード（画面ロック解除用パスワード）を入力してください。
-
-【推奨する選択】
-『常に許可』を選択いただくと、今後の起動時や音声入力時にパスワード入力を省略できます。
-"""
-            alert.alertStyle = .informational
-            alert.addButton(withTitle: "了解して認証へ進む")
-            alert.window.level = .floating
-            NSApp.activate(ignoringOtherApps: true)
-            alert.runModal()
-
-            UserDefaults.standard.set(currentModDate, forKey: "voiceime_last_executable_mod_date")
-        }
-
-        // 事前認証を実行（OSのダイアログが表示される）
+        // バックグラウンドで事前読み込みのみ実施（モーダルダイアログでユーザーを妨げない）
         keychain.warmUp()
-    }
-
-    /// 実行可能バイナリの最終更新日時文字列を取得
-    private func fetchExecutableModificationTimestamp() -> String {
-        guard let exePath = Bundle.main.executablePath,
-              let attrs = try? FileManager.default.attributesOfItem(atPath: exePath),
-              let modDate = attrs[.modificationDate] as? Date else {
-            return "\(Date().timeIntervalSince1970)"
-        }
-        return "\(modDate.timeIntervalSince1970)"
     }
 
     /// 確定テキストの最終整形（辞書適用・正規化）と対象アプリへのペースト

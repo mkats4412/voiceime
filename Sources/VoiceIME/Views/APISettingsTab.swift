@@ -33,9 +33,9 @@ public final class APISettingsViewModel: ObservableObject {
     @Published public var testQuickAskIsError: Bool = false
 
     public enum PromptTabMode: String, CaseIterable, Identifiable {
-        case casual = "口語システムプロンプト"
-        case formal = "文章システムプロンプト"
-        case userTemplate = "ユーザー入力テンプレート"
+        case casual = "口語"
+        case formal = "文章"
+        case userTemplate = "入力テンプレート"
         public var id: String { rawValue }
     }
     @Published public var selectedPromptTab: PromptTabMode = .casual
@@ -412,19 +412,13 @@ public struct APISettingsTab: View {
 
     public var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 // ==========================================
-                // セクション0: 音声認識プロバイダー選択 & バックアップ
+                // セクション0: 音声認識プロバイダー
                 // ==========================================
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Label("音声認識プロバイダー選択", systemImage: "waveform.circle")
-                            .font(.headline)
-                        Spacer()
-                        Text("クラウドAPI")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("音声認識プロバイダー", systemImage: "waveform.circle")
+                        .font(.headline)
 
                     HStack(spacing: 10) {
                         // Groq 切り替えボタン
@@ -435,24 +429,24 @@ public struct APISettingsTab: View {
                             HStack(spacing: 8) {
                                 Image(systemName: "bolt.fill")
                                     .foregroundColor(.orange)
-                                    .font(.system(size: 16))
+                                    .font(.system(size: 15))
                                 VStack(alignment: .leading, spacing: 2) {
                                     HStack(spacing: 4) {
-                                        Text("Groq (超高速 約0.6秒・無料枠)")
-                                            .font(.system(size: 12, weight: .semibold))
+                                        Text("Groq")
+                                            .font(.system(size: 13, weight: .semibold))
                                         if groqHasKey {
                                             Image(systemName: "checkmark.circle.fill")
                                                 .foregroundColor(.green)
                                                 .font(.system(size: 10))
                                         }
                                     }
-                                    Text("認識: \(settings.groqModel)")
-                                        .font(.system(size: 10))
+                                    Text(settings.groqModel)
+                                        .font(.system(size: 11))
                                         .foregroundColor(.secondary)
                                 }
                                 Spacer()
                             }
-                            .padding(.horizontal, 10)
+                            .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(
                                 RoundedRectangle(cornerRadius: 8)
@@ -473,24 +467,24 @@ public struct APISettingsTab: View {
                             HStack(spacing: 8) {
                                 Image(systemName: "sparkles")
                                     .foregroundColor(.green)
-                                    .font(.system(size: 16))
+                                    .font(.system(size: 15))
                                 VStack(alignment: .leading, spacing: 2) {
                                     HStack(spacing: 4) {
-                                        Text("OpenAI (約2〜4秒・高品質)")
-                                            .font(.system(size: 12, weight: .semibold))
+                                        Text("OpenAI")
+                                            .font(.system(size: 13, weight: .semibold))
                                         if openAIHasKey {
                                             Image(systemName: "checkmark.circle.fill")
                                                 .foregroundColor(.green)
                                                 .font(.system(size: 10))
                                         }
                                     }
-                                    Text("認識: \(settings.openAIModel)")
-                                        .font(.system(size: 10))
+                                    Text(settings.openAIModel)
+                                        .font(.system(size: 11))
                                         .foregroundColor(.secondary)
                                 }
                                 Spacer()
                             }
-                            .padding(.horizontal, 10)
+                            .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(
                                 RoundedRectangle(cornerRadius: 8)
@@ -504,49 +498,29 @@ public struct APISettingsTab: View {
                         .buttonStyle(.plain)
                     }
 
-                    // バックアップ連携カード
+                    // バックアップ連携
                     if let backup = settings.backupProvider {
-                        HStack(alignment: .center, spacing: 8) {
+                        HStack(spacing: 8) {
                             Image(systemName: "arrow.triangle.swap")
                                 .foregroundColor(.blue)
                                 .font(.caption)
-                            Text("相互バックアップ有効: \(currentProvider.displayName) 障害時や応答遅延時は \(backup.displayName) で並行高速化")
-                                .font(.caption)
-                                .foregroundColor(.primary)
+                            Text("自動バックアップ (\(backup.displayName))")
+                                .font(.subheadline)
                             Spacer()
                             Toggle("", isOn: $settings.autoFallbackEnabled)
                                 .toggleStyle(.switch)
                                 .controlSize(.small)
                                 .labelsHidden()
                         }
-                        .padding(8)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
                                 .fill(Color.blue.opacity(0.08))
                         )
-                    } else if currentProvider == .groq && !openAIHasKey {
-                        HStack(spacing: 6) {
-                            Image(systemName: "info.circle")
-                                .foregroundColor(.secondary)
-                                .font(.caption)
-                            Text("ヒント: OpenAI のキーも登録すると、Groq 障害時の自動バックアップになります")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        .padding(.horizontal, 4)
-                    } else if currentProvider == .openai && !groqHasKey {
-                        HStack(spacing: 6) {
-                            Image(systemName: "info.circle")
-                                .foregroundColor(.secondary)
-                                .font(.caption)
-                            Text("ヒント: Groq のキーも登録すると、OpenAI 障害時の自動バックアップになります")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        .padding(.horizontal, 4)
                     }
                 }
-                .padding(12)
+                .padding(14)
                 .background(
                     RoundedRectangle(cornerRadius: 10)
                         .fill(Color(NSColor.controlBackgroundColor).opacity(0.6))
@@ -556,13 +530,13 @@ public struct APISettingsTab: View {
                         .stroke(Color(NSColor.separatorColor).opacity(0.6), lineWidth: 1)
                 )
 
-                // 直近の障害回避・フォールバック診断情報
+                // 直近の障害回避レポート
                 if let fallback = appState.lastFallbackRecord {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 6) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundColor(.orange)
-                            Text("直近のAPI障害回避レポート (\(fallback.primaryProvider.displayName) \(fallback.step) 失敗)")
+                            Text("障害回避レポート (\(fallback.primaryProvider.displayName) ➔ \(fallback.backupProvider.displayName))")
                                 .font(.system(size: 12, weight: .bold))
                                 .foregroundColor(.orange)
                             Spacer()
@@ -573,28 +547,9 @@ public struct APISettingsTab: View {
                             .controlSize(.mini)
                         }
 
-                        HStack(alignment: .top, spacing: 4) {
-                            Text("失敗理由:")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundColor(.primary)
-                            Text(fallback.reasonSummary)
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundColor(.primary)
-                        }
-
-                        HStack(alignment: .top, spacing: 4) {
-                            Text("エラー詳細:")
-                                .font(.system(size: 10.5))
-                                .foregroundColor(.secondary)
-                            Text(fallback.detail)
-                                .font(.system(size: 10.5))
-                                .foregroundColor(.secondary)
-                                .lineLimit(3)
-                        }
-
-                        Text("➔ \(fallback.backupProvider.displayName) に自動フォールバックして処理を継続しました。")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
+                        Text("理由: \(fallback.reasonSummary)")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.primary)
                     }
                     .padding(10)
                     .background(
@@ -608,11 +563,11 @@ public struct APISettingsTab: View {
                 }
 
                 // ==========================================
-                // セクション1: APIキー入力（Keychain）
+                // セクション1: APIキー
                 // ==========================================
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Label("\(currentProvider.displayName) APIキー設定", systemImage: "key.fill")
+                        Label("APIキー (\(currentProvider.displayName))", systemImage: "key.fill")
                             .font(.headline)
 
                         Spacer()
@@ -621,7 +576,7 @@ public struct APISettingsTab: View {
                             HStack(spacing: 4) {
                                 Image(systemName: "lock.shield.fill")
                                     .foregroundColor(.green)
-                                Text("Keychain暗号化保護中")
+                                Text("保存済み")
                                     .foregroundColor(.green)
                             }
                             .font(.caption)
@@ -633,7 +588,7 @@ public struct APISettingsTab: View {
                             HStack(spacing: 4) {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .foregroundColor(.orange)
-                                Text("未登録 (入力必須)")
+                                Text("未登録")
                                     .foregroundColor(.orange)
                                     .fontWeight(.semibold)
                             }
@@ -646,10 +601,6 @@ public struct APISettingsTab: View {
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("\(currentProvider.displayName) のAPIキーを入力してください:")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-
                         HStack(spacing: 8) {
                             InputFieldBox(isWarning: !hasKeyStored) {
                                 Image(systemName: hasKeyStored ? "key.horizontal.fill" : "key.horizontal")
@@ -657,11 +608,11 @@ public struct APISettingsTab: View {
                                     .font(.system(size: 13))
                             } content: {
                                 if isKeyVisible {
-                                    TextField(hasKeyStored ? "新しいキーを入力して上書き保存" : "\(currentProvider.displayName) APIキーを入力 (gsk_... / sk-...)", text: $vm.apiKeyInput)
+                                    TextField("APIキーを入力", text: $vm.apiKeyInput)
                                         .textFieldStyle(.plain)
                                         .font(.system(size: 12.5, design: .monospaced))
                                 } else {
-                                    SecureField(hasKeyStored ? "新しいキーを入力して上書き保存" : "\(currentProvider.displayName) APIキーを入力 (gsk_... / sk-...)", text: $vm.apiKeyInput)
+                                    SecureField("APIキーを入力", text: $vm.apiKeyInput)
                                         .textFieldStyle(.plain)
                                         .font(.system(size: 12.5, design: .monospaced))
                                 }
@@ -683,7 +634,6 @@ public struct APISettingsTab: View {
                                             .font(.system(size: 13))
                                     }
                                     .buttonStyle(.plain)
-                                    .help(isKeyVisible ? "キーを伏字にする" : "キーを表示する")
                                 }
                             }
 
@@ -701,23 +651,7 @@ public struct APISettingsTab: View {
                                 .buttonStyle(.bordered)
                                 .controlSize(.regular)
                                 .foregroundColor(.red)
-                                .help("KeychainからAPIキーを完全に消去")
                             }
-                        }
-
-                        if hasKeyStored {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("※ キーはmacOSの暗号化領域（キーチェーン）に安全に保管されています。変更したい場合は新しいキーを入力して「保存」を押してください。")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                Text("💡 アプリの更新後に初回起動した際、macOSからパスワード確認が表示された場合はMacのログインパスワードを入力して『常に許可』を選択してください。")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                        } else {
-                            Text("※ 音声認識を使用するには、上記の入力エリアに \(currentProvider.displayName) のAPIキーを入力して「保存」をクリックしてください（キーチェーンに暗号化保存されます）。")
-                                .font(.caption2)
-                                .foregroundColor(.orange)
                         }
 
                         if let msg = saveMessage {
@@ -728,7 +662,7 @@ public struct APISettingsTab: View {
                         }
                     }
                 }
-                .padding(12)
+                .padding(14)
                 .background(
                     RoundedRectangle(cornerRadius: 10)
                         .fill(Color(NSColor.controlBackgroundColor).opacity(0.6))
@@ -739,25 +673,15 @@ public struct APISettingsTab: View {
                 )
 
                 // ==========================================
-                // セクション2: 音声認識（Whisper）詳細設定
+                // セクション2: 音声認識の設定
                 // ==========================================
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Label("音声認識（Whisper）詳細設定", systemImage: "waveform")
-                            .font(.headline)
-                        Spacer()
-                        Text("対象: \(currentProvider.displayName)")
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.12))
-                            .cornerRadius(4)
-                    }
+                VStack(alignment: .leading, spacing: 14) {
+                    Label("音声認識の設定", systemImage: "waveform")
+                        .font(.headline)
 
                     // Base URL 入力
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("\(currentProvider.displayName) Base URL:")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Base URL:")
                             .font(.subheadline)
                             .fontWeight(.medium)
 
@@ -779,44 +703,20 @@ public struct APISettingsTab: View {
                                 .buttonStyle(.plain)
                             }
                         }
-
-                        if let resolvedURL = apiService.constructEndpointURL(from: settings.currentBaseURL, mode: settings.apiMode) {
-                            HStack(spacing: 4) {
-                                Text("送信先:")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                Text(resolvedURL.absoluteString)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundColor(.primary)
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.08))
-                            .cornerRadius(4)
-                        }
                     }
 
                     // 音声認識モデル名
                     VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("音声認識モデル名:")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                            Text("[自由入力・変更可]")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Text("現在: \(settings.currentModelName)")
-                                .font(.caption)
-                                .foregroundColor(.accentColor)
-                        }
+                        Text("モデル名:")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
 
                         InputFieldBox {
                             Image(systemName: "waveform")
                                 .foregroundColor(.orange)
                                 .font(.system(size: 13))
                         } content: {
-                            TextField("モデルIDを入力（例: whisper-large-v3-turbo, whisper-1 など）", text: modelNameBinding)
+                            TextField("モデルIDを入力（例: whisper-large-v3-turbo）", text: modelNameBinding)
                                 .textFieldStyle(.plain)
                                 .font(.system(size: 12.5, design: .monospaced))
                         } trailing: {
@@ -831,10 +731,7 @@ public struct APISettingsTab: View {
                         }
 
                         HStack(spacing: 6) {
-                            Image(systemName: "hand.tap.fill")
-                                .font(.system(size: 10))
-                                .foregroundColor(.secondary)
-                            Text("候補からワンクリックで入力:")
+                            Text("プリセット:")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
 
@@ -851,13 +748,13 @@ public struct APISettingsTab: View {
                                 .buttonStyle(.bordered)
                                 .controlSize(.mini)
                             } else {
-                                Button("gpt-4o-mini-transcribe (高速)") {
+                                Button("gpt-4o-mini-transcribe") {
                                     settings.openAIModel = "gpt-4o-mini-transcribe"
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.mini)
 
-                                Button("whisper-1 (高精度・約2秒)") {
+                                Button("whisper-1") {
                                     settings.openAIModel = "whisper-1"
                                 }
                                 .buttonStyle(.bordered)
@@ -866,23 +763,23 @@ public struct APISettingsTab: View {
                         }
                     }
 
-                    // 一括データ送信トグル
                     Divider()
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 2)
 
+                    // 一括データ送信トグル
                     Toggle(isOn: $settings.batchTranscriptionEnabled) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("録音終了時の一括送信モード（OFF時はリアルタイム累積・紙芝居ストリーミング）")
+                            Text("録音終了時に一括送信する")
                                 .font(.subheadline)
                                 .fontWeight(.medium)
-                            Text("ONの場合、キーを離した際に全音声を1回でAPI送信します。OFF（デフォルト）の場合、話者の息継ぎ（無音）を検知するたびに0秒からの累積音声をAPIへ送信し、紙芝居のように画面全体を最新の高精度テキストへ上書き更新します（1分間に最大18回レート制限でAPIクォータを安全に保護）。")
+                            Text("OFF時は音声認識結果をリアルタイムに累積表示します。")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                         }
                     }
                     .toggleStyle(.checkbox)
                 }
-                .padding(12)
+                .padding(14)
                 .background(
                     RoundedRectangle(cornerRadius: 10)
                         .fill(Color(NSColor.controlBackgroundColor).opacity(0.6))
@@ -893,26 +790,21 @@ public struct APISettingsTab: View {
                 )
 
                 // ==========================================
-                // セクション3: AI（LLM）推敲・文脈理解 [共通設定]
+                // セクション3: AI推敲の設定
                 // ==========================================
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 14) {
                     HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Label("AI（LLM）推敲・文脈理解（共通設定）", systemImage: "sparkles")
-                                    .font(.headline)
-                                Text(settings.isLLMRefinementActive ? "推敲有効" : "推敲OFF")
-                                    .font(.caption2)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(settings.isLLMRefinementActive ? .blue : .secondary)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 1)
-                                    .background(settings.isLLMRefinementActive ? Color.blue.opacity(0.12) : Color.secondary.opacity(0.12))
-                                    .cornerRadius(4)
-                            }
-                            Text("音声認識プロバイダー（Groq / OpenAI）に関係なく共通で適用されます。音声の誤字・同音異義語・慣用句の誤りを自然に復元します。")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                        HStack(spacing: 8) {
+                            Label("AI推敲の設定", systemImage: "sparkles")
+                                .font(.headline)
+                            Text(settings.isLLMRefinementActive ? "有効" : "OFF")
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(settings.isLLMRefinementActive ? .blue : .secondary)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(settings.isLLMRefinementActive ? Color.blue.opacity(0.12) : Color.secondary.opacity(0.12))
+                                .cornerRadius(4)
                         }
                         Spacer()
                         Toggle("", isOn: $settings.llmRefinementEnabled)
@@ -922,34 +814,19 @@ public struct APISettingsTab: View {
                     }
 
                     if settings.llmRefinementEnabled {
-                        VStack(alignment: .leading, spacing: 12) {
-                            // 1. 推敲モデル名（ユーザー自由入力）
-                            VStack(alignment: .leading, spacing: 5) {
-                                HStack {
-                                    Text("推敲モデル名:")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                    Text("※ 空欄の場合は推敲を使用せず、文字起こしをそのまま出力します")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                    Spacer()
-                                    if settings.userLLMModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                        Text("未指定 (推敲なし)")
-                                            .font(.caption)
-                                            .foregroundColor(.orange)
-                                    } else {
-                                        Text("指定中: \(settings.userLLMModel)")
-                                            .font(.caption)
-                                            .foregroundColor(.accentColor)
-                                    }
-                                }
+                        VStack(alignment: .leading, spacing: 14) {
+                            // 1. 推敲モデル名
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("モデル名:")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
 
                                 InputFieldBox {
                                     Image(systemName: "brain")
                                         .foregroundColor(.purple)
                                         .font(.system(size: 13))
                                 } content: {
-                                    TextField("例: sarashina3-mini, gpt-4o-mini など（空欄で推敲なし）", text: $settings.userLLMModel)
+                                    TextField("モデル名（例: sarashina3-mini, 空欄でOFF）", text: $settings.userLLMModel)
                                         .textFieldStyle(.plain)
                                         .font(.system(size: 12.5, design: .monospaced))
                                 } trailing: {
@@ -960,19 +837,15 @@ public struct APISettingsTab: View {
                                                 .font(.system(size: 13))
                                         }
                                         .buttonStyle(.plain)
-                                        .help("推敲モデル名をクリア（推敲OFF）")
                                     }
                                 }
 
                                 HStack(spacing: 6) {
-                                    Image(systemName: "hand.tap.fill")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
-                                    Text("ワンクリック候補:")
+                                    Text("プリセット:")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
 
-                                    Button("🌸 sarashina3-mini (推奨)") {
+                                    Button("sarashina3-mini") {
                                         settings.userLLMModel = "sarashina3-mini"
                                         if settings.userLLMBaseURL.isEmpty || !settings.userLLMBaseURL.contains("sarashina") {
                                             settings.userLLMBaseURL = "https://api.sarashina.ai/v1"
@@ -981,7 +854,7 @@ public struct APISettingsTab: View {
                                     }
                                     .buttonStyle(.bordered).controlSize(.mini)
 
-                                    Button("🌸 sarashina3-nano") {
+                                    Button("sarashina3-nano") {
                                         settings.userLLMModel = "sarashina3-nano"
                                         if settings.userLLMBaseURL.isEmpty || !settings.userLLMBaseURL.contains("sarashina") {
                                             settings.userLLMBaseURL = "https://api.sarashina.ai/v1"
@@ -990,39 +863,32 @@ public struct APISettingsTab: View {
                                     }
                                     .buttonStyle(.bordered).controlSize(.mini)
 
-                                    Button("🟢 gpt-4o-mini") {
+                                    Button("gpt-4o-mini") {
                                         settings.userLLMModel = "gpt-4o-mini"
                                         settings.userLLMBaseURL = "https://api.openai.com/v1"
                                         vm.updateLLMKeyStatus(settings: settings)
                                     }
                                     .buttonStyle(.bordered).controlSize(.mini)
 
-                                    Button("⚡ openai/gpt-oss-120b") {
+                                    Button("openai/gpt-oss-120b") {
                                         settings.userLLMModel = "openai/gpt-oss-120b"
                                         settings.userLLMBaseURL = "https://api.groq.com/openai/v1"
                                         vm.updateLLMKeyStatus(settings: settings)
                                     }
                                     .buttonStyle(.bordered).controlSize(.mini)
 
-                                    Button("🚫 未指定 (推敲OFF)") {
+                                    Button("未指定") {
                                         settings.userLLMModel = ""
                                     }
                                     .buttonStyle(.bordered).controlSize(.mini)
-                                    .foregroundColor(.orange)
                                 }
                             }
 
-                            // 2. 推敲 Base URL（直接入力）
-                            VStack(alignment: .leading, spacing: 5) {
-                                HStack {
-                                    Text("推敲 API Base URL:")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                    Spacer()
-                                    Text("自動検出: \(settings.resolvedLLMProvider.displayName)")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
+                            // 2. 推敲 Base URL
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Base URL:")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
 
                                 InputFieldBox {
                                     Image(systemName: "network")
@@ -1044,9 +910,6 @@ public struct APISettingsTab: View {
                                 }
 
                                 HStack(spacing: 6) {
-                                    Image(systemName: "hand.tap.fill")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
                                     Text("プリセット:")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
@@ -1083,23 +946,18 @@ public struct APISettingsTab: View {
                                 }
                             }
 
-                            // 3. 推敲 APIキー (Keychain保存)
-                            VStack(alignment: .leading, spacing: 5) {
+                            // 3. 推敲 APIキー
+                            VStack(alignment: .leading, spacing: 6) {
                                 HStack {
-                                    Text("\(settings.resolvedLLMProvider.displayName) APIキー:")
+                                    Text("APIキー (\(settings.resolvedLLMProvider.displayName)):")
                                         .font(.subheadline)
                                         .fontWeight(.medium)
-                                    if settings.resolvedLLMProvider == .custom && (settings.userLLMBaseURL.contains("localhost") || settings.userLLMBaseURL.contains("127.0.0.1")) {
-                                        Text("※ ローカルLLM (Ollama等) ではAPIキー不要です")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
                                     Spacer()
                                     if vm.hasLLMKeyStored {
                                         HStack(spacing: 3) {
                                             Image(systemName: "lock.shield.fill")
                                                 .foregroundColor(.green)
-                                            Text("Keychain暗号化保護中")
+                                            Text("保存済み")
                                                 .foregroundColor(.green)
                                         }
                                         .font(.caption2)
@@ -1144,7 +1002,6 @@ public struct APISettingsTab: View {
                                         .buttonStyle(.bordered)
                                         .controlSize(.regular)
                                         .foregroundColor(.red)
-                                        .help("Keychainからこの推敲APIキーを消去")
                                     }
                                 }
 
@@ -1157,24 +1014,25 @@ public struct APISettingsTab: View {
 
                             // 4. 文体スタイル
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("推敲文体スタイル:")
+                                Text("文体スタイル:")
                                     .font(.subheadline)
                                     .fontWeight(.medium)
 
                                 HStack(spacing: 8) {
                                     Button(action: { settings.refinementStyle = .casual }) {
-                                        HStack {
+                                        HStack(spacing: 6) {
                                             Image(systemName: settings.refinementStyle == .casual ? "largecircle.fill.circle" : "circle")
                                                 .foregroundColor(.accentColor)
                                             VStack(alignment: .leading, spacing: 1) {
-                                                Text("口語スタイル（会話・チャット向け）")
-                                                    .font(.system(size: 11.5, weight: .semibold))
-                                                Text("「〜ですね」「〜ですよ」等の自然な語尾や口調をそのまま維持します。")
-                                                    .font(.system(size: 9.5))
+                                                Text("口語")
+                                                    .font(.system(size: 12, weight: .semibold))
+                                                Text("会話・チャット向け")
+                                                    .font(.system(size: 10))
                                                     .foregroundColor(.secondary)
                                             }
                                         }
-                                        .padding(6)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .background(RoundedRectangle(cornerRadius: 6).fill(settings.refinementStyle == .casual ? Color.accentColor.opacity(0.1) : Color.clear))
                                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
@@ -1182,18 +1040,19 @@ public struct APISettingsTab: View {
                                     .buttonStyle(.plain)
 
                                     Button(action: { settings.refinementStyle = .formal }) {
-                                        HStack {
+                                        HStack(spacing: 6) {
                                             Image(systemName: settings.refinementStyle == .formal ? "largecircle.fill.circle" : "circle")
                                                 .foregroundColor(.accentColor)
                                             VStack(alignment: .leading, spacing: 1) {
-                                                Text("文章スタイル（報告書・メール向け）")
-                                                    .font(.system(size: 11.5, weight: .semibold))
-                                                Text("「〜である」「〜報告いたします」等の標準的な書き言葉に整えます。")
-                                                    .font(.system(size: 9.5))
+                                                Text("文章")
+                                                    .font(.system(size: 12, weight: .semibold))
+                                                Text("メール・報告書向け")
+                                                    .font(.system(size: 10))
                                                     .foregroundColor(.secondary)
                                             }
                                         }
-                                        .padding(6)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .background(RoundedRectangle(cornerRadius: 6).fill(settings.refinementStyle == .formal ? Color.accentColor.opacity(0.1) : Color.clear))
                                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
@@ -1202,7 +1061,7 @@ public struct APISettingsTab: View {
                                 }
                             }
 
-                            // 5. 推敲接続テスト
+                            // 5. 接続テスト
                             Divider().padding(.vertical, 2)
 
                             HStack(spacing: 10) {
@@ -1219,7 +1078,7 @@ public struct APISettingsTab: View {
                                             Image(systemName: "bolt.badge.checkmark.fill")
                                                 .foregroundColor(.purple)
                                         }
-                                        Text(vm.isTestingLLM ? "接続テスト中..." : "推敲接続テスト")
+                                        Text(vm.isTestingLLM ? "接続テスト中..." : "接続テスト")
                                     }
                                 }
                                 .buttonStyle(.bordered)
@@ -1235,14 +1094,12 @@ public struct APISettingsTab: View {
                                 Spacer()
                             }
 
-                            Divider().padding(.vertical, 4)
+                            Divider().padding(.vertical, 2)
 
-                            // 6. 推敲プロンプトの編集 (prompts.json 連動)
+                            // 6. プロンプト編集
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
-                                    Image(systemName: "pencil.and.outline")
-                                        .foregroundColor(.purple)
-                                    Text("推敲プロンプトの編集:")
+                                    Text("プロンプト:")
                                         .font(.subheadline)
                                         .fontWeight(.medium)
                                     Spacer()
@@ -1251,14 +1108,12 @@ public struct APISettingsTab: View {
                                         VoiceIMEDiskSyncService.shared.openFolderInFinder()
                                     }
                                     .buttonStyle(.bordered).controlSize(.mini)
-                                    .help("~/.voiceime/prompts.json が保存されているフォルダをFinderで開きます")
 
                                     Button("初期値に戻す") {
                                         settings.resetPromptsToDefaults()
                                     }
                                     .buttonStyle(.bordered).controlSize(.mini)
                                     .foregroundColor(.orange)
-                                    .help("プロンプトを推奨初期値にリセットします")
                                 }
 
                                 Picker("", selection: $vm.selectedPromptTab) {
@@ -1272,44 +1127,31 @@ public struct APISettingsTab: View {
                                     if vm.selectedPromptTab == .casual {
                                         TextEditor(text: $settings.systemPromptCasual)
                                             .font(.system(size: 11, design: .monospaced))
-                                            .frame(height: 100)
+                                            .frame(height: 90)
                                             .padding(4)
                                             .background(RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.textBackgroundColor)))
                                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
-                                        Text("※ 口語モード発話時にシステムプロンプトとして使用されます。")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
                                     } else if vm.selectedPromptTab == .formal {
                                         TextEditor(text: $settings.systemPromptFormal)
                                             .font(.system(size: 11, design: .monospaced))
-                                            .frame(height: 100)
+                                            .frame(height: 90)
                                             .padding(4)
                                             .background(RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.textBackgroundColor)))
                                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
-                                        Text("※ 文章モード発話時にシステムプロンプトとして使用されます。")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
                                     } else {
                                         TextEditor(text: $settings.userPromptTemplate)
                                             .font(.system(size: 11, design: .monospaced))
-                                            .frame(height: 100)
+                                            .frame(height: 90)
                                             .padding(4)
                                             .background(RoundedRectangle(cornerRadius: 6).fill(Color(NSColor.textBackgroundColor)))
                                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
-                                        Text("※ {input} の部分にWhisper文字起こしテキストが代入されます。")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
                                     }
                                 }
-
-                                Text("💡 ~/.voiceime/prompts.json に常時同期。MCPや外部エディタからの編集も即座に反映されます。")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
                             }
                         }
                     }
                 }
-                .padding(12)
+                .padding(14)
                 .background(
                     RoundedRectangle(cornerRadius: 10)
                         .fill(Color(NSColor.controlBackgroundColor).opacity(0.6))
@@ -1320,49 +1162,38 @@ public struct APISettingsTab: View {
                 )
 
                 // ==========================================
-                // セクション4: AI会話（クイック質問）モデル設定
+                // セクション4: クイック質問の設定
                 // ==========================================
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 14) {
                     HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Label("AI会話（クイック質問）モデル設定", systemImage: "bubble.left.and.bubble.right.fill")
-                                    .font(.headline)
-                                Text(settings.quickAskHotkeyDisplayString)
-                                    .font(.caption2)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.purple)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 1)
-                                    .background(Color.purple.opacity(0.12))
-                                    .cornerRadius(4)
-                            }
-                            Text("\(settings.quickAskHotkeyDisplayString) で呼び出すAIクイック質問（英単語スペル、計算、要約質問等）で使用する会話モデルです。推敲モデルとは独立して選択できます。")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                        HStack(spacing: 8) {
+                            Label("クイック質問の設定", systemImage: "bubble.left.and.bubble.right.fill")
+                                .font(.headline)
+                            Text(settings.quickAskHotkeyDisplayString)
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.purple)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color.purple.opacity(0.12))
+                                .cornerRadius(4)
                         }
                         Spacer()
                     }
 
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 14) {
                         // 1. プロバイダー選択
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack {
-                                Text("会話プロバイダー:")
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                Spacer()
-                                Text("使用中: \(settings.effectiveQuickAskProviderDisplayName)")
-                                    .font(.caption)
-                                    .foregroundColor(.purple)
-                            }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("プロバイダー:")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
 
                             Picker("", selection: $settings.quickAskProviderMode) {
-                                Text("推敲モデルと同一 (\(settings.effectiveLLMProviderDisplayName))").tag(QuickAskProviderMode.sameAsLLM)
-                                Text("音声認識と同一 (\(currentProvider.displayName))").tag(QuickAskProviderMode.sameAsSpeech)
-                                Text("Groq (クラウド高速・会話)").tag(QuickAskProviderMode.groq)
-                                Text("OpenAI (クラウド高品質・会話)").tag(QuickAskProviderMode.openai)
-                                Text("カスタム (ローカルLLM / 互換URL)").tag(QuickAskProviderMode.custom)
+                                Text("推敲モデルと同一").tag(QuickAskProviderMode.sameAsLLM)
+                                Text("音声認識と同一").tag(QuickAskProviderMode.sameAsSpeech)
+                                Text("Groq").tag(QuickAskProviderMode.groq)
+                                Text("OpenAI").tag(QuickAskProviderMode.openai)
+                                Text("カスタム").tag(QuickAskProviderMode.custom)
                             }
                             .pickerStyle(.menu)
                         }
@@ -1370,40 +1201,16 @@ public struct APISettingsTab: View {
                         // 2. モード別の詳細設定
                         switch settings.quickAskProviderMode {
                         case .sameAsLLM:
-                            HStack(spacing: 6) {
-                                Image(systemName: "link")
-                                    .foregroundColor(.secondary)
-                                    .font(.caption)
-                                Text("推敲設定で選択されているプロバイダー（\(settings.effectiveLLMProviderDisplayName)）およびモデル（\(settings.currentLLMModelName)）が自動適用されます。")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(8)
-                            .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.06)))
+                            EmptyView()
 
                         case .sameAsSpeech:
-                            HStack(spacing: 6) {
-                                Image(systemName: "link")
-                                    .foregroundColor(.secondary)
-                                    .font(.caption)
-                                Text("音声認識プロバイダー（\(currentProvider.displayName)）の設定が適用されます。")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(8)
-                            .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.06)))
+                            EmptyView()
 
                         case .groq:
                             VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text("Groq 会話モデル名:")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                    Spacer()
-                                    Text("現在: \(settings.groqQuickAskModel)")
-                                        .font(.caption)
-                                        .foregroundColor(.purple)
-                                }
+                                Text("モデル名:")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
 
                                 InputFieldBox {
                                     Image(systemName: "bubble.left.fill")
@@ -1425,19 +1232,16 @@ public struct APISettingsTab: View {
                                 }
 
                                 HStack(spacing: 6) {
-                                    Image(systemName: "hand.tap.fill")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
-                                    Text("候補:")
+                                    Text("プリセット:")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
 
-                                    Button("llama-3.3-70b-versatile (賢い・おすすめ)") {
+                                    Button("llama-3.3-70b-versatile") {
                                         settings.groqQuickAskModel = "llama-3.3-70b-versatile"
                                     }
                                     .buttonStyle(.bordered).controlSize(.mini)
 
-                                    Button("llama-3.1-8b-instant (最速)") {
+                                    Button("llama-3.1-8b-instant") {
                                         settings.groqQuickAskModel = "llama-3.1-8b-instant"
                                     }
                                     .buttonStyle(.bordered).controlSize(.mini)
@@ -1446,15 +1250,9 @@ public struct APISettingsTab: View {
 
                         case .openai:
                             VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text("OpenAI 会話モデル名:")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                    Spacer()
-                                    Text("現在: \(settings.openAIQuickAskModel)")
-                                        .font(.caption)
-                                        .foregroundColor(.purple)
-                                }
+                                Text("モデル名:")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
 
                                 InputFieldBox {
                                     Image(systemName: "bubble.left.fill")
@@ -1476,19 +1274,16 @@ public struct APISettingsTab: View {
                                 }
 
                                 HStack(spacing: 6) {
-                                    Image(systemName: "hand.tap.fill")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.secondary)
-                                    Text("候補:")
+                                    Text("プリセット:")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
 
-                                    Button("gpt-4o-mini (高速・安価・おすすめ)") {
+                                    Button("gpt-4o-mini") {
                                         settings.openAIQuickAskModel = "gpt-4o-mini"
                                     }
                                     .buttonStyle(.bordered).controlSize(.mini)
 
-                                    Button("gpt-4o (最高知能)") {
+                                    Button("gpt-4o") {
                                         settings.openAIQuickAskModel = "gpt-4o"
                                     }
                                     .buttonStyle(.bordered).controlSize(.mini)
@@ -1499,15 +1294,9 @@ public struct APISettingsTab: View {
                             VStack(alignment: .leading, spacing: 10) {
                                 // Base URL
                                 VStack(alignment: .leading, spacing: 4) {
-                                    HStack {
-                                        Text("カスタム会話 Base URL:")
-                                            .font(.subheadline)
-                                            .fontWeight(.medium)
-                                        Spacer()
-                                        Text("OpenAI互換 (/chat/completions)")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
+                                    Text("Base URL:")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
 
                                     InputFieldBox {
                                         Image(systemName: "network")
@@ -1556,7 +1345,7 @@ public struct APISettingsTab: View {
 
                                 // モデル名
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text("カスタム会話モデル名:")
+                                    Text("モデル名:")
                                         .font(.subheadline)
                                         .fontWeight(.medium)
 
@@ -1565,7 +1354,7 @@ public struct APISettingsTab: View {
                                             .foregroundColor(.purple)
                                             .font(.system(size: 13))
                                     } content: {
-                                        TextField("例: llama3.2, qwen2.5, sarashina3-mini など", text: $settings.customQuickAskModel)
+                                        TextField("例: llama3.2, sarashina3-mini", text: $settings.customQuickAskModel)
                                             .textFieldStyle(.plain)
                                             .font(.system(size: 12.5, design: .monospaced))
                                     } trailing: {
@@ -1598,40 +1387,38 @@ public struct APISettingsTab: View {
                             }
                         }
 
-                        // 疎通テストボタン
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack(spacing: 10) {
-                                Button(action: {
-                                    Task {
-                                        await vm.testQuickAskConnection(settings: settings)
-                                    }
-                                }) {
-                                    HStack(spacing: 5) {
-                                        if vm.isTestingQuickAsk {
-                                            ProgressView()
-                                                .controlSize(.small)
-                                        } else {
-                                            Image(systemName: "paperplane.fill")
-                                        }
-                                        Text(vm.isTestingQuickAsk ? "AI質問テスト中..." : "AI会話の疎通テスト")
-                                    }
+                        // 接続テスト
+                        HStack(spacing: 10) {
+                            Button(action: {
+                                Task {
+                                    await vm.testQuickAskConnection(settings: settings)
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(vm.isTestingQuickAsk)
-
-                                if let result = vm.testQuickAskResult {
-                                    Text(result)
-                                        .font(.caption)
-                                        .foregroundColor(vm.testQuickAskIsError ? .red : .green)
-                                        .lineLimit(1)
+                            }) {
+                                HStack(spacing: 5) {
+                                    if vm.isTestingQuickAsk {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    } else {
+                                        Image(systemName: "paperplane.fill")
+                                    }
+                                    Text(vm.isTestingQuickAsk ? "接続テスト中..." : "接続テスト")
                                 }
-                                Spacer()
                             }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(vm.isTestingQuickAsk)
+
+                            if let result = vm.testQuickAskResult {
+                                Text(result)
+                                    .font(.caption)
+                                    .foregroundColor(vm.testQuickAskIsError ? .red : .green)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
                         }
                     }
                 }
-                .padding(12)
+                .padding(14)
                 .background(
                     RoundedRectangle(cornerRadius: 10)
                         .fill(Color(NSColor.controlBackgroundColor).opacity(0.6))

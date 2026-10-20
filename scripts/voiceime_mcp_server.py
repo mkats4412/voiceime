@@ -50,13 +50,13 @@ def load_vocabulary() -> List[str]:
         return []
 
 def notify_voiceime_app():
-    """VoiceIME アプリへ DistributedNotificationCenter 経由でリロード通知を送信"""
-    try:
-        import subprocess
-        script = 'import Foundation; DistributedNotificationCenter.default().postNotificationName(Notification.Name("com.voiceime.notification.reloadDictionary"), object: nil, userInfo: nil, deliverImmediately: true)'
-        subprocess.Popen(["swift", "-e", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+    """VoiceIME アプリへリロード通知。
+    VoiceIME は ~/.voiceime ディレクトリのファイル変更 (kqueue) を自動監視しているため、
+    ファイル保存（atomic置換）により即座に自動反映されます。
+    外部プロセス (swift -e 等) の呼び出しによる権限/パスワード要求を完全に防止するため、
+    ファイル監視に委ねます。
+    """
+    pass
 
 def save_vocabulary(words: List[str]) -> bool:
     ensure_voiceime_dir()

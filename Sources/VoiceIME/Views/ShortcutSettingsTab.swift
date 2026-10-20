@@ -47,91 +47,71 @@ public struct ShortcutSettingsTab: View {
 
     public var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 18) {
                 // セクション0: システム起動設定 (自動起動)
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("システム自動起動")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("自動起動")
                         .font(.headline)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(alignment: .center) {
-                            Toggle(isOn: Binding(
-                                get: { launchAtLogin.isEnabled },
-                                set: { launchAtLogin.setEnabled($0) }
-                            )) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Mac 起動時に自動起動する (ログイン項目)")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                    Text("Mac にログインした際、VoiceIME をバックグラウンドで自動起動してメニューバーに常駐させます。")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
+                    HStack(alignment: .center) {
+                        Toggle("Mac 起動時に自動起動する (ログイン項目)", isOn: Binding(
+                            get: { launchAtLogin.isEnabled },
+                            set: { launchAtLogin.setEnabled($0) }
+                        ))
+                        .font(.subheadline)
 
-                            Spacer()
+                        Spacer()
 
-                            Button("システム設定を開く...") {
-                                launchAtLogin.openLoginItemsSettings()
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                        Button("システム設定を開く...") {
+                            launchAtLogin.openLoginItemsSettings()
                         }
-
-                        if launchAtLogin.hasError, let error = launchAtLogin.errorMessage {
-                            HStack(spacing: 4) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundColor(.orange)
-                                    .font(.caption)
-                                Text(error)
-                                    .font(.caption2)
-                                    .foregroundColor(.orange)
-                            }
-                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
-                    .padding(12)
+                    .padding(14)
                     .background(
                         RoundedRectangle(cornerRadius: 10)
                             .fill(Color(NSColor.controlBackgroundColor))
                     )
+
+                    if launchAtLogin.hasError, let error = launchAtLogin.errorMessage {
+                        HStack(spacing: 4) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                                .font(.caption)
+                            Text(error)
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                        }
+                    }
                 }
 
                 Divider()
 
                 // セクション1: ショートカット設定
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("グローバルショートカット")
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("ショートカット")
                         .font(.headline)
 
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        // 音声入力起動
                         HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("音声入力起動ショートカット")
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                                Text("どのアプリを使っていても、このキー操作で即座に音声入力を呼び出せます。")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
+                            Text("音声入力")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
 
                             Spacer()
 
                             Text(settings.hotkeyDisplayString)
-                                .font(.system(.title3, design: .monospaced))
+                                .font(.system(.subheadline, design: .monospaced))
                                 .fontWeight(.bold)
                                 .foregroundColor(.accentColor)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 5)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
                                 .background(
                                     RoundedRectangle(cornerRadius: 6)
                                         .fill(Color.accentColor.opacity(0.12))
                                 )
-                        }
-
-                        HStack {
-                            Text("キーの選択:")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
 
                             Picker("", selection: Binding(
                                 get: { settings.hotkeyDisplayString },
@@ -151,54 +131,39 @@ public struct ShortcutSettingsTab: View {
                             }
                             .pickerStyle(.menu)
                             .labelsHidden()
+                            .frame(width: 140)
                         }
-                    }
-                    .padding(12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color(NSColor.controlBackgroundColor))
-                    )
 
-                    // AI クイック質問ショートカット (英単語スペルや計算などをAIに最小文字数で質問)
-                    VStack(alignment: .leading, spacing: 10) {
+                        Divider()
+
+                        // クイック質問
                         HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text("AI クイック質問ショートカット")
-                                        .font(.subheadline)
-                                        .fontWeight(.semibold)
-                                    Text("新機能")
-                                        .font(.caption2)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.purple)
-                                        .padding(.horizontal, 5)
-                                        .padding(.vertical, 1)
-                                        .background(Color.purple.opacity(0.12))
-                                        .cornerRadius(4)
-                                }
-                                Text("英単語のスペル確認や計算などをAIに超簡潔に質問します。修飾キー（⌃⇧）を押したまま再度Spaceを押すと、前の会話を維持して続けて質問・修正できます。")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                            HStack(spacing: 6) {
+                                Text("クイック質問")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Text("AI")
+                                    .font(.caption2)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.purple)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1)
+                                    .background(Color.purple.opacity(0.12))
+                                    .cornerRadius(4)
                             }
 
                             Spacer()
 
                             Text(settings.quickAskHotkeyDisplayString)
-                                .font(.system(.title3, design: .monospaced))
+                                .font(.system(.subheadline, design: .monospaced))
                                 .fontWeight(.bold)
                                 .foregroundColor(.purple)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 5)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
                                 .background(
                                     RoundedRectangle(cornerRadius: 6)
                                         .fill(Color.purple.opacity(0.12))
                                 )
-                        }
-
-                        HStack {
-                            Text("キーの選択:")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
 
                             Picker("", selection: Binding(
                                 get: { settings.quickAskHotkeyDisplayString },
@@ -218,78 +183,65 @@ public struct ShortcutSettingsTab: View {
                             }
                             .pickerStyle(.menu)
                             .labelsHidden()
+                            .frame(width: 140)
+                        }
+
+                        Divider()
+
+                        // 動作モード (Push-to-Talk vs Toggle)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("録音動作:")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+
+                            Picker("", selection: $settings.triggerMode) {
+                                Text("長押し (離すと入力)").tag(TriggerMode.pushToTalk)
+                                Text("トグル (押して開始/停止)").tag(TriggerMode.toggle)
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                        }
+
+                        Divider()
+
+                        // 文体・推敲モード
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("推敲モード:")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Spacer()
+                                Text(settings.refinementStyle == .casual ? "話し言葉・語尾を保持" : "書き言葉に校正")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Picker("", selection: $settings.refinementStyle) {
+                                ForEach(RefinementStyle.allCases) { style in
+                                    Text(style.title).tag(style)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
                         }
                     }
-                    .padding(12)
+                    .padding(14)
                     .background(
                         RoundedRectangle(cornerRadius: 10)
                             .fill(Color(NSColor.controlBackgroundColor))
                     )
-
-                    // 録音・入力のトリガー動作 (Push-to-Talk vs Toggle)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("録音・入力の動作モード:")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-
-                        Picker("", selection: $settings.triggerMode) {
-                            Text("長押し入力 (離すと自動出力)").tag(TriggerMode.pushToTalk)
-                            Text("トグル (1回で開始、もう1回で停止)").tag(TriggerMode.toggle)
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-
-                        if settings.triggerMode == .pushToTalk {
-                            Text("【推奨】キーを押している間だけ話します。キーを離した瞬間に自動で文字起こし・AI推敲され、カーソル位置に入力されます。")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("1回キーを押して録音を開始し、話し終わったらもう一度押して文字起こし・AI推敲・入力します。")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-
-                    Divider()
-                        .padding(.vertical, 2)
-
-                    // 文体・推敲スタイル（口語モード / 文章モード）
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("文体・推敲モード:")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                            Spacer()
-                            Text(settings.refinementStyle == .casual ? "語尾・終助詞を100%保持" : "整った書き言葉に校正")
-                                .font(.caption2)
-                                .foregroundColor(.accentColor)
-                        }
-
-                        Picker("", selection: $settings.refinementStyle) {
-                            ForEach(RefinementStyle.allCases) { style in
-                                Text(style.title).tag(style)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-
-                        Text(settings.refinementStyle.description)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                 }
 
                 Divider()
 
-                // セクション: 入力プレビュー・保留ウィンドウ (⌘+Enterでどこでも挿入)
-                VStack(alignment: .leading, spacing: 12) {
+                // セクション: 保留・プレビュー
+                VStack(alignment: .leading, spacing: 10) {
                     HStack {
-                        Text("入力プレビュー・保留ウィンドウ")
+                        Text("保留・プレビュー")
                             .font(.headline)
                         Spacer()
                         if settings.floatingPreviewEnabled {
-                            Text("\(settings.pasteShortcutDisplayString) で入力")
+                            Text("\(settings.pasteShortcutDisplayString) でペースト")
                                 .font(.caption2)
                                 .fontWeight(.bold)
                                 .foregroundColor(.accentColor)
@@ -303,29 +255,17 @@ public struct ShortcutSettingsTab: View {
                     }
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Toggle(isOn: $settings.floatingPreviewEnabled) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("画面下部にプレビュー・保留ウィンドウを表示する")
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                Text("入力先フィールドを選択し忘れていても安心。生成されたテキストを画面中央下部に保持し、入力先をクリックしてから【\(settings.pasteShortcutDisplayString)】で即座に入力できます。")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
+                        Toggle("画面下部に保留ウィンドウを表示する", isOn: $settings.floatingPreviewEnabled)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
 
                         if settings.floatingPreviewEnabled {
                             Divider()
 
                             HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("テキスト挿入（ペースト）キー:")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                    Text("保留ウィンドウの内容を入力欄にペーストするキー")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
+                                Text("ペーストキー:")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
 
                                 Spacer()
 
@@ -351,43 +291,30 @@ public struct ShortcutSettingsTab: View {
 
                             Divider()
 
-                            Toggle(isOn: $settings.autoPasteEnabled) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("音声入力完了時に直接自動ペーストも行う")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                    Text("オンにすると、フォーカス中のアプリに即時入力しつつ再入力・確認用としてウィンドウを残します。オフにすると、\(settings.pasteShortcutDisplayString)を押すまで自動入力されなくなります。")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
+                            Toggle("音声入力完了時に直接自動ペーストも行う", isOn: $settings.autoPasteEnabled)
+                                .font(.subheadline)
 
                             Divider()
 
                             HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("自動で閉じる時間:")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                    Text("キー入力や操作をせず放置した場合に閉じるまでの時間")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
+                                Text("自動で閉じる時間:")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
 
                                 Spacer()
 
                                 Picker("", selection: $settings.floatingPreviewDuration) {
                                     Text("30秒").tag(30.0)
-                                    Text("45秒 (推奨)").tag(45.0)
+                                    Text("45秒").tag(45.0)
                                     Text("60秒").tag(60.0)
-                                    Text("自動で閉じない (手動/⌘+Enterのみ)").tag(0.0)
+                                    Text("閉じない").tag(0.0)
                                 }
                                 .pickerStyle(.menu)
                                 .labelsHidden()
                             }
                         }
                     }
-                    .padding(12)
+                    .padding(14)
                     .background(
                         RoundedRectangle(cornerRadius: 10)
                             .fill(Color(NSColor.controlBackgroundColor))
@@ -396,8 +323,8 @@ public struct ShortcutSettingsTab: View {
 
                 Divider()
 
-                // セクション2: 入力マイク設定 (ワイヤレスイヤホン等の選択と自動フォールバック)
-                VStack(alignment: .leading, spacing: 12) {
+                // セクション2: 入力マイク
+                VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         Text("入力マイク")
                             .font(.headline)
@@ -407,7 +334,7 @@ public struct ShortcutSettingsTab: View {
                         }) {
                             HStack(spacing: 4) {
                                 Image(systemName: "arrow.clockwise")
-                                Text("マイク一覧を更新")
+                                Text("更新")
                             }
                         }
                         .buttonStyle(.borderless)
@@ -415,11 +342,13 @@ public struct ShortcutSettingsTab: View {
                         .foregroundColor(.accentColor)
                     }
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("使用するマイク:")
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("マイク:")
                                 .font(.subheadline)
                                 .fontWeight(.medium)
+
+                            Spacer()
 
                             Picker("", selection: Binding(
                                 get: { settings.selectedAudioDeviceUID },
@@ -438,51 +367,31 @@ public struct ShortcutSettingsTab: View {
                                 Text("システムデフォルト (\(defaultName))").tag("")
 
                                 ForEach(audioDevices.availableDevices) { device in
-                                    Text(device.name + (device.isSystemDefault ? " (システム既定)" : "")).tag(device.id)
+                                    Text(device.name + (device.isSystemDefault ? " (既定)" : "")).tag(device.id)
                                 }
                             }
                             .pickerStyle(.menu)
                             .labelsHidden()
-
-                            Text("※ 選択したマイク（ワイヤレスイヤホン等）が切断・未検出の場合は、自動的にシステムデフォルトのマイクで録音を行います。")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
                         }
 
-                        // 現在の実効ステータス・フォールバック警告表示
-                        HStack(spacing: 8) {
+                        // ステータス表示
+                        HStack(spacing: 6) {
                             if audioDevices.isFallbackActive {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .foregroundColor(.orange)
-                                    .font(.subheadline)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text("自動フォールバック中: \(audioDevices.effectiveDeviceName)")
-                                        .font(.caption)
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(.orange)
-                                    if let reason = audioDevices.fallbackReason {
-                                        Text(reason)
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
+                                Text("フォールバック中: \(audioDevices.effectiveDeviceName)")
+                                    .foregroundColor(.orange)
                             } else {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundColor(.green)
-                                    .font(.subheadline)
-                                Text("現在有効なマイク: \(audioDevices.effectiveDeviceName)")
-                                    .font(.caption)
+                                Text("有効: \(audioDevices.effectiveDeviceName)")
                                     .foregroundColor(.secondary)
                             }
                             Spacer()
                         }
-                        .padding(8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(audioDevices.isFallbackActive ? Color.orange.opacity(0.12) : Color.green.opacity(0.08))
-                        )
+                        .font(.caption)
                     }
-                    .padding(12)
+                    .padding(14)
                     .background(
                         RoundedRectangle(cornerRadius: 10)
                             .fill(Color(NSColor.controlBackgroundColor))
@@ -491,25 +400,15 @@ public struct ShortcutSettingsTab: View {
 
                 Divider()
 
-                // セクション3: 音声入力しきい値 (小さな音の除外 / ノイズゲート)
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("音声入力しきい値 (ノイズゲート)")
-                            .font(.headline)
-                        Spacer()
-                    }
+                // セクション3: 音声しきい値 (ノイズゲート)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("音声しきい値 (ノイズゲート)")
+                        .font(.headline)
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Toggle(isOn: $settings.audioThresholdEnabled) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("小さな音を自動除外する (声の音量のみ入力)")
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                Text("打鍵音・呼吸音・周囲の雑音などの小さな音を拾わず、一定以上の音量で発話された音声のみを入力対象にします。")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
+                        Toggle("小さな音を除外する (声の音量のみ入力)", isOn: $settings.audioThresholdEnabled)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
 
                         if settings.audioThresholdEnabled {
                             Divider()
@@ -517,7 +416,7 @@ public struct ShortcutSettingsTab: View {
                             // 感度プリセット & スライダー
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
-                                    Text("最小入力音量しきい値:")
+                                    Text("入力しきい値:")
                                         .font(.subheadline)
                                         .fontWeight(.medium)
 
@@ -539,7 +438,7 @@ public struct ShortcutSettingsTab: View {
                                                 .font(.system(size: 11, weight: abs(settings.audioThresholdDB - preset.thresholdDB) < 0.5 ? .bold : .regular))
                                                 .foregroundColor(abs(settings.audioThresholdDB - preset.thresholdDB) < 0.5 ? .accentColor : .primary)
                                                 .padding(.horizontal, 8)
-                                                .padding(.vertical, 5)
+                                                .padding(.vertical, 4)
                                                 .background(
                                                     RoundedRectangle(cornerRadius: 6)
                                                         .fill(abs(settings.audioThresholdDB - preset.thresholdDB) < 0.5 ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
@@ -566,47 +465,30 @@ public struct ShortcutSettingsTab: View {
                                 ) {
                                     Text("しきい値")
                                 } minimumValueLabel: {
-                                    Text("-50dB (低)")
+                                    Text("-50dB")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 } maximumValueLabel: {
-                                    Text("-15dB (高)")
+                                    Text("-15dB")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
-
-                                Text("※ しきい値より小さな音（打鍵音や雑音）は文字起こしされず、自動的に無視されます。")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
                             }
 
                             Divider()
 
                             // 無音・打鍵音トリミング
-                            Toggle(isOn: $settings.audioTrimmingEnabled) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("発話前後の微小音・打鍵音を自動カット")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                    Text("キーを押した瞬間や離した瞬間の音、息継ぎを除去し、声の部分だけを文字起こしします。")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
+                            Toggle("前後の微小音・打鍵音を自動カット", isOn: $settings.audioTrimmingEnabled)
+                                .font(.subheadline)
 
                             Divider()
 
-                            // リアルタイムマイクテスト & レベルメーター
+                            // リアルタイムマイクテスト
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("マイク入力レベルテスト")
-                                            .font(.subheadline)
-                                            .fontWeight(.semibold)
-                                        Text("声を出したりキーボードを叩いて、現在の音量としきい値を確認できます。")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
+                                    Text("入力レベルテスト")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
 
                                     Spacer()
 
@@ -619,7 +501,7 @@ public struct ShortcutSettingsTab: View {
                                     }) {
                                         HStack(spacing: 4) {
                                             Image(systemName: micTester.isTesting ? "stop.fill" : "play.fill")
-                                            Text(micTester.isTesting ? "テスト停止" : "テスト開始")
+                                            Text(micTester.isTesting ? "停止" : "開始")
                                         }
                                     }
                                     .buttonStyle(.bordered)
@@ -627,7 +509,6 @@ public struct ShortcutSettingsTab: View {
                                     .controlSize(.small)
                                 }
 
-                                // レベルメーターバー
                                 AudioLevelMeterView(
                                     currentDB: micTester.currentLevelDB,
                                     thresholdDB: settings.audioThresholdDB,
@@ -637,16 +518,16 @@ public struct ShortcutSettingsTab: View {
                                 if micTester.isTesting {
                                     HStack {
                                         if micTester.isSpeechDetected {
-                                            Label("声として検知中 (音声入力対象)", systemImage: "checkmark.circle.fill")
+                                            Label("音声を検知中", systemImage: "checkmark.circle.fill")
                                                 .font(.caption)
                                                 .foregroundColor(.green)
                                         } else {
-                                            Label("小さな音 (除外対象)", systemImage: "speaker.slash.fill")
+                                            Label("待機中 (しきい値未満)", systemImage: "speaker.slash.fill")
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
                                         }
                                         Spacer()
-                                        Text(String(format: "現在: %.0f dB", micTester.currentLevelDB))
+                                        Text(String(format: "%.0f dB", micTester.currentLevelDB))
                                             .font(.system(.caption, design: .monospaced))
                                             .foregroundColor(.secondary)
                                     }
@@ -660,7 +541,7 @@ public struct ShortcutSettingsTab: View {
                             }
                         }
                     }
-                    .padding(12)
+                    .padding(14)
                     .background(
                         RoundedRectangle(cornerRadius: 10)
                             .fill(Color(NSColor.controlBackgroundColor))
@@ -669,42 +550,25 @@ public struct ShortcutSettingsTab: View {
 
                 Divider()
 
-                // セクション3: 入力モード & 音声言語
+                // セクション4: 言語・翻訳
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("入力モード & 音声言語")
+                    Text("言語・翻訳")
                         .font(.headline)
 
                     VStack(alignment: .leading, spacing: 12) {
-                        // 動作モード選択
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("動作モード:")
+                            Text("モード:")
                                 .font(.subheadline)
                                 .fontWeight(.medium)
 
                             Picker("", selection: $settings.apiMode) {
                                 Text("文字起こし (通常入力)").tag(SpeechAPIMode.transcriptions)
-                                Text("英語翻訳 (日本語音声→英文入力)").tag(SpeechAPIMode.translations)
+                                Text("英語翻訳 (日本語音声→英語)").tag(SpeechAPIMode.translations)
                             }
                             .pickerStyle(.segmented)
                             .labelsHidden()
-
-                            if settings.apiMode == .transcriptions {
-                                Text("発話した言語のままテキスト化します（通常の音声入力はこちら）。")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("日本語などの音声を自動的に「英語」へ翻訳してテキスト入力します。")
-                                        .font(.caption)
-                                        .foregroundColor(.orange)
-                                    Text("※ Groq利用時、翻訳機能は翻訳対応モデル (whisper-large-v3) で自動実行されます。")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
                         }
 
-                        // 音声言語設定 (文字起こしモード時のみ)
                         if settings.apiMode == .transcriptions {
                             Divider()
 
@@ -715,11 +579,11 @@ public struct ShortcutSettingsTab: View {
 
                                 HStack(spacing: 8) {
                                     Button(action: { settings.language = "" }) {
-                                        Text("自動判別 (日英両用)")
+                                        Text("自動判別")
                                             .font(.system(size: 11, weight: settings.language.isEmpty ? .bold : .regular))
                                             .foregroundColor(settings.language.isEmpty ? .accentColor : .primary)
                                             .padding(.horizontal, 10)
-                                            .padding(.vertical, 5)
+                                            .padding(.vertical, 4)
                                             .background(
                                                 RoundedRectangle(cornerRadius: 6)
                                                     .fill(settings.language.isEmpty ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
@@ -736,7 +600,7 @@ public struct ShortcutSettingsTab: View {
                                             .font(.system(size: 11, weight: settings.language == "ja" ? .bold : .regular))
                                             .foregroundColor(settings.language == "ja" ? .accentColor : .primary)
                                             .padding(.horizontal, 10)
-                                            .padding(.vertical, 5)
+                                            .padding(.vertical, 4)
                                             .background(
                                                 RoundedRectangle(cornerRadius: 6)
                                                     .fill(settings.language == "ja" ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
@@ -753,7 +617,7 @@ public struct ShortcutSettingsTab: View {
                                             .font(.system(size: 11, weight: settings.language == "en" ? .bold : .regular))
                                             .foregroundColor(settings.language == "en" ? .accentColor : .primary)
                                             .padding(.horizontal, 10)
-                                            .padding(.vertical, 5)
+                                            .padding(.vertical, 4)
                                             .background(
                                                 RoundedRectangle(cornerRadius: 6)
                                                     .fill(settings.language == "en" ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
@@ -769,16 +633,10 @@ public struct ShortcutSettingsTab: View {
                                         .textFieldStyle(.roundedBorder)
                                         .frame(width: 55)
                                 }
-
-                                Text(settings.language.isEmpty
-                                     ? "話した言語（英語または日本語など）を自動検知してテキスト化します。"
-                                     : (settings.language == "en" ? "英語専用モードです。話した英語がそのまま英文で出力されます。" : "日本語固定モードです（英語を話すと日本語に自動翻訳されます）。"))
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
                             }
                         }
                     }
-                    .padding(12)
+                    .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         RoundedRectangle(cornerRadius: 10)
@@ -788,43 +646,28 @@ public struct ShortcutSettingsTab: View {
 
                 Divider()
 
-                // セクション3: クリップボード・入力動作
+                // セクション5: クリップボード
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("クリップボード・入力動作")
+                    Text("クリップボード")
                         .font(.headline)
 
-                    Toggle(isOn: $settings.restoreClipboard) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("ペースト後にクリップボード内容を元に戻す")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                            Text("一時的にペーストに使用したクリップボードを直前の内容に復元します。普段のコピーデータが保持されます。")
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("ペースト後にクリップボード内容を復元する", isOn: $settings.restoreClipboard)
+                            .font(.subheadline)
+
+                        HStack(spacing: 8) {
+                            Image(systemName: "shield.checkered")
+                                .foregroundColor(.green)
+                            Text("履歴アプリ (Raycast, Alfred, Maccy等) への除外保護が有効")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
                     }
-
-                    // 履歴除外保護カード
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "shield.checkered")
-                            .font(.title3)
-                            .foregroundColor(.green)
-                            .padding(.top, 2)
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("クリップボード履歴ツールへの除外保護が有効です")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-                            Text("自動ペースト時に org.nspasteboard.TransientType および org.nspasteboard.ConcealedType が付与されるため、Alfred、Raycast、Maccy、Clipy などの履歴管理アプリに音声入力テキストが記録されません。")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .padding(12)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.green.opacity(0.08))
+                            .fill(Color(NSColor.controlBackgroundColor))
                     )
                 }
             }
