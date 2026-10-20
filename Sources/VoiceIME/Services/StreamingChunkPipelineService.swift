@@ -19,9 +19,9 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
     private var isRunning: Bool = false
 
     // 息継ぎ検知 & レート制限パラメータ
-    private let minIntervalSeconds: Double = 3.2 // 1分間に最大約18〜19回 (60 / 18.5 ≈ 3.24秒)
+    private let minIntervalSeconds: Double = 2.4 // 1分間に最大約25回レート制限
     private var silenceThresholdRMS: Float = 0.015 // 音声入力しきい値と連動（デフォルト約 -36 dBFS）
-    private let minSilenceDuration: Double = 0.28 // 約0.28秒以上の無音（息継ぎ）
+    private let minSilenceDuration: Double = 0.20 // 約0.20秒以上の無音（息継ぎ）
     private var speechThresholdDB: Float = -38.0
 
     // 状態管理
@@ -134,17 +134,19 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             let totalAudioDuration = Double(totalSamples) / self.sampleRate
 
             // トリガー条件:
-            // A. 録音開始から最低2.0秒以上経過（話し始めの無音による誤送信を防止）
-            // B. 息継ぎ（無音）を検知（0.28秒以上）
-            // C. 前回の送信から3.2秒以上経過（1分間18〜19回制限）
-            // D. 前回送信時から新しい発話が1.2秒以上存在
+            // A. 録音開始から最低1.2秒以上経過
+            // B. 息継ぎ（無音 0.20秒以上）検知、または息継ぎがなくても新発話が2.2秒以上溜まったら定期トリガー
+            // C. 前回の送信から2.4秒以上経過（レート制限保護）
+            // D. 前回送信時から新しい発話が0.8秒以上存在
             // E. 現在通信中（isTranscribing）でない
-            let hasMinimumInitialAudio = (totalAudioDuration >= 2.0)
+            let hasMinimumInitialAudio = (totalAudioDuration >= 1.2)
             let isBreathPause = (silentDuration >= self.minSilenceDuration)
+            let isLongContinuousSpeech = (newAudioDuration >= 2.2)
+            let shouldTriggerBySpeech = (isBreathPause || isLongContinuousSpeech)
             let isRateLimitSatisfied = (timeSinceLastTrigger >= self.minIntervalSeconds)
-            let hasSufficientNewAudio = (newAudioDuration >= 1.2)
+            let hasSufficientNewAudio = (newAudioDuration >= 0.8)
 
-            if hasMinimumInitialAudio && isBreathPause && isRateLimitSatisfied && hasSufficientNewAudio && !self.isTranscribing {
+            if hasMinimumInitialAudio && shouldTriggerBySpeech && isRateLimitSatisfied && hasSufficientNewAudio && !self.isTranscribing {
                 self.lastTriggerTime = now
                 self.lastTriggerSampleCount = totalSamples
                 self.processCumulativePaperTheater(to: totalSamples)
