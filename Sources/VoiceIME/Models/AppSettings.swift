@@ -860,10 +860,10 @@ public final class AppSettings: ObservableObject {
             DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:(?:[ブぶ][レれ][ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|[Oo]pen brace)[ 　]*", replacement: "{", isRegex: true, isEnabled: true),
 
             // 9. 丸括弧 ) 閉じ (とじかっこ / とじまるかっこ / まるかっことじ / マルカコトジ)
-            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose parenthesis)", replacement: ")", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose paren(?:theses|s|thesis)?)", replacement: ")", isRegex: true, isEnabled: true),
 
             // 10. 丸括弧 ( 開き (ひらきかっこ / ひらきまるかっこ。名詞単体の「丸括弧」「かっこ」は保護)
-            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|[Oo]pen parenthesis)[ 　]*", replacement: "(", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|[Oo]pen paren(?:theses|s|thesis)?)[ 　]*", replacement: "(", isRegex: true, isEnabled: true),
 
             // 11. ダブルクォート "
             DictionaryRule(pattern: "((?:(?:[ひヒ][らラ][きキ]|開き|[と取ト][じちぢジ]|閉じ)[ 　]*)?(?:[ダだ][ブぶ][ルる])[ 　]*(?:[クく][ォオぉお]ー?[トどド]|コー[トどド]|くぉーと|くおーと)(?:[ 　]*(?:[と取ト][じちぢジ]|閉じ))?|[Oo]pen double quote|[Cc]lose double quote|double quote)", replacement: "\"", isRegex: true, isEnabled: true),
@@ -881,7 +881,7 @@ public final class AppSettings: ObservableObject {
             DictionaryRule(pattern: "[。、\\.,]*\\s*(!|[Ee]xclamation mark)\\s*[。、\\.,]*", replacement: "!", isRegex: true, isEnabled: true),
 
             // 16. 英語・英字向けの疑問符 (?)（前後に勝手に入ったピリオド「.」やカンマ「,」を巻き込んで半角「?」に置換）
-            DictionaryRule(pattern: "[。、\\.,]*\\s*(\\?|[Qq]uestion mark)\\s*[。、\\.,]*", replacement: "?", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[。、\\.,?？]*\\s*(\\?|[Qq]uestion mark|[クく][エえ][スす]?[ッっ]+[シしチち][ョょ][ンん][ 　]*[マま][ー‐-]*[クく])\\s*[。、\\.,?？]*", replacement: "?", isRegex: true, isEnabled: true),
 
             // 17. ピリオド → 半角ピリオド (.)（日英ゆらぎ吸収・前後の空白除去）
             DictionaryRule(pattern: "(?:[、。])?[ 　]*(?:ピリオド|ぴりおど|[Pp]eriod)(?:[ 　]*[、。](?![、。]))?", replacement: ".", isRegex: true, isEnabled: true),
@@ -890,7 +890,9 @@ public final class AppSettings: ObservableObject {
             DictionaryRule(pattern: "(?:[、。])?[ 　]*(?:カンマ|かんま|[Cc]omma)(?:[ 　]*[、。](?![、。]))?", replacement: "、", isRegex: true, isEnabled: true),
 
             // 19. まる/〇 → 句点 (。)。直前に。があれば重ねず単一。に(実質何もしない)。後ろに区切り・文末が必要
-            DictionaryRule(pattern: "(?:。)?[ 　]*(?:まる|マル|丸|〇|◯)(?:[ 　]*[、。](?![、。])|(?=[ 　。、，．.,!?！？「」『』（）()\\[\\]{}…\\s]|$))", replacement: "。", isRegex: true, isEnabled: true)
+            DictionaryRule(pattern: "(?:。)?[ 　]*(?:まる|マル|丸|〇|◯)(?:[ 　]*[、。](?![、。])|(?=[ 　。、，．.,!?！？「」『』（）()\\[\\]{}…\\s]|$))", replacement: "。", isRegex: true, isEnabled: true),
+            // 20. 日本語文末の半角 (?) → 全角 (？)。英語 (英字直後) は半角のまま
+            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[?]+[ 　]*[。、\\.,]*", replacement: "？", isRegex: true, isEnabled: true),
         ]
     }
 
