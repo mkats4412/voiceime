@@ -85,12 +85,10 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             self.whisperPrompt = whisperPrompt
             self.language = language
             self.speechThresholdDB = speechThresholdDB
-            // 音声入力しきい値（dBFS）から息継ぎ判定用の無音RMSを自動連動
-            // （発話判定しきい値より約4dB低い音量を「無音・息継ぎ区間」として判定）
-            let silenceDB = min(speechThresholdDB - 4.0, -34.0)
-            self.silenceThresholdRMS = pow(10.0, silenceDB / 20.0)
+            // ユーザー設定の音声入力しきい値（settings.audioThresholdDB）に直接結びつけ
+            self.silenceThresholdRMS = pow(10.0, speechThresholdDB / 20.0)
             self.isRunning = true
-            NSLog("[VoiceIME] 🎭 累積・紙芝居ストリーミングパイプラインを開始しました (発話しきい値: %.1f dB, 無音息継ぎしきい値: %.1f dB / RMS %.4f, 制限: 3.2秒/最大18回毎分)", speechThresholdDB, silenceDB, self.silenceThresholdRMS)
+            NSLog("[VoiceIME] 🎭 累積・紙芝居ストリーミングパイプラインを開始しました (音声しきい値: %.1f dB / RMS %.4f)", speechThresholdDB, self.silenceThresholdRMS)
         }
     }
 
@@ -517,10 +515,10 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         let stepSize = Int(sampleRate * 0.025)  // 25ms ステップ
         guard windowSize > 0, totalSamples >= windowSize else { return pcmData }
 
-        // 発話開始判定しきい値
+        // 発話開始判定しきい値（ユーザー設定の音声しきい値と連動）
         let startThresholdLinear = pow(10.0, speechThresholdDB / 20.0) * 32767.0
-        // 語尾終了判定しきい値（語尾の減衰を救うため、開始しきい値より約6dB低い音量まで拾う。最大でも -42 dBFS）
-        let trailingFloorDB = min(speechThresholdDB - 6.0, -42.0)
+        // 語尾終了判定しきい値（語尾の減衰を救うため、開始しきい値より約3dB低い音量まで許容）
+        let trailingFloorDB = speechThresholdDB - 3.0
         let trailingThresholdLinear = pow(10.0, trailingFloorDB / 20.0) * 32767.0
 
         var firstSpeechSample: Int? = nil
