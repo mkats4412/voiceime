@@ -897,11 +897,68 @@ public final class AppSettings: ObservableObject {
     }
 
     public static var defaultDictionaryRules: [DictionaryRule] {
-        var rules = [
-            DictionaryRule(pattern: "改行", replacement: "\\n", isRegex: false, isEnabled: true)
+        var rules: [DictionaryRule] = [
+            DictionaryRule(pattern: "改行", replacement: "\\n", isRegex: false, isEnabled: true),
+            DictionaryRule(pattern: "[。、，．\\.,]*[ 　]*(?:(?:(?:かく|カク|角|各|核|画|だい|ダイ|大|第|台|題)[ 　]*(?:かっこ|カッコ|括弧|[\\]］)）(（])|(?:スクエア[ 　]*)?(?:ブラケット|ぶらけっと))[ 　]*(?:とじ|閉じ|とじる|閉じる|綴じ|綴じる|と字|戸字|閉字|途次|刀自|十時|当時|同時|とし|トシ|都市|年|どじ|ドジ|とち|土地|都知|都地|途地|取り|とり|トリ|とぢ|トジ|トチ|どち|栃)|(?:とじ|閉じ|とじる|閉じる|綴じ|綴じる|と字|戸字|閉字|途次|刀自|十時|当時|同時|とし|トシ|都市|年|どじ|ドジ|とち|土地|都知|都地|途地|取り|とり|トリ|とぢ|トジ|トチ|どち|栃)[ 　。、，．\\.,]*(?:(?:かく|カク|角|各|核|画|だい|ダイ|大|第|台|題)[ 　]*(?:かっこ|カッコ|括弧|[\\]］)）(（])|(?:スクエア[ 　]*)?(?:ブラケット|ぶらけっと))|(?:クローズ|ライト|エンド)[ 　]*(?:スクエア[ 　]*)?ブラケット|(?:[Cc]los(?:e|ed|ing)|[Rr]ight|[Ee]nd)[ 　]+(?:square[ 　]+)?bracket(?:s\\b)?)[ 　]*[。、，．\\.,]*[\\]］)）]?", replacement: "]", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[\\[［(（]?[。、，．\\.,]*[ 　]*(?:(?:ひらき|開き)?[ 　]*(?:(?:かく|カク|角|各|核|画|だい|ダイ|大|第|台|題)[ 　]*(?:かっこ|カッコ|括弧|[(（\\[])|(?:スクエア[ 　]*)?(?:ブラケット|ぶらけっと))(?![ 　]*(?:とじ|閉じ|とじる|閉じる|綴じ|綴じる|と字|戸字|閉字|途次|刀自|十時|当時|同時|とし|トシ|都市|年|どじ|ドジ|とち|土地|都知|都地|途地|取り|とり|トリ|とぢ|トジ|トチ|どち|栃))|(?:オープン|レフト|ビギン)[ 　]*(?:スクエア[ 　]*)?ブラケット|(?:[Oo]pen(?:ing)?|[Ll]eft|[Bb]egin)[ 　]+(?:square[ 　]+)?bracket(?:s\\b)?)[ 　]*[。、，．\\.,]*[ 　]*", replacement: "[", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[。、，．\\.,]*[ 　]*(?:(?:(?:なみ|ナミ|波|並|並み|浪|ちゅう|チュウ|中|注|註|宙)[ 　]*(?:かっこ|カッコ|括弧|[\\}｝)）(（])|中学校|(?:カーリー[ 　]*)?(?:ブレース|ぶれーす|ブラケット))[ 　]*(?:とじ|閉じ|とじる|閉じる|綴じ|綴じる|と字|戸字|閉字|途次|刀自|十時|当時|同時|とし|トシ|都市|年|どじ|ドジ|とち|土地|都知|都地|途地|取り|とり|トリ|とぢ|トジ|トチ|どち|栃)|(?:とじ|閉じ|とじる|閉じる|綴じ|綴じる|と字|戸字|閉字|途次|刀自|十時|当時|同時|とし|トシ|都市|年|どじ|ドジ|とち|土地|都知|都地|途地|取り|とり|トリ|とぢ|トジ|トチ|どち|栃)[ 　。、，．\\.,]*(?:(?:なみ|ナミ|波|並|並み|浪|ちゅう|チュウ|中|注|註|宙)[ 　]*(?:かっこ|カッコ|括弧|[\\}｝)）(（])|中学校|(?:カーリー[ 　]*)?(?:ブレース|ぶれーす|ブラケット))|(?:クローズ|ライト|エンド)[ 　]*(?:カーリー[ 　]*)?(?:ブレース|ブラケット)|(?:[Cc]los(?:e|ed|ing)|[Rr]ight|[Ee]nd)[ 　]+(?:(?:curly[ 　]+)?brace(?:s\\b)?|curly[ 　]+bracket(?:s\\b)?))[ 　]*[。、，．\\.,]*[\\}｝)）]?", replacement: "}", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[\\{｛(（]?[。、，．\\.,]*[ 　]*(?:(?:ひらき|開き)?[ 　]*(?:(?:なみ|ナミ|波|並|並み|浪|ちゅう|チュウ|中|注|註|宙)[ 　]*(?:かっこ|カッコ|括弧|[(（\\{])|(?<![一-龥ァ-ヶー])中学校(?=.*[\\}｝]|[ 　]*[。、，．\\.,]+)|(?:カーリー[ 　]*)?(?:ブレース|ぶれーす|ブラケット))(?![ 　]*(?:とじ|閉じ|とじる|閉じる|綴じ|綴じる|と字|戸字|閉字|途次|刀自|十時|当時|同時|とし|トシ|都市|年|どじ|ドジ|とち|土地|都知|都地|途地|取り|とり|トリ|とぢ|トジ|トチ|どち|栃))|(?:オープン|レフト|ビギン)[ 　]*(?:カーリー[ 　]*)?(?:ブレース|ブラケット)|(?:[Oo]pen(?:ing)?|[Ll]eft|[Bb]egin)[ 　]+(?:(?:curly[ 　]+)?brace(?:s\\b)?|curly[ 　]+bracket(?:s\\b)?))[ 　]*[。、，．\\.,]*[ 　]*", replacement: "{", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[。、，．\\.,]*[ 　]*(?:(?:かぎ|カギ|鍵|鉤|限)[ 　]*(?:かっこ|カッコ|括弧|[」』)）(（])[ 　]*(?:とじ|閉じ|とじる|閉じる|綴じ|綴じる|と字|戸字|閉字|途次|刀自|十時|当時|同時|とし|トシ|都市|年|どじ|ドジ|とち|土地|都知|都地|途地|取り|とり|トリ|とぢ|トジ|トチ|どち|栃)|(?:とじ|閉じ|とじる|閉じる|綴じ|綴じる|と字|戸字|閉字|途次|刀自|十時|当時|同時|とし|トシ|都市|年|どじ|ドジ|とち|土地|都知|都地|途地|取り|とり|トリ|とぢ|トジ|トチ|どち|栃)[ 　。、，．\\.,]*(?:かぎ|カギ|鍵|鉤|限)[ 　]*(?:かっこ|カッコ|括弧|[」』)）(（])|[Cc]los(?:e|ed|ing)[ 　]+quote(?:s\\b)?)[ 　]*[。、，．\\.,]*[」』)）]?", replacement: "」", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[「『(（]?[。、，．\\.,]*[ 　]*(?:(?:ひらき|開き)?[ 　]*(?:かぎ|カギ|鍵|鉤|限)[ 　]*(?:かっこ|カッコ|括弧|[(（「])(?![ 　]*(?:とじ|閉じ|とじる|閉じる|綴じ|綴じる|と字|戸字|閉字|途次|刀自|十時|当時|同時|とし|トシ|都市|年|どじ|ドジ|とち|土地|都知|都地|途地|取り|とり|トリ|とぢ|トジ|トチ|どち|栃))|[Oo]pen(?:ing)?[ 　]+quote(?:s\\b)?)[ 　]*[。、，．\\.,]*[ 　]*", replacement: "「", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[。、\\.,]*\\s*(!|[Ee]xclamation mark)\\s*[。、\\.,]*", replacement: "!", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[。、\\.,]*\\s*(\\?|[Qq]uestion mark)\\s*[。、\\.,]*", replacement: "?", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "([0-9]{3})([0-9]{4})", replacement: "〒$1-$2", isRegex: true, isEnabled: false),
+            DictionaryRule(pattern: "([と取][じちぢ]|閉じ?)[ 　]*(?:かぎ|鍵)[ 　]*(?:かっこ|括弧|カッコ)|(?:かぎ|鍵)[ 　]*(?:かっこ|括弧|カッコ)[ 　]*([と取][じちぢ]|閉じ?)|[Cc]lose quote", replacement: "」", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:ひらき|開き)[ 　]*(?:かぎ|鍵)[ 　]*(?:かっこ|括弧|カッコ)|[Oo]pen quote", replacement: "「", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "([と取][じちぢ]|閉じ?)[ 　]*(?:(?:ブラケット|ぶらけっと)|(?:かく|角)[ 　]*(?:かっこ|括弧|カッコ))|(?:(?:ブラケット|ぶらけっと)|(?:かく|角)[ 　]*(?:かっこ|括弧|カッコ))[ 　]*([と取][じちぢ]|閉じ?)|[Cc]lose bracket", replacement: "]", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:ひらき|開き)[ 　]*(?:(?:ブラケット|ぶらけっと)|(?:かく|角)[ 　]*(?:かっこ|括弧|カッコ))|[Oo]pen bracket", replacement: "[", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "([と取][じちぢ]|閉じ?)[ 　]*(?:(?:ブレース|ぶれーす)|(?:なみ|波)[ 　]*(?:かっこ|括弧|カッコ))|(?:(?:ブレース|ぶれーす)|(?:なみ|波)[ 　]*(?:かっこ|括弧|カッコ))[ 　]*([と取][じちぢ]|閉じ?)|[Cc]lose brace", replacement: "}", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:ひらき|開き)[ 　]*(?:(?:ブレース|ぶれーす)|(?:なみ|波)[ 　]*(?:かっこ|括弧|カッコ))|[Oo]pen brace", replacement: "{", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "((?:(?:ひらき|開き|[と取][じちぢ]|閉じ)[ 　]*)?(?:ダブル|だぶる)[ 　]*(?:ク[ォオ]ー?[トド]|コー[トド]|くぉーと|くおーと)(?:[ 　]*(?:[と取][じちぢ]|閉じ))?|[Oo]pen double quote|[Cc]lose double quote|double quote)", replacement: "\"", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "((?:(?:ひらき|開き|[と取][じちぢ]|閉じ)[ 　]*)?(?:シングル|しんぐる)[ 　]*(?:ク[ォオ]ー?[トド]|コー[トド]|くぉーと|くおーと)(?:[ 　]*(?:[と取][じちぢ]|閉じ))?|[Oo]pen single quote|[Cc]lose single quote|single quote)", replacement: "'", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "([と取ト][じちぢジ]|閉じ?)[ 　]*(?:[かカ][ぎギ]|鍵)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|(?:[かカ][ぎギ]|鍵)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose quote", replacement: "」", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:[かカ][ぎギ]|鍵)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|[Oo]pen quote", replacement: "「", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "([と取ト][じちぢジ]|閉じ?)[ 　]*(?:(?:[ブぶ][ラら][ケけ][ッッ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|(?:(?:[ブぶ][ラら][ケけ][ッッ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose bracket", replacement: "]", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:(?:[ブぶ][ラら][ケけ][ッッ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|[Oo]pen bracket", replacement: "[", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "([と取ト][じちぢジ]|閉じ?)[ 　]*(?:(?:[ブぶ][レれ][ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|(?:(?:[ブぶ][レれ][ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose brace", replacement: "}", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:(?:[ブぶ][レれ][ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|[Oo]pen brace", replacement: "{", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "([と取ト][じちぢジ]|閉じ?)[ 　]*(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose parenthesis", replacement: ")", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|[Oo]pen parenthesis", replacement: "(", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "((?:(?:[ひヒ][らラ][きキ]|開き|[と取ト][じちぢジ]|閉じ)[ 　]*)?(?:[ダだ][ブぶ][ルる])[ 　]*(?:[クく][ォオぉお]ー?[トどド]|コー[トどド]|くぉーと|くおーと)(?:[ 　]*(?:[と取ト][じちぢジ]|閉じ))?|[Oo]pen double quote|[Cc]lose double quote|double quote)", replacement: "\"", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "((?:(?:[ひヒ][らラ][きキ]|開き|[と取ト][じちぢジ]|閉じ)[ 　]*)?(?:[シし][ンん][グぐ][ルる])[ 　]*(?:[クく][ォオぉお]ー?[トどド]|コー[トどド]|くぉーと|くおーと)(?:[ 　]*(?:[と取ト][じちぢジ]|閉じ))?|[Oo]pen single quote|[Cc]lose single quote|single quote)", replacement: "'", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "([と取ト][じちぢジ]|閉じ?)[ 　]*(?:(?:[ブぶ][ラら][ケけ][ッっ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|(?:(?:[ブぶ][ラら][ケけ][ッっ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose bracket", replacement: "]", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:(?:[ブぶ][ラら][ケけ][ッっ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|[Oo]pen bracket", replacement: "[", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥a-zA-Z0-9])[。、\\.,]*[ 　]*[!！]+[ 　]*[。、\\.,]*", replacement: "！", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥a-zA-Z0-9])[。、\\.,]*[ 　]*[?？]+[ 　]*[。、\\.,]*", replacement: "？", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[ 　]*[!！]+[ 　]*[。、\\.,]*", replacement: "！", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[ 　]*[?？]+[ 　]*[。、\\.,]*", replacement: "？", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:[かカ][ぎギ]|鍵)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|(?:[かカ][ぎギ]|鍵)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose quote)", replacement: "」", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:[かカ][ぎギ]|鍵)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|[Oo]pen quote)[ 　]*", replacement: "「", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:(?:[ブぶ][ラら][ケけ][ッっ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|(?:(?:[ブぶ][ラら][ケけ][ッっ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose bracket)", replacement: "]", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:(?:[ブぶ][ラら][ケけ][ッっ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|[Oo]pen bracket)[ 　]*", replacement: "[", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:(?:[ブぶ][レれ][ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|(?:(?:[ブぶ][レれ][ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose brace)", replacement: "}", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:(?:[ブぶ][レれ][ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|[Oo]pen brace)[ 　]*", replacement: "{", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose parenthesis)", replacement: ")", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|[Oo]pen parenthesis)[ 　]*", replacement: "(", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[ 　]*(?:ピリオド|ぴりおど|[Pp]eriod)[ 　]*", replacement: ".", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:[、。])?[ 　]*(?:カンマ|かんま|[Cc]omma)(?:[ 　]*[、。](?![、。]))?", replacement: "、", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:[、。])?[ 　]*(?:ピリオド|ぴりおど|[Pp]eriod)(?:[ 　]*[、。](?![、。]))?", replacement: ".", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:(?:[ブぶ][レれ][イい]?[ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|(?:(?:[ブぶ][レれ][イい]?[ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose brace)", replacement: "}", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:(?:[ブぶ][レれ][イい]?[ー|ー]?[スす])|(?:[なナ][みミ]|波)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|[Oo]pen brace)[ 　]*", replacement: "{", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose paren(?:theses|s|thesis)?)", replacement: ")", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:[まマ][るル]|丸)?[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|[Oo]pen paren(?:theses|s|thesis)?)[ 　]*", replacement: "(", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "[。、\\.,?？]*\\s*(\\?|[Qq]uestion mark|[クく][エえ][スす]?[ッっ]+[シしチち][ョょ][ンん][ 　]*[マま][ー‐-]*[クく])\\s*[。、\\.,?？]*", replacement: "?", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[?]+[ 　]*[。、\\.,]*", replacement: "？", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:にれん|二連|[2２]連)[ 　]*(?:さんてん|三[点天]|[3３][点天])[ 　]*(?:リーダー|りーだー)(?:[ 　]*[、。](?![、。]))?", replacement: "……", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:(?:さんてん|三[点天]|[3３][点天])[ 　]*(?:リーダー|りーだー)|(?:スリー|[Tt]hree|3|３|三|さん)[ 　]*(?:ドッツ|ドッズ|どっつ|[Dd]ots?))(?:[ 　]*[、。](?![、。]))?", replacement: "…", isRegex: true, isEnabled: true),
+            DictionaryRule(pattern: "(?:。)?[ 　]*(?:まる|マル|丸|〇|◯)(?:[ 　]*[、。](?![、。])|(?=[ 　。、，．.,!?！？「」『』（）()\\[\\]{}…\\s]|$))", replacement: "。", isRegex: true, isEnabled: true),
         ]
-        rules.append(contentsOf: symbolDictionaryRules)
-        rules.append(DictionaryRule(pattern: "([0-9]{3})([0-9]{4})", replacement: "〒$1-$2", isRegex: true, isEnabled: false))
+        // symbolDictionaryRules で未定義のものがあれば確実に追加
+        for symbol in symbolDictionaryRules {
+            if !rules.contains(where: { $0.pattern == symbol.pattern }) {
+                rules.append(symbol)
+            }
+        }
         return rules
     }
 
