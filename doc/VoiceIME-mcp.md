@@ -1,5 +1,8 @@
 # VoiceIME MCP (Model Context Protocol) 連携ガイド
 
+> **AIエージェントがWhisperの認識癖を高度な正規表現で自動調教し、TTS音声による無発声テストまで自律完結する自己進化型IME基盤。**  
+> 複雑なゆらぎ吸収ルールの生成から、テスト音声の投入・検証・アプリ即時反映まで、エージェントとの対話だけでVoiceIMEを育てることができます。
+
 VoiceIME は、**MCP (Model Context Protocol)** を標準サポートしています。  
 Claude Desktop、Cursor、Cline、Windsurf、Antigravity などの AI コーディング環境・エージェントから、VoiceIME の辞書設定、単語登録、LLM推敲プロンプト、リアルタイムログ監視、音声文字起こしテストを直接対話・自動操作できます。
 
