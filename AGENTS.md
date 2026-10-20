@@ -8,7 +8,7 @@
 
 **コードチェック、静的解析、リファクタリング、バグ修正、機能追加を行う前に、必ず事前スキル [voiceime-pre-check](.agents/skills/voiceime-pre-check/SKILL.md) または [ARCHITECTURE_GUARDRAILS.md](ARCHITECTURE_GUARDRAILS.md) を読み込み、禁止事項を確認してください。**
 
-### 厳守すべき 3 大保護領域
+### 厳守すべき 4 大保護領域
 1. **CoreAudio / AVAudioEngine**:
    - `engine.inputNode.auAudioUnit.setDeviceID` の呼び出しは絶対禁止（エラー `-10868` でクラッシュします）。
    - `inputNode.installTap` には必ず `inputNode.outputFormat(forBus: 0)` を渡すこと。
@@ -16,7 +16,10 @@
    - macOS 標準の STT（Apple Speech / SFSpeechRecognizer）の出力を画面に出すのは厳禁。画面には **Whisper（StreamingChunkPipelineService）からの認識結果のみ** を出力すること。
    - `LiveSpeechService.shared.startLiveRecognition` のコールバックは `{ _ in }` とし、Apple STT でプレビューを上書きしてはいけません。
    - キー（`Ctrl+Space`）を押している最中（手を離す前）に、Whisperから届いた速報（`updatePipelineText`）がリアルタイムにフローティング画面に出力され、**「目視確認できる状態」** を絶対に維持すること。
-3. **キーチェーン認証ガイダンス**:
+3. **音声入力しきい値のユーザー設定直結と無音時送信の完全防止**:
+   - `StreamingChunkPipelineService` のしきい値に勝手なオフセット（`-4.0dB` や `-34.0dB`）をハードコードしないこと。必ずユーザーが設定画面で調整した `settings.audioThresholdDB` に 1:1 でダイレクトに連動させること。
+   - トリガー判定は単なる経過サンプル数（`newAudioDuration`）ではなく、必ず音量しきい値を超えた **有声発話時間（`speechFramesSinceLastTrigger` / `newSpeechDuration`）** を用いること。話していない沈黙中に同じテキストを Whisper API に連続送信（無駄送信ループ）させてはいけません。
+4. **キーチェーン認証ガイダンス**:
    - アプリ差し替え後の初回起動時には「VoiceIME: macOS キーチェーン認証のご案内」モーダルを出し、起動時に事前認証（`warmUp`）を完了させること。
    - ただし `--mcp`（MCP サーバー）モードでは GUI を起動せず完全サイレント動作とすること。
 
