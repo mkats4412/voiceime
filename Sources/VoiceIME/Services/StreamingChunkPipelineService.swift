@@ -60,6 +60,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         language: String? = "ja",
         speechThresholdDB: Float = -38.0
     ) {
+        PipelineLogger.shared.logDebug("🎭 StreamingChunkPipelineService.start() 呼び出し (baseURL: \(whisperConfig.baseURL), model: \(whisperConfig.model), hasKey: \(whisperConfig.apiKey != nil))")
         queue.async { [weak self] in
             guard let self = self else { return }
             self.currentProcessingTask?.cancel()
@@ -155,6 +156,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             if shouldTrigger {
                 self.lastTriggerTime = now
                 self.lastTriggerSampleCount = totalSamples
+                PipelineLogger.shared.logDebug("⚡ 紙芝居トリガー成立! (totalAudio: \(String(format: "%.2f", totalAudioDuration))s, silent: \(String(format: "%.2f", silentDuration))s, isFirst: \(isFirstTrigger))")
                 self.processCumulativePaperTheater(to: totalSamples)
             }
         }
@@ -162,7 +164,10 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
 
     /// 0秒〜endSample までの累積音声を丸ごと送信し、紙芝居のように画面を上書き更新
     private func processCumulativePaperTheater(to endSample: Int) {
-        guard let whisperConfig = currentWhisperConfig else { return }
+        guard let whisperConfig = currentWhisperConfig else {
+            PipelineLogger.shared.logDebug("⚠️ currentWhisperConfig が nil のためスキップ")
+            return
+        }
         let llmConfig = currentLLMConfig
 
         let endByte = min(endSample * 2, pcmDataBuffer.count)
@@ -171,7 +176,10 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         // 🌟 核心: 常に「0秒（発話の最初）」から現在までの音声を取り出し、前後の無音をトリミング！
         let cumulativeBytes = pcmDataBuffer.subdata(in: 0..<endByte)
         let trimmedBytes = Self.trimSilence(pcmData: cumulativeBytes, sampleRate: sampleRate, speechThresholdDB: speechThresholdDB)
-        guard trimmedBytes.count >= Int(sampleRate * 0.15) * 2 else { return }
+        guard trimmedBytes.count >= Int(sampleRate * 0.15) * 2 else {
+            PipelineLogger.shared.logDebug("⚠️ トリミング後の音声が短すぎるためスキップ (\(trimmedBytes.count) bytes)")
+            return
+        }
         let wavData = createWAV(from: trimmedBytes, sampleRate: Int(sampleRate))
 
         let tempDir = FileManager.default.temporaryDirectory
@@ -189,6 +197,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         // VAD（完全な無音・ノイズのみをガード）
         let metrics = AudioAnalysisService.shared.analyze(audioFileURL: tempFile, thresholdDB: threshold)
         if metrics.isSilence {
+            PipelineLogger.shared.logDebug("🔇 VADにより無音判定されたためスキップ (peak: \(metrics.peakPowerDB)dB)")
             try? FileManager.default.removeItem(at: tempFile)
             return
         }
@@ -198,6 +207,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         let language = self.language
         let style = self.refinementStyle
 
+        PipelineLogger.shared.logDebug("🚀 Whisper API へ累積送信開始! (長さ: \(String(format: "%.2f", totalDuration))s)")
         NSLog("[VoiceIME] 🎭 紙芝居トリガー (0〜%.2f秒, 息継ぎ検知) ➔ Whisper累積送信開始", totalDuration)
 
         self.currentProcessingTask?.cancel()

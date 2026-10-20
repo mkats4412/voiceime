@@ -65,6 +65,16 @@ public final class PipelineLogger: @unchecked Sendable {
         }
     }
 
+    /// デバッグ・トレースログ
+    public func logDebug(_ message: String) {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            let timeStr = self.dateFormatter.string(from: Date())
+            let entry = "[\(timeStr)] [DEBUG] \(message)\n"
+            self.appendToFile(entry)
+        }
+    }
+
     /// セッション完了ログ
     public func logSessionEnd(finalText: String) {
         queue.async { [weak self] in
