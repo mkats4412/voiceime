@@ -131,7 +131,7 @@ public final class FloatingPreviewController: ObservableObject {
             updatePanelPosition()
             registerHotkeys()
         }
-        NSLog("[VoiceIME] 💬 フローティングプレビュー確定テキスト同期: [%@]", text)
+        NSLog("[VoiceIME] 💬 フローティングプレビュー確定テキスト同期: %d文字", text.count)
     }
 
     /// 録音停止・AI推敲中へのステータス変更

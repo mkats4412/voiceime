@@ -485,7 +485,7 @@ public final class AppState: ObservableObject {
                 FloatingPreviewController.shared.updateLiveText(trimmedQuestion)
                 FloatingPreviewController.shared.setProcessing(mode: .quickAsk)
 
-                NSLog("[VoiceIME] 🟣 AIクイック質問 認識結果: [%@] 送信先: [%@] モデル: [%@]", trimmedQuestion, quickAskConfig.baseURL, quickAskConfig.modelName)
+                NSLog("[VoiceIME] 🟣 AIクイック質問 認識完了 (%d文字) 送信先: [%@] モデル: [%@]", trimmedQuestion.count, quickAskConfig.baseURL, quickAskConfig.modelName)
 
                 // 2. AIへ質問送信
                 let answer = try await self.llm.quickAsk(
@@ -515,7 +515,7 @@ public final class AppState: ObservableObject {
                 // 一時クリップボードにもセット（即座に手動⌘Vも可能）
                 FloatingPreviewController.shared.setTemporaryClipboard(text: answer, duration: 45.0)
 
-                NSLog("[VoiceIME] 🟣 AIクイック回答完了: [%@]", answer)
+                NSLog("[VoiceIME] 🟣 AIクイック回答完了 (%d文字)", answer.count)
             } catch {
                 self.isQuickAskActive = false
                 self.phase = .idle
@@ -971,7 +971,7 @@ public final class AppState: ObservableObject {
                         case .primary(let text):
                             rawText = text
                             self.lastUsedWhisperProvider = currentProvider
-                            NSLog("[VoiceIME] 📝 メイン音声認識成功 (%.2f秒): [%@]", whisperDuration, rawText)
+                            NSLog("[VoiceIME] 📝 メイン音声認識成功 (%.2f秒, %d文字)", whisperDuration, rawText.count)
                         case .backup(let text, var record, let primErr):
                             rawText = text
                             self.lastUsedWhisperProvider = backup
@@ -991,7 +991,7 @@ public final class AppState: ObservableObject {
 
                             self.lastFallbackRecord = record
                             fallbackNotices.append(record.displayNotice)
-                            NSLog("[VoiceIME] 📝 バックアップ音声認識が勝利 (%.2f秒): [%@]", whisperDuration, rawText)
+                            NSLog("[VoiceIME] 📝 バックアップ音声認識が勝利 (%.2f秒, %d文字)", whisperDuration, rawText.count)
                         }
                     } catch {
                         let (summary, detail) = self.extractErrorSummary(error)
@@ -1012,7 +1012,7 @@ public final class AppState: ObservableObject {
                         )
                         whisperDuration = CFAbsoluteTimeGetCurrent() - whisperStart
                         self.lastUsedWhisperProvider = currentProvider
-                        NSLog("[VoiceIME] 📝 音声認識成功 (%.2f秒): [%@]", whisperDuration, rawText)
+                        NSLog("[VoiceIME] 📝 音声認識成功 (%.2f秒, %d文字)", whisperDuration, rawText.count)
                     } catch {
                         let (summary, detail) = self.extractErrorSummary(error)
                         NSLog("[VoiceIME] ⚠️ 音声認識エラー (%@): %@ (%@)", currentProvider.displayName, summary, detail)
@@ -1177,7 +1177,7 @@ public final class AppState: ObservableObject {
                             case .primary(let text):
                                 refinedText = text
                                 self.lastUsedLLMProvider = resolvedLLMProvider
-                                NSLog("[VoiceIME] ✨ メインAI推敲成功 (%.2f秒): [%@]", llmDuration, refinedText)
+                                NSLog("[VoiceIME] ✨ メインAI推敲成功 (%.2f秒, %d文字)", llmDuration, refinedText.count)
                             case .backup(let text, var record, let primErr):
                                 refinedText = text
                                 self.lastUsedLLMProvider = backup
@@ -1196,7 +1196,7 @@ public final class AppState: ObservableObject {
 
                                 self.lastFallbackRecord = record
                                 fallbackNotices.append(record.displayNotice)
-                                NSLog("[VoiceIME] ✨ バックアップAI推敲が勝利 (%.2f秒): [%@]", llmDuration, refinedText)
+                                NSLog("[VoiceIME] ✨ バックアップAI推敲が勝利 (%.2f秒, %d文字)", llmDuration, refinedText.count)
                             }
                         } catch {
                             NSLog("[VoiceIME] ⚠️ ヘッジドAI推敲両系失敗: %@。事前整形テキストを使用します", error.localizedDescription)
@@ -1218,7 +1218,7 @@ public final class AppState: ObservableObject {
                             )
                             llmDuration = CFAbsoluteTimeGetCurrent() - llmStart
                             self.lastUsedLLMProvider = resolvedLLMProvider
-                            NSLog("[VoiceIME] ✨ AI推敲成功 (%.2f秒): [%@]", llmDuration, refinedText)
+                            NSLog("[VoiceIME] ✨ AI推敲成功 (%.2f秒, %d文字)", llmDuration, refinedText.count)
                         } catch {
                             let (summary, detail) = self.extractErrorSummary(error)
                             NSLog("[VoiceIME] ⚠️ AI推敲エラー (%@): %@ (%@)。事前整形テキストを使用します", llmProviderDisplayName, summary, detail)
@@ -1385,7 +1385,7 @@ VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を
             if self.settings.autoPasteEnabled {
                 self.phase = .pasting
                 self.statusMessage = "入力中..."
-                NSLog("[VoiceIME] 🚀 確実な入力欄へ自動ペースト実行 (\(role): \(detail)): [%@]", processedText)
+                NSLog("[VoiceIME] 🚀 確実な入力欄へ自動ペースト実行 (\(role): \(detail)): %d文字", processedText.count)
 
                 self.paster.paste(text: processedText, restoreClipboard: self.settings.restoreClipboard) { [weak self] in
                     Task { @MainActor [weak self] in
