@@ -4,9 +4,11 @@
 
 ---
 
-## 🚨 最重要ルール：コード修正・チェック前の事前スキル確認
+## 🚨 最重要ルール：コード修正・チェック前の事前スキル確認と stash 退避
 
 **コードチェック、静的解析、リファクタリング、バグ修正、機能追加を行う前に、必ず事前スキル [voiceime-pre-check](.agents/skills/voiceime-pre-check/SKILL.md) または [ARCHITECTURE_GUARDRAILS.md](ARCHITECTURE_GUARDRAILS.md) を読み込み、禁止事項を確認してください。**
+
+**また、チェックやリファクタリングを始める直前には、作業ツリーに未コミットの変更がある場合、必ず `git stash push -u -m "pre-check-backup-..."` でスタッシュし、チェック前の状態を確実に保持・退避してください。**
 
 ### 厳守すべき 4 大保護領域
 1. **CoreAudio / AVAudioEngine**:
