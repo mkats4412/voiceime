@@ -602,6 +602,7 @@ public final class AppState: ObservableObject {
 
             self.lastProcessedText = answer
             self.phase = .idle
+            self.isQuickAskActive = false
             self.statusMessage = "AI回答完了: \(answer)"
 
             // ユーザー要望「質問を削除し、答えだけにしてほしい」
@@ -623,6 +624,9 @@ public final class AppState: ObservableObject {
 
     /// 録音開始
     public func startRecording() {
+        // 通常の音声入力開始時は確実にクイック質問フラグを解除
+        self.isQuickAskActive = false
+
         // 音声入力開始前の直前アクティブアプリを記録（ペースト復元先）
         FloatingPreviewController.shared.recordFrontmostApp()
 
