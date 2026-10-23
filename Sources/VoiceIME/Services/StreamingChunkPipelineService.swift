@@ -727,12 +727,21 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         guard !cleanDelta.isEmpty else { return cleanRefined }
         guard !cleanRefined.isEmpty else { return cleanDelta }
 
-        // 日本語・英語の区切り調整（末尾・先頭がASCII文字/記号の場合はスペースを挟む）
-        if let lastChar = cleanRefined.last, let firstChar = cleanDelta.first,
-           lastChar.isASCII && firstChar.isASCII {
-            return "\(cleanRefined) \(cleanDelta)"
+        // 🌟 中間推敲LLMが文末と勘違いして句点（。や.）を付与した後に発話が継続した場合、
+        // 文の途中に勝手な句点が混入して「〜十分な。エラーがありません」のような画面とペーストの乖離を防ぐため、
+        // 後続フレーズ（delta）が存在する場合は refined 末尾の不要な句点（。や.）を確実にトリミング
+        var baseRefined = cleanRefined
+        while let last = baseRefined.last, "。.".contains(last) {
+            baseRefined.removeLast()
+            baseRefined = baseRefined.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        return "\(cleanRefined)\(cleanDelta)"
+
+        // 日本語・英語の区切り調整（末尾・先頭がASCII文字/記号の場合はスペースを挟む）
+        if let lastChar = baseRefined.last, let firstChar = cleanDelta.first,
+           lastChar.isASCII && firstChar.isASCII {
+            return "\(baseRefined) \(cleanDelta)"
+        }
+        return "\(baseRefined)\(cleanDelta)"
     }
 
     // MARK: - ユーザー辞書・記号置換ヘルパー

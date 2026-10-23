@@ -41,6 +41,12 @@ struct TestRunner {
         let combined2 = StreamingChunkPipelineService.combineRefinedWithDelta(refined: r1, delta: d2 ?? "")
         assert(combined2 == "明日の天気は晴れですが、午後から雨が降るそうです", "Expected combined text, got '\(combined2)'")
 
+        // 1-b. 中間推敲で末尾に句点「。」が付与された後に差分が連結された場合（不要な文頭・文中の句点混入防止）
+        let rPeriod = "エラーの塗りつぶし、十分な。"
+        let dNext = "エラーがありません。"
+        let combinedPeriod = StreamingChunkPipelineService.combineRefinedWithDelta(refined: rPeriod, delta: dNext)
+        assert(combinedPeriod == "エラーの塗りつぶし、十分なエラーがありません。", "Expected 'エラーの塗りつぶし、十分なエラーがありません。', got '\(combinedPeriod)'")
+
         // 2. 読点なしの差分抽出
         let w3 = "明日の天気は晴れで午後から雨が降るそうです"
         let d3 = StreamingChunkPipelineService.extractDelta(newText: w3, baseText: w1)
