@@ -26,6 +26,7 @@ VOCAB_FILE = VOICEIME_DIR / "vocabulary.json"
 PROMPTS_FILE = VOICEIME_DIR / "prompts.json"
 API_KEYS_FILE = VOICEIME_DIR / "api_keys.json"
 LOG_FILE = VOICEIME_DIR / "pipeline.log"
+CORRECTIONS_FILE = VOICEIME_DIR / "corrections.json"
 
 DEFAULT_CASUAL_PROMPT = """あなたは音声認識テキストの校正・推敲エキスパートです（口語モード）。
 話者の語尾・文体・口語ニュアンスを維持しながら、音声入力特有の誤字脱字、聞き間違い、同音異義語の誤変換、言い直し・重複を文脈から見つけ出し、自然で読みやすい文章に修正してください。
@@ -118,6 +119,10 @@ def tool_list_vocabulary(args: Dict[str, Any]) -> str:
     }, ensure_ascii=False, indent=2)
 
 def tool_add_vocabulary(args: Dict[str, Any]) -> str:
+    guard = check_editing_allowed()
+    if guard:
+        return guard
+
     raw_words = args.get("words", [])
     if isinstance(raw_words, str):
         import re
@@ -143,6 +148,10 @@ def tool_add_vocabulary(args: Dict[str, Any]) -> str:
         return "エラー: vocabulary.json の保存に失敗しました。"
 
 def tool_remove_vocabulary(args: Dict[str, Any]) -> str:
+    guard = check_editing_allowed()
+    if guard:
+        return guard
+
     raw_words = args.get("words", [])
     if isinstance(raw_words, str):
         import re
@@ -170,6 +179,10 @@ def tool_list_dictionary_rules(args: Dict[str, Any]) -> str:
     }, ensure_ascii=False, indent=2)
 
 def tool_add_dictionary_rule(args: Dict[str, Any]) -> str:
+    guard = check_editing_allowed()
+    if guard:
+        return guard
+
     pattern = args.get("pattern", "").strip()
     replacement = args.get("replacement", "")
     is_regex = bool(args.get("is_regex", False))
@@ -210,6 +223,10 @@ def tool_add_dictionary_rule(args: Dict[str, Any]) -> str:
         return "エラー: dictionary.json の保存に失敗しました。"
 
 def tool_remove_dictionary_rule(args: Dict[str, Any]) -> str:
+    guard = check_editing_allowed()
+    if guard:
+        return guard
+
     pattern = args.get("pattern", "").strip()
     rule_id = args.get("id", "").strip()
 
@@ -232,6 +249,10 @@ def tool_remove_dictionary_rule(args: Dict[str, Any]) -> str:
         return "エラー: dictionary.json の保存に失敗しました。"
 
 def tool_update_dictionary_rule(args: Dict[str, Any]) -> str:
+    guard = check_editing_allowed()
+    if guard:
+        return guard
+
     target_pattern = args.get("pattern", "").strip()
     target_id = args.get("id", "").strip()
 
@@ -411,6 +432,49 @@ def set_app_setting(key: str, value: Any) -> bool:
 def is_pipeline_logging_enabled() -> bool:
     val = get_app_setting("voiceime_pipelineLoggingEnabled", True)
     return bool(val)
+
+def is_mcp_agent_editing_enabled() -> bool:
+    """MCP連携 & AI Agent編集（単語登録・置換ルール・修正ストック）がVoiceIMEで有効化されているか確認"""
+    val = get_app_setting("voiceime_mcpAgentEditingEnabled")
+    if val is None:
+        val = get_app_setting("voiceime_correctionStockEnabled", True)
+    return bool(val)
+
+def check_editing_allowed() -> Optional[str]:
+    """編集操作が許可されているかチェック。OFFの場合は親切な案内文を返す"""
+    if not is_mcp_agent_editing_enabled():
+        return (
+            "【操作制限】VoiceIME の設定で『MCP連携 & AI Agent編集』が無効(OFF)になっています。\n"
+            "AI Agent による単語登録や置換ルールの変更、修正ストックの操作を行うには、"
+            "メニューバーの VoiceIME ➔ 設定 ➔ 『単語登録・辞書』タブから『MCP連携 & AI Agent編集』をONに切り替えてください。"
+        )
+    return None
+
+def load_corrections() -> List[Dict[str, Any]]:
+    ensure_voiceime_dir()
+    if not CORRECTIONS_FILE.exists():
+        return []
+    try:
+        with open(CORRECTIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception as e:
+        sys.stderr.write(f"[VoiceIME MCP] Error loading corrections.json: {e}\n")
+        return []
+
+def save_corrections(records: List[Dict[str, Any]]) -> bool:
+    ensure_voiceime_dir()
+    temp_file = CORRECTIONS_FILE.with_suffix(".tmp")
+    try:
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
+        temp_file.replace(CORRECTIONS_FILE)
+        return True
+    except Exception as e:
+        sys.stderr.write(f"[VoiceIME MCP] Error saving corrections.json: {e}\n")
+        if temp_file.exists():
+            temp_file.unlink(missing_ok=True)
+        return False
 
 def log_to_pipeline(message: str):
     if not is_pipeline_logging_enabled():
@@ -753,6 +817,123 @@ def tool_clear_pipeline_log(args: Dict[str, Any]) -> str:
     except Exception as e:
         return f"ログクリア中にエラーが発生しました: {e}"
 
+def tool_get_correction_history(args: Dict[str, Any]) -> str:
+    """ストックされた修正履歴 (~/.voiceime/corrections.json) を取得"""
+    limit = args.get("limit", 50)
+    try:
+        limit = max(1, min(200, int(limit)))
+    except (ValueError, TypeError):
+        limit = 50
+    unregistered_only = bool(args.get("unregistered_only", False))
+
+    records = load_corrections()
+    if unregistered_only:
+        records = [r for r in records if not r.get("is_registered_to_vocabulary", False)]
+
+    records = records[:limit]
+    if not records:
+        return "ストックされた修正履歴はありません。"
+
+    summary = {
+        "count": len(records),
+        "unregistered_count": sum(1 for r in records if not r.get("is_registered_to_vocabulary", False)),
+        "records": records
+    }
+    return json.dumps(summary, ensure_ascii=False, indent=2)
+
+def tool_register_correction_to_vocabulary(args: Dict[str, Any]) -> str:
+    """修正履歴から単語登録を実行"""
+    guard = check_editing_allowed()
+    if guard:
+        return guard
+
+    correction_id = args.get("correction_id", "").strip()
+    word = args.get("word", "").strip()
+
+    records = load_corrections()
+    target_word = word
+
+    if correction_id:
+        matched = next((r for r in records if r.get("id") == correction_id), None)
+        if not matched:
+            return f"エラー: 指定された correction_id '{correction_id}' が見つかりません。"
+        if not target_word:
+            target_word = matched.get("diff_after", "").strip()
+        matched["is_registered_to_vocabulary"] = True
+        save_corrections(records)
+
+    if not target_word:
+        return "エラー: 登録する単語 (word) または有効な correction_id を指定してください。"
+
+    # 単語リストに追加
+    vocab = load_vocabulary()
+    if target_word not in vocab:
+        vocab.append(target_word)
+        save_vocabulary(vocab)
+        return f"単語登録を完了しました: '{target_word}' (vocabulary.json に追加・反映されました)"
+    else:
+        return f"単語 '{target_word}' はすでに登録済みです。"
+
+def tool_register_correction_to_dictionary(args: Dict[str, Any]) -> str:
+    """修正履歴の差分（変更前 ➔ 変更後）をテキスト置換ルール（dictionary.json）として登録"""
+    guard = check_editing_allowed()
+    if guard:
+        return guard
+
+    correction_id = args.get("correction_id", "").strip()
+    pattern = args.get("pattern", "").strip()
+    replacement = args.get("replacement", "").strip()
+
+    records = load_corrections()
+    if correction_id:
+        matched = next((r for r in records if r.get("id") == correction_id), None)
+        if not matched:
+            return f"エラー: 指定された correction_id '{correction_id}' が見つかりません。"
+        if not pattern:
+            pattern = matched.get("diff_before", "").strip()
+        if not replacement:
+            replacement = matched.get("diff_after", "").strip()
+        matched["is_registered_to_vocabulary"] = True
+        save_corrections(records)
+
+    if not pattern or not replacement:
+        return "エラー: pattern と replacement の両方を指定するか、有効な correction_id を指定してください。"
+
+    rules = load_dictionary()
+    existing_idx = next((i for i, r in enumerate(rules) if r.get("pattern") == pattern), None)
+    if existing_idx is not None:
+        rules[existing_idx]["replacement"] = replacement
+        msg = f"既存の置換ルール '{pattern}' を更新しました ➔ '{replacement}'"
+    else:
+        new_rule = {
+            "id": str(uuid.uuid4()).upper(),
+            "pattern": pattern,
+            "replacement": replacement,
+            "isRegex": False,
+            "isEnabled": True
+        }
+        rules.append(new_rule)
+        msg = f"置換ルールを登録しました: '{pattern}' ➔ '{replacement}'"
+
+    if save_dictionary(rules):
+        return f"{msg} (dictionary.json に追加・反映されました)"
+    else:
+        return "エラー: dictionary.json の保存に失敗しました。"
+
+def tool_clear_correction_history(args: Dict[str, Any]) -> str:
+    """ストックされた修正履歴 (~/.voiceime/corrections.json) を全件クリア"""
+    guard = check_editing_allowed()
+    if guard:
+        return guard
+
+    try:
+        ensure_voiceime_dir()
+        if CORRECTIONS_FILE.exists():
+            CORRECTIONS_FILE.unlink()
+        return "修正履歴ストック (~/.voiceime/corrections.json) を正常にクリアしました。"
+    except Exception as e:
+        return f"修正履歴クリア中にエラーが発生しました: {e}"
+
 TOOLS = [
     {
         "name": "list_vocabulary",
@@ -993,6 +1174,69 @@ TOOLS = [
             "type": "object",
             "properties": {}
         }
+    },
+    {
+        "name": "get_correction_history",
+        "description": "VoiceIME の修正モードでユーザーが手動修正した文章の履歴・差分ストック (~/.voiceime/corrections.json) を取得します。AI Agent がユーザーの修正傾向を分析して、単語登録や置換ルールの提案・自動登録を行う際に使用します。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "取得する最大件数 (デフォルト: 50)"
+                },
+                "unregistered_only": {
+                    "type": "boolean",
+                    "description": "未だ単語登録されていない修正履歴のみを絞り込むかどうか (デフォルト: false)"
+                }
+            }
+        }
+    },
+    {
+        "name": "register_correction_to_vocabulary",
+        "description": "修正履歴の差分単語（または指定単語）を VoiceIME の単語帳 (vocabulary.json) に登録します。AI Agent がユーザーの手動修正から固有名詞や新語を学習・登録する際に使用します。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "correction_id": {
+                    "type": "string",
+                    "description": "対象の修正履歴レコードID (UUID)"
+                },
+                "word": {
+                    "type": "string",
+                    "description": "登録する単語 (省略時は correction_id から自動抽出された修正後単語)"
+                }
+            }
+        }
+    },
+    {
+        "name": "register_correction_to_dictionary",
+        "description": "修正履歴の差分（変更前 ➔ 変更後）を VoiceIME のテキスト置換ルール (dictionary.json) に登録します。同音異義語や音声誤認識の自動置換パターンを恒久的に学習させる際に使用します。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "correction_id": {
+                    "type": "string",
+                    "description": "対象の修正履歴レコードID (UUID)"
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "置換対象のパターン (省略時は correction_id から自動抽出された変更前テキスト)"
+                },
+                "replacement": {
+                    "type": "string",
+                    "description": "置換後のテキスト (省略時は correction_id から自動抽出された変更後テキスト)"
+                }
+            }
+        }
+    },
+    {
+        "name": "clear_correction_history",
+        "description": "修正履歴ストック (~/.voiceime/corrections.json) を全件クリアします。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {}
+        }
     }
 ]
 
@@ -1012,7 +1256,11 @@ TOOL_MAP = {
     "get_pipeline_logging": tool_get_pipeline_logging,
     "set_pipeline_logging": tool_set_pipeline_logging,
     "get_latest_pipeline_log": tool_get_latest_pipeline_log,
-    "clear_pipeline_log": tool_clear_pipeline_log
+    "clear_pipeline_log": tool_clear_pipeline_log,
+    "get_correction_history": tool_get_correction_history,
+    "register_correction_to_vocabulary": tool_register_correction_to_vocabulary,
+    "register_correction_to_dictionary": tool_register_correction_to_dictionary,
+    "clear_correction_history": tool_clear_correction_history
 }
 
 def handle_json_rpc(line: str):

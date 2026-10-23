@@ -24,7 +24,21 @@ public struct FloatingPreviewView: View {
 
                     Spacer()
 
-                    if controller.mode == .quickAsk {
+                    if controller.isPinned {
+                        HStack(spacing: 3) {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 9))
+                            Text("固定中 (離しても維持)")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(Color.orange.opacity(0.15))
+                        )
+                    } else if controller.mode == .quickAsk {
                         Text("離すとAIが回答")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundColor(.purple)
@@ -34,6 +48,10 @@ public struct FloatingPreviewView: View {
                                 Capsule()
                                     .fill(Color.purple.opacity(0.12))
                             )
+                    } else {
+                        Text("+ で消さずに維持")
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundColor(.secondary.opacity(0.8))
                     }
 
                 case .processing:
@@ -45,42 +63,105 @@ public struct FloatingPreviewView: View {
 
                     Spacer()
 
+                    if controller.isPinned {
+                        HStack(spacing: 3) {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 9))
+                            Text("固定中")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(Color.orange.opacity(0.15))
+                        )
+                    }
+
                 case .ready:
-                    Image(systemName: controller.mode == .quickAsk ? "sparkles" : "mic.bubble.fill")
-                        .foregroundColor(controller.mode == .quickAsk ? .purple : .accentColor)
+                    let iconName: String = {
+                        if controller.isQuickAskQuestionEditing {
+                            return "questionmark.bubble.fill"
+                        } else if controller.isPinned {
+                            return "pin.fill"
+                        } else {
+                            return controller.mode == .quickAsk ? "sparkles" : "mic.bubble.fill"
+                        }
+                    }()
+                    let iconColor: Color = {
+                        if controller.isQuickAskQuestionEditing {
+                            return .purple
+                        } else if controller.isPinned {
+                            return .orange
+                        } else {
+                            return controller.mode == .quickAsk ? .purple : .accentColor
+                        }
+                    }()
+                    let titleText: String = {
+                        if controller.isQuickAskQuestionEditing {
+                            return "AIクイック質問 (質問を修正中)"
+                        } else if controller.isPinned {
+                            return "修正モード"
+                        } else {
+                            return controller.mode == .quickAsk ? "AIの回答" : "音声入力プレビュー"
+                        }
+                    }()
+
+                    Image(systemName: iconName)
+                        .foregroundColor(iconColor)
                         .font(.system(size: 13, weight: .semibold))
 
-                    Text(controller.mode == .quickAsk ? "AIの回答" : "音声入力プレビュー")
+                    Text(titleText)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.primary)
 
                     Spacer()
 
                     // ガイダンスバッジ
-                    let defaultNotice = controller.mode == .quickAsk
-                        ? "\(AppSettings.shared.pasteShortcutDisplayString) でペースト"
-                        : "入力先を選択 ➔ \(AppSettings.shared.pasteShortcutDisplayString)"
+                    let defaultNotice = controller.isQuickAskQuestionEditing
+                        ? "質問を修正 ➔ \(AppSettings.shared.pasteShortcutDisplayString) でAIに送信 / + で閉じる"
+                        : (controller.isPinned
+                            ? "修正可能 ➔ + で閉じる / \(AppSettings.shared.pasteShortcutDisplayString) で挿入"
+                            : (controller.mode == .quickAsk
+                                ? "\(AppSettings.shared.pasteShortcutDisplayString) でペースト"
+                                : "入力先を選択 ➔ \(AppSettings.shared.pasteShortcutDisplayString)"))
                     Text(controller.customNotice ?? defaultNotice)
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(controller.isQuickAskQuestionEditing ? .purple : (controller.isPinned ? .orange : .secondary))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(
                             Capsule()
-                                .fill(Color.primary.opacity(0.06))
+                                .fill(controller.isQuickAskQuestionEditing ? Color.purple.opacity(0.12) : (controller.isPinned ? Color.orange.opacity(0.12) : Color.primary.opacity(0.06)))
                         )
+
+                    // ピン留めトグルボタン
+                    Button {
+                        controller.togglePinned()
+                    } label: {
+                        Image(systemName: controller.isPinned ? "pin.fill" : "pin")
+                            .foregroundColor(controller.isPinned ? .orange : .secondary.opacity(0.8))
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .help(controller.isPinned ? "ピン留め固定中 (+ キーで閉じる)" : "ピン留め固定 (+ キー)")
                 }
 
                 // 閉じるボタン
                 Button {
-                    controller.cancel()
+                    if controller.isPinned {
+                        controller.dismissAfterEditing()
+                    } else {
+                        controller.cancel()
+                    }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary.opacity(0.8))
                         .font(.system(size: 14))
                 }
                 .buttonStyle(.plain)
-                .help("プレビューを閉じてクリップボードを消去 (Esc)")
+                .help("プレビューを閉じる (+ または Esc)")
             }
 
             // テキスト編集・表示エリア
@@ -100,18 +181,25 @@ public struct FloatingPreviewView: View {
 
                 AutoScrollingTextView(
                     text: $controller.currentText,
-                    isEditable: controller.phase == .ready
+                    isEditable: controller.phase == .ready || controller.isPinned
                 )
                 .frame(minHeight: 56, maxHeight: 150)
                 .padding(4)
+                .onTapGesture {
+                    if controller.phase == .ready || controller.isPinned {
+                        controller.activateAndFocusForEditing()
+                    }
+                }
             }
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(
-                        controller.phase == .liveRecording
-                            ? (controller.mode == .quickAsk ? Color.purple.opacity(0.5) : Color.red.opacity(0.4))
-                            : Color.primary.opacity(0.12),
-                        lineWidth: 1
+                        controller.isPinned
+                            ? Color.orange.opacity(0.65)
+                            : (controller.phase == .liveRecording
+                                ? (controller.mode == .quickAsk ? Color.purple.opacity(0.5) : Color.red.opacity(0.4))
+                                : Color.primary.opacity(0.12)),
+                        lineWidth: controller.isPinned ? 1.5 : 1
                     )
             )
 
@@ -141,12 +229,19 @@ public struct FloatingPreviewView: View {
 
                 Spacer()
 
-                // 挿入実行ボタン（ユーザー設定のショートカット）
+                // 挿入実行ボタン または AI送信ボタン
                 Button {
-                    controller.insertTextToFrontmostApp()
+                    if controller.isQuickAskQuestionEditing {
+                        controller.submitQuickAskQuestion()
+                    } else {
+                        controller.insertTextToFrontmostApp()
+                    }
                 } label: {
                     HStack(spacing: 5) {
-                        Text("挿入")
+                        Image(systemName: controller.isQuickAskQuestionEditing ? "paperplane.fill" : "arrow.down.doc.fill")
+                            .font(.system(size: 10))
+
+                        Text(controller.isQuickAskQuestionEditing ? "AIに送信" : "挿入")
                             .font(.system(size: 12, weight: .bold))
 
                         Text(AppSettings.shared.pasteShortcutDisplayString)
@@ -163,14 +258,16 @@ public struct FloatingPreviewView: View {
                     .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 6)
-                            .fill(controller.phase == .ready && !controller.currentText.isEmpty
+                            .fill((controller.phase == .ready || controller.isPinned) && !controller.currentText.isEmpty
                                   ? (controller.mode == .quickAsk ? Color.purple : Color.accentColor)
                                   : Color.secondary.opacity(0.4))
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(controller.phase != .ready || controller.currentText.isEmpty)
-                .help("フォーカス中のアプリにテキストをペースト (\(AppSettings.shared.pasteShortcutDisplayString))")
+                .disabled((controller.phase != .ready && !controller.isPinned) || controller.currentText.isEmpty)
+                .help(controller.isQuickAskQuestionEditing
+                      ? "修正した質問をAIに送信 (\(AppSettings.shared.pasteShortcutDisplayString))"
+                      : "フォーカス中のアプリにテキストをペースト (\(AppSettings.shared.pasteShortcutDisplayString))")
             }
         }
         .padding(12)
@@ -226,6 +323,9 @@ struct AutoScrollingTextView: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.isEditable = isEditable
         textView.isSelectable = true
+        textView.allowsUndo = true
+        textView.isRichText = false
+        textView.insertionPointColor = .labelColor
         textView.textContainerInset = NSSize(width: 4, height: 6)
 
         scrollView.documentView = textView
@@ -236,6 +336,9 @@ struct AutoScrollingTextView: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = nsView.documentView as? NSTextView else { return }
         textView.isEditable = isEditable
+        textView.isSelectable = true
+        textView.allowsUndo = true
+        textView.insertionPointColor = .labelColor
 
         if textView.string != text {
             textView.string = text

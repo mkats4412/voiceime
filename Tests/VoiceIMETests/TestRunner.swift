@@ -3,6 +3,7 @@ import AVFoundation
 import Carbon
 
 @main
+@MainActor
 struct TestRunner {
     static func main() {
         print("=== Running VoiceIME Tests ===")
@@ -21,6 +22,7 @@ struct TestRunner {
         testProgressiveRefinementPreview()
         testPipelineLogger()
         testAudioDeviceService()
+        testCorrectionStockService()
 
         print("=== All Tests Passed Successfully! ===")
     }
@@ -88,6 +90,59 @@ struct TestRunner {
         mockPCM.append(Data(count: silenceSampleCount * 2)) // 末尾無音
         let trimmedPCM = StreamingChunkPipelineService.trimSilence(pcmData: mockPCM, sampleRate: sampleRate, speechThresholdDB: -38.0)
         assert(trimmedPCM.count < mockPCM.count, "Trimmed PCM should be shorter than original by cutting leading/trailing silence")
+
+        // 9. 語尾脱落防止 & 無駄送信防止のトリガー条件（evaluateTrigger）テスト
+        // A. 2回目以降: 語尾（「〜します」等 0.15s の有声発話）の後に 0.25s の小休止で確実にトリガー成立
+        let tailTrigger = StreamingChunkPipelineService.evaluateTrigger(
+            isFirstTrigger: false,
+            totalSpeechDuration: 2.5,
+            newSpeechDuration: 0.15,
+            silentDuration: 0.25,
+            timeSinceLastTrigger: 1.5,
+            minIntervalSeconds: 1.2,
+            minSilenceDuration: 0.12,
+            isTranscribing: false
+        )
+        assert(tailTrigger == true, "Short ending speech with silence should trigger")
+
+        // B. 2回目以降: キーを押したまま沈黙放置（newSpeechDuration == 0.0）では何秒経過しても絶対に送信しない
+        let silenceLoopBlocked = StreamingChunkPipelineService.evaluateTrigger(
+            isFirstTrigger: false,
+            totalSpeechDuration: 2.5,
+            newSpeechDuration: 0.0,
+            silentDuration: 2.5,
+            timeSinceLastTrigger: 3.0,
+            minIntervalSeconds: 1.2,
+            minSilenceDuration: 0.12,
+            isTranscribing: false
+        )
+        assert(silenceLoopBlocked == false, "Silence with no new speech should never trigger")
+
+        // C. 初回トリガー: 短い発話（「はい」0.15s）でも小休止 0.25s でトリガー成立
+        let firstShortTrigger = StreamingChunkPipelineService.evaluateTrigger(
+            isFirstTrigger: true,
+            totalSpeechDuration: 0.15,
+            newSpeechDuration: 0.15,
+            silentDuration: 0.25,
+            timeSinceLastTrigger: 0.0,
+            minIntervalSeconds: 1.2,
+            minSilenceDuration: 0.12,
+            isTranscribing: false
+        )
+        assert(firstShortTrigger == true, "First short speech with pause should trigger")
+
+        // D. 処理中（isTranscribing == true）はトリガー抑制
+        let transcribingBlocked = StreamingChunkPipelineService.evaluateTrigger(
+            isFirstTrigger: false,
+            totalSpeechDuration: 2.5,
+            newSpeechDuration: 0.5,
+            silentDuration: 0.25,
+            timeSinceLastTrigger: 2.0,
+            minIntervalSeconds: 1.2,
+            minSilenceDuration: 0.12,
+            isTranscribing: true
+        )
+        assert(transcribingBlocked == false, "Should not trigger while transcribing")
 
         print("  -> Progressive Refinement Preview passed!")
     }
@@ -772,6 +827,28 @@ struct TestRunner {
         assert(controller.currentText == "did you finish it?", "Confirmed text must match final artifact exactly")
         assert(controller.phase == .ready, "Phase must become .ready upon confirmed text sync")
 
+        // ＋キーによるピン留め・修正モード・消去のテスト
+        controller.showLiveRecording()
+        assert(!controller.isPinned, "showLiveRecording must reset isPinned to false")
+        
+        // 1回目の＋キー押下（ピン留め固定）
+        controller.togglePinned()
+        assert(controller.isPinned == true, "togglePinned must set isPinned to true")
+
+        // 確定テキスト反映
+        controller.updateConfirmedText("明日の会議は10時からです")
+        assert(controller.isPinned == true, "isPinned must be preserved after updateConfirmedText")
+
+        // テキスト修正（手動タイピング）シミュレーション
+        controller.currentText = "明日の会議は11時からです"
+        assert(controller.currentText == "明日の会議は11時からです")
+
+        // 2回目の＋キー押下（修正完了による消去）
+        controller.dismissAfterEditing()
+        assert(!controller.isPinned, "dismissAfterEditing must reset isPinned to false")
+        assert(!controller.isVisible, "dismissAfterEditing must hide the floating preview")
+        assert(AppState.shared.lastProcessedText == "明日の会議は11時からです", "dismissAfterEditing must save corrected text to AppState")
+
         controller.hide()
 
         print("  -> FloatingPreview Settings & Confirmed Text Sync passed!")
@@ -1070,6 +1147,26 @@ struct TestRunner {
         let converted = StreamingChunkPipelineService.applyDictionaryRules(to: rawWhisperInput)
         assert(converted.contains("お買い物リスト\n1."), "Expected newline and period conversion: got '\(converted)'")
 
+        // 4. クイック質問の送信前修正モードテスト
+        let fpController = FloatingPreviewController.shared
+        var submittedQuestion = ""
+        fpController.showQuickAskQuestionForEditing(question: "ゴミの英語は？") { q in
+            submittedQuestion = q
+        }
+        assert(fpController.isQuickAskQuestionEditing == true, "isQuickAskQuestionEditing should be true")
+        assert(fpController.isPinned == true, "isPinned should be true")
+        assert(fpController.currentText == "ゴミの英語は？")
+
+        // ユーザーによる質問文の修正
+        fpController.currentText = "粗大ゴミの英語は？"
+
+        // 送信実行（⌘+Enter / submitQuickAskQuestion）
+        fpController.submitQuickAskQuestion()
+        assert(submittedQuestion == "粗大ゴミの英語は？", "Submitted question should match corrected text")
+        assert(fpController.isQuickAskQuestionEditing == false, "isQuickAskQuestionEditing should be reset to false after submission")
+        assert(fpController.phase == .processing, "Phase should transition to .processing")
+        fpController.hide()
+
         print("  -> Quick Ask & Paste Shortcuts passed!")
     }
 
@@ -1163,6 +1260,63 @@ struct TestRunner {
         // 5. 状態復元
         service.selectDevice(uid: originalUID, name: originalName)
         print("  -> AudioDeviceService passed!")
+    }
+
+    @MainActor
+    static func testCorrectionStockService() {
+        print("[TEST] CorrectionStockService & '-' キー単語登録...")
+
+        // 1. 差分検出テスト (detectWordDiff)
+        // A. 単語の置き換え
+        let diff1 = CorrectionStockService.detectWordDiff(
+            original: "明日は渋谷公会堂に行きます",
+            corrected: "明日は渋公に行きます"
+        )
+        assert(diff1 != nil, "Diff should be detected")
+        assert(diff1?.before == "渋谷公会堂", "diff.before should be '渋谷公会堂', got '\(diff1?.before ?? "")'")
+        assert(diff1?.after == "渋公", "diff.after should be '渋公', got '\(diff1?.after ?? "")'")
+
+        // B. スペース・表記揺れの修正
+        let diff2 = CorrectionStockService.detectWordDiff(
+            original: "Voice IMEの使い方マニュアル",
+            corrected: "VoiceIMEの使い方マニュアル"
+        )
+        assert(diff2 != nil, "Diff should be detected")
+        assert(diff2?.after == "VoiceIME" || diff2?.before.contains("IME") == true, "Should detect word correction")
+
+        // C. 差分なしの場合
+        let diffNone = CorrectionStockService.detectWordDiff(
+            original: "変更のない文章です",
+            corrected: "変更のない文章です"
+        )
+        assert(diffNone == nil, "Identical text should return nil")
+
+        // 2. 単語登録テスト (registerVocabularyWord)
+        let testWord = "渋公_\(UUID().uuidString.prefix(6))"
+        let regSuccess = CorrectionStockService.shared.registerVocabularyWord(String(testWord))
+        assert(regSuccess == true, "Registration should succeed")
+        assert(AppSettings.shared.vocabulary.contains(String(testWord)), "Settings should contain registered word")
+
+        // 3. 履歴ストック記録テスト (recordCorrection & loadRecordsFromDisk)
+        CorrectionStockService.shared.recordCorrection(
+            original: "テスト前の文章",
+            corrected: "テスト後の文章",
+            diffBefore: "前",
+            diffAfter: "後",
+            isRegistered: true
+        )
+
+        // わずかに待機してディスク反映を確認
+        Thread.sleep(forTimeInterval: 0.1)
+        let records = CorrectionStockService.shared.loadRecordsFromDisk()
+        assert(!records.isEmpty, "Records should be loaded from disk")
+        assert(records.contains { $0.diffBefore == "前" && $0.diffAfter == "後" }, "Stock should contain recorded diff")
+
+        // クリーンアップ
+        AppSettings.shared.removeVocabularyWord(String(testWord))
+        CorrectionStockService.shared.clearStock()
+
+        print("  -> CorrectionStockService passed!")
     }
 }
 

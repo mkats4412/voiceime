@@ -114,6 +114,56 @@ public struct DictionarySettingsTab: View {
                 )
 
                 // ==========================================
+                // MCP連携 & AI Agent編集（修正ストック含む）
+                // ==========================================
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("MCP連携 & AI Agent編集（修正ストック・単語登録）を有効にする", isOn: $settings.mcpAgentEditingEnabled)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+
+                    HStack(spacing: 8) {
+                        Image(systemName: "cpu")
+                            .foregroundColor(.accentColor)
+                        Text("ONにすると、AI Agent (MCP) から単語帳・辞書ルールの自動編集が可能になり、修正モードでの '-' キー単語登録や修正差分のストック (~/.voiceime/corrections.json) が有効化されます。（OFFにすると外部からの編集やストック保存が安全に制限されます）")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if settings.mcpAgentEditingEnabled {
+                        HStack(spacing: 12) {
+                            Button(action: {
+                                let url = CorrectionStockService.shared.correctionsFileURL
+                                NSWorkspace.shared.activateFileViewerSelecting([url])
+                            }) {
+                                Label("ストックファイルを表示", systemImage: "doc.text")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Button(action: {
+                                CorrectionStockService.shared.clearStock()
+                            }) {
+                                Label("ストックをクリア", systemImage: "trash")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                        .padding(.top, 4)
+                    }
+                }
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color(NSColor.controlBackgroundColor))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+
+                // ==========================================
                 // セクション1: 単語登録
                 // ==========================================
                 VStack(alignment: .leading, spacing: 10) {

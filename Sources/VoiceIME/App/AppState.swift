@@ -86,10 +86,13 @@ public final class AppState: ObservableObject {
     private var isQuickAskModifierHeld: Bool = false
     private var modifierKeyMonitorLocal: Any?
     private var modifierKeyMonitorGlobal: Any?
+    private var keyUpMonitorLocal: Any?
+    private var keyUpMonitorGlobal: Any?
 
     private init() {
         setupHotkey()
         setupModifierKeyMonitors()
+        setupKeyUpMonitors()
         // アプリ起動とAppKitランループの開始完了後に、Keychainアクセスの事前案内とウォームアップを実行
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.promptKeychainWarmupIfNeeded()
@@ -99,18 +102,37 @@ public final class AppState: ObservableObject {
     deinit {
         if let m = modifierKeyMonitorLocal { NSEvent.removeMonitor(m) }
         if let m = modifierKeyMonitorGlobal { NSEvent.removeMonitor(m) }
+        if let m = keyUpMonitorLocal { NSEvent.removeMonitor(m) }
+        if let m = keyUpMonitorGlobal { NSEvent.removeMonitor(m) }
     }
 
-    /// クイック質問用修飾キー（例: Ctrl+Shift）の押下・離脱を監視
+    /// クイック質問用およびPush-to-Talk用修飾キー（例: Ctrl, Shift）の押下・離脱を監視
     private func setupModifierKeyMonitors() {
         let handleFlagsChanged: (NSEvent) -> Void = { [weak self] event in
             guard let self = self else { return }
-            let requiredCarbonMods = self.settings.quickAskHotkeyModifiers
-            let isHolding = self.matchesModifiers(event.modifierFlags, carbonModifiers: requiredCarbonMods)
 
-            // 修飾キーが完全に離された場合、次回は新しい会話としてリセット
-            if !isHolding {
+            // 1. クイック質問用修飾キーの追跡
+            let quickAskMods = self.settings.quickAskHotkeyModifiers
+            let isHoldingQuickAsk = self.matchesModifiers(event.modifierFlags, carbonModifiers: quickAskMods)
+            if !isHoldingQuickAsk {
                 self.isQuickAskModifierHeld = false
+                // クイック質問録音中に修飾キーが離されたら確実に録音停止
+                if self.isQuickAskActive && self.phase == .recording {
+                    NSLog("[VoiceIME] 🛡️ flagsChanged: クイック質問修飾キーの離脱を検知 ➔ handleQuickAskKeyUp")
+                    self.handleQuickAskKeyUp()
+                }
+            }
+
+            // 2. 通常のPush-to-Talk音声入力用修飾キーの追跡
+            if self.settings.triggerMode == .pushToTalk && self.phase == .recording && !self.isQuickAskActive {
+                let requiredMods = self.settings.hotkeyModifiers
+                if requiredMods != 0 {
+                    let isHoldingSpeechMods = self.matchesModifiers(event.modifierFlags, carbonModifiers: requiredMods)
+                    if !isHoldingSpeechMods {
+                        NSLog("[VoiceIME] 🛡️ flagsChanged: Push-to-Talk 修飾キーの離脱を検知 ➔ handleHotKeyUp")
+                        self.handleHotKeyUp()
+                    }
+                }
             }
         }
 
@@ -121,6 +143,41 @@ public final class AppState: ObservableObject {
 
         modifierKeyMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { event in
             handleFlagsChanged(event)
+        }
+    }
+
+    /// 物理キー（Space等）の離脱（KeyUp）を監視し、Push-to-Talkのキー離脱見逃しを完全防止
+    private func setupKeyUpMonitors() {
+        let handleKeyUp: (NSEvent) -> Void = { [weak self] event in
+            guard let self = self, self.phase == .recording else { return }
+
+            let keyCode = UInt32(event.keyCode)
+
+            // クイック質問中の場合
+            if self.isQuickAskActive {
+                if keyCode == self.settings.quickAskHotkeyCode {
+                    NSLog("[VoiceIME] 🛡️ keyUp: クイック質問キー (%d) の離脱を検知 ➔ handleQuickAskKeyUp", keyCode)
+                    self.handleQuickAskKeyUp()
+                }
+                return
+            }
+
+            // 通常のPush-to-Talkの場合
+            if self.settings.triggerMode == .pushToTalk {
+                if keyCode == self.settings.hotkeyCode {
+                    NSLog("[VoiceIME] 🛡️ keyUp: Push-to-Talkキー (%d) の離脱を検知 ➔ handleHotKeyUp", keyCode)
+                    self.handleHotKeyUp()
+                }
+            }
+        }
+
+        keyUpMonitorLocal = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { event in
+            handleKeyUp(event)
+            return event
+        }
+
+        keyUpMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: .keyUp) { event in
+            handleKeyUp(event)
         }
     }
 
@@ -301,6 +358,9 @@ public final class AppState: ObservableObject {
 
     /// AIクイック質問の録音開始
     public func startQuickAskRecording() {
+        // 音声入力開始前の直前アクティブアプリを記録（ペースト復元先）
+        FloatingPreviewController.shared.recordFrontmostApp()
+
         MicrophoneLevelTester.shared.stopTesting()
         FloatingPreviewController.shared.hide()
 
@@ -344,9 +404,10 @@ public final class AppState: ObservableObject {
             }
 
             maxRecordingTimer?.invalidate()
-            maxRecordingTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: false) { [weak self] _ in
+            maxRecordingTimer = Timer.scheduledTimer(withTimeInterval: 45.0, repeats: false) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     if self?.isQuickAskActive == true && self?.phase == .recording {
+                        NSLog("[VoiceIME] ⏱️ クイック質問最大録音時間（45秒）に達したため自動停止")
                         self?.stopQuickAskAndProcess()
                     }
                 }
@@ -422,8 +483,6 @@ public final class AppState: ObservableObject {
 
         let currentProvider = settings.selectedProvider
         let currentConfig = settings.config(for: currentProvider)
-        let quickAskConfig = settings.effectiveQuickAskConfig
-        let quickAskApiKey = keychain.loadAPIKey(for: quickAskConfig.provider)
         let apiKey = keychain.loadAPIKey(for: currentProvider)
         let language = settings.language.isEmpty ? nil : settings.language
 
@@ -481,41 +540,20 @@ public final class AppState: ObservableObject {
                     return
                 }
 
-                // 確定した質問をプレビュー上に表示し、AI回答取得中を表示
-                FloatingPreviewController.shared.updateLiveText(trimmedQuestion)
-                FloatingPreviewController.shared.setProcessing(mode: .quickAsk)
-
-                NSLog("[VoiceIME] 🟣 AIクイック質問 認識完了 (%d文字) 送信先: [%@] モデル: [%@]", trimmedQuestion.count, quickAskConfig.baseURL, quickAskConfig.modelName)
-
-                // 2. AIへ質問送信
-                let answer = try await self.llm.quickAsk(
-                    question: trimmedQuestion,
-                    history: self.quickAskHistory,
-                    baseURL: quickAskConfig.baseURL,
-                    apiKey: quickAskApiKey,
-                    model: quickAskConfig.modelName,
-                    isCustom: quickAskConfig.isCustom
-                )
-
-                // 3. 会話履歴を更新（連続質問用）
-                self.quickAskHistory.append(LLMService.ChatMessage(role: "user", content: trimmedQuestion))
-                self.quickAskHistory.append(LLMService.ChatMessage(role: "assistant", content: answer))
-                while self.quickAskHistory.count > 20 {
-                    self.quickAskHistory.removeFirst()
+                // ＋キーによる固定（質問送信前の修正モード）が有効な場合
+                if FloatingPreviewController.shared.isPinned {
+                    FloatingPreviewController.shared.showQuickAskQuestionForEditing(question: trimmedQuestion) { [weak self] editedQuestion in
+                        Task { @MainActor [weak self] in
+                            await self?.processQuickAskQuestion(editedQuestion)
+                        }
+                    }
+                    self.phase = .idle
+                    self.statusMessage = "AI質問修正中: ⌘↩で送信"
+                    NSLog("[VoiceIME] 🟣 ＋キー固定モードのためAI質問送信を保留し修正モードに移行: [%@]", trimmedQuestion)
+                    return
                 }
 
-                self.lastProcessedText = answer
-                self.phase = .idle
-                self.statusMessage = "AI回答完了: \(answer)"
-
-                // 4. 重要: ユーザー要望「質問を削除し、答えだけにしてほしい」
-                let notice = "\(self.settings.pasteShortcutDisplayString) で挿入 / \(self.settings.quickAskHotkeyDisplayString) で続けて質問"
-                FloatingPreviewController.shared.show(text: answer, notice: notice, mode: .quickAsk)
-
-                // 一時クリップボードにもセット（即座に手動⌘Vも可能）
-                FloatingPreviewController.shared.setTemporaryClipboard(text: answer, duration: 45.0)
-
-                NSLog("[VoiceIME] 🟣 AIクイック回答完了 (%d文字)", answer.count)
+                await self.processQuickAskQuestion(trimmedQuestion)
             } catch {
                 self.isQuickAskActive = false
                 self.phase = .idle
@@ -526,8 +564,68 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// 確定または修正された質問を AI へ送信し、回答を取得・表示
+    public func processQuickAskQuestion(_ question: String) async {
+        let trimmedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuestion.isEmpty else {
+            isQuickAskActive = false
+            phase = .idle
+            FloatingPreviewController.shared.hide()
+            return
+        }
+
+        let quickAskConfig = settings.effectiveQuickAskConfig
+        let quickAskApiKey = keychain.loadAPIKey(for: quickAskConfig.provider)
+
+        FloatingPreviewController.shared.updateLiveText(trimmedQuestion)
+        FloatingPreviewController.shared.setProcessing(mode: .quickAsk)
+        phase = .refining
+        statusMessage = "AI回答生成中..."
+        NSLog("[VoiceIME] 🟣 AIクイック質問 送信開始 (%d文字) 送信先: [%@] モデル: [%@]", trimmedQuestion.count, quickAskConfig.baseURL, quickAskConfig.modelName)
+
+        do {
+            let answer = try await self.llm.quickAsk(
+                question: trimmedQuestion,
+                history: self.quickAskHistory,
+                baseURL: quickAskConfig.baseURL,
+                apiKey: quickAskApiKey,
+                model: quickAskConfig.modelName,
+                isCustom: quickAskConfig.isCustom
+            )
+
+            // 会話履歴を更新（連続質問用）
+            self.quickAskHistory.append(LLMService.ChatMessage(role: "user", content: trimmedQuestion))
+            self.quickAskHistory.append(LLMService.ChatMessage(role: "assistant", content: answer))
+            while self.quickAskHistory.count > 20 {
+                self.quickAskHistory.removeFirst()
+            }
+
+            self.lastProcessedText = answer
+            self.phase = .idle
+            self.statusMessage = "AI回答完了: \(answer)"
+
+            // ユーザー要望「質問を削除し、答えだけにしてほしい」
+            let notice = "\(self.settings.pasteShortcutDisplayString) で挿入 / \(self.settings.quickAskHotkeyDisplayString) で続けて質問"
+            FloatingPreviewController.shared.show(text: answer, notice: notice, mode: .quickAsk)
+
+            // 一時クリップボードにもセット（即座に手動⌘Vも可能）
+            FloatingPreviewController.shared.setTemporaryClipboard(text: answer, duration: 45.0)
+
+            NSLog("[VoiceIME] 🟣 AIクイック回答完了 (%d文字)", answer.count)
+        } catch {
+            self.isQuickAskActive = false
+            self.phase = .idle
+            self.statusMessage = "AI質問エラー: \(error.localizedDescription)"
+            FloatingPreviewController.shared.show(text: "[回答エラー: \(error.localizedDescription)]", notice: "Esc で閉じる", mode: .quickAsk)
+            NSLog("[VoiceIME] ❌ クイック質問エラー: %@", error.localizedDescription)
+        }
+    }
+
     /// 録音開始
     public func startRecording() {
+        // 音声入力開始前の直前アクティブアプリを記録（ペースト復元先）
+        FloatingPreviewController.shared.recordFrontmostApp()
+
         // マイクレベルテストが実行中の場合は停止して競合を防止
         MicrophoneLevelTester.shared.stopTesting()
         FloatingPreviewController.shared.hide()
@@ -600,11 +698,13 @@ public final class AppState: ObservableObject {
                 }
             }
 
-            // 最大録音時間セーフティ（最長120秒で自動カットオフし暴走を防止）
+            // 最大録音時間セーフティ（Push-to-Talkは45秒、トグルは120秒で自動カットオフし録音スタックを完全防止）
+            let maxDuration: TimeInterval = settings.triggerMode == .pushToTalk ? 45.0 : 120.0
             maxRecordingTimer?.invalidate()
-            maxRecordingTimer = Timer.scheduledTimer(withTimeInterval: 120.0, repeats: false) { [weak self] _ in
+            maxRecordingTimer = Timer.scheduledTimer(withTimeInterval: maxDuration, repeats: false) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     if self?.phase == .recording {
+                        NSLog("[VoiceIME] ⏱️ 最大録音時間（%.0f秒）に達したため自動停止して文字起こしへ移行", maxDuration)
                         self?.stopRecordingAndTranscribe()
                     }
                 }
@@ -1380,6 +1480,24 @@ VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を
         let focusState = FocusDetectionService.shared.checkCurrentFocus()
         NSLog("[VoiceIME] 🎯 フォーカス状態判定: %@", focusState.description)
 
+        // ＋キーによる固定（消えないように維持・修正モード）が有効な場合
+        if FloatingPreviewController.shared.isPinned {
+            let tempDuration = self.settings.floatingPreviewDuration > 0 ? min(self.settings.floatingPreviewDuration, 45.0) : 45.0
+            FloatingPreviewController.shared.setTemporaryClipboard(text: processedText, duration: tempDuration)
+            if self.settings.floatingPreviewEnabled {
+                let minusHint = self.settings.correctionStockEnabled ? " / - で単語登録" : ""
+                FloatingPreviewController.shared.show(
+                    text: processedText,
+                    notice: "修正可能 ➔\(minusHint) + で閉じる / \(self.settings.pasteShortcutDisplayString) で挿入"
+                )
+                FloatingPreviewController.shared.activateAndFocusForEditing()
+            }
+            self.phase = .idle
+            self.statusMessage = "\(completionMessage) [修正モード: +で閉じる]"
+            NSLog("[VoiceIME] 📌 ＋キー固定モードのため自動ペーストを保留し編集・修正可能にしました")
+            return
+        }
+
         switch focusState {
         case .editableText(let role, let detail):
             if self.settings.autoPasteEnabled {
@@ -1393,9 +1511,9 @@ VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を
                         self.phase = .idle
                         self.statusMessage = completionMessage
                         if self.settings.floatingPreviewEnabled {
-                            FloatingPreviewController.shared.hide()
+                            FloatingPreviewController.shared.hideWithDelay(seconds: 0.35)
                         }
-                        NSLog("[VoiceIME] ✅ 入力完了・プレビューウィンドウ消去")
+                        NSLog("[VoiceIME] ✅ 入力完了・プレビューウィンドウ消去 (余韻0.35s)")
                     }
                 }
             } else {

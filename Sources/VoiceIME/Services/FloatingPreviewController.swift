@@ -13,6 +13,16 @@ public enum FloatingPreviewMode: Equatable {
     case quickAsk      // AIクイック質問
 }
 
+/// キーボード入力・テキスト編集を受け取れるように canBecomeKey / canBecomeMain をオーバーライドしたフローティングパネル
+final class KeyableFloatingPanel: NSPanel {
+    override var canBecomeKey: Bool {
+        return true
+    }
+    override var canBecomeMain: Bool {
+        return true
+    }
+}
+
 @MainActor
 public final class FloatingPreviewController: ObservableObject {
     public static let shared = FloatingPreviewController()
@@ -23,7 +33,14 @@ public final class FloatingPreviewController: ObservableObject {
     @Published public var isVisible: Bool = false
     @Published public var copySuccess: Bool = false
     @Published public var customNotice: String? = nil
+    @Published public var isPinned: Bool = false
+    @Published public var isQuickAskQuestionEditing: Bool = false
+    public var onQuickAskSubmit: ((String) -> Void)?
+    public private(set) var originalTextForCorrection: String = ""
+    private var isRegisteredInCurrentSession: Bool = false
+    private var noticeResetTimer: Timer?
     private var hasPipelineText: Bool = false
+    private var targetApp: NSRunningApplication?
 
     private struct PasteboardBackupItem {
         let types: [NSPasteboard.PasteboardType]
@@ -45,17 +62,22 @@ public final class FloatingPreviewController: ObservableObject {
     private var escHotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
     private var localKeyMonitor: Any?
+    private var workspaceObserver: Any?
     private var globalKeyMonitor: Any?
 
     private init() {
         installCarbonEventHandler()
         setupKeyMonitors()
+        setupWorkspaceNotifications()
     }
 
     deinit {
         dismissTimer?.invalidate()
         copyResetTimer?.invalidate()
         clipboardExpiryTimer?.invalidate()
+        if let observer = workspaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
         if let ref = hotKeyRef {
             UnregisterEventHotKey(ref)
         }
@@ -78,12 +100,14 @@ public final class FloatingPreviewController: ObservableObject {
         dismissTimer?.invalidate()
         dismissTimer = nil
         registerHotkeys()
+        recordFrontmostApp()
 
         self.mode = mode
         self.phase = .liveRecording
         self.currentText = ""
         self.copySuccess = false
         self.hasPipelineText = false
+        self.isPinned = false
 
         if panel == nil {
             setupPanel()
@@ -124,6 +148,8 @@ public final class FloatingPreviewController: ObservableObject {
     public func updateConfirmedText(_ text: String) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         self.currentText = text
+        self.originalTextForCorrection = text
+        self.isRegisteredInCurrentSession = false
         self.phase = .ready
         self.copySuccess = false
 
@@ -154,6 +180,8 @@ public final class FloatingPreviewController: ObservableObject {
         }
         self.phase = .ready
         self.currentText = text
+        self.originalTextForCorrection = text
+        self.isRegisteredInCurrentSession = false
         self.copySuccess = false
         self.customNotice = notice
 
@@ -291,6 +319,19 @@ public final class FloatingPreviewController: ObservableObject {
         hide()
     }
 
+    /// 指定した遅延秒数（デフォルト0.35秒）をおいて自然に非表示（ユーザーが確定テキストを目視確認できるようにする）
+    public func hideWithDelay(seconds: Double = 0.35) {
+        // ピン留め（修正モード固定）中は勝手に消去しない
+        guard !isPinned else { return }
+        dismissTimer?.invalidate()
+        dismissTimer = Timer.scheduledTimer(withTimeInterval: max(0.05, seconds), repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self = self, !self.isPinned else { return }
+                self.hide()
+            }
+        }
+    }
+
     /// フローティングプレビューを非表示
     public func hide() {
         clearTemporaryClipboard()
@@ -305,6 +346,9 @@ public final class FloatingPreviewController: ObservableObject {
         // アニメーション完了を待たずに状態フラグを先行して落とし、再表示とのレースコンディションを防ぐ
         self.isVisible = false
         self.phase = .ready
+        self.isPinned = false
+        self.isQuickAskQuestionEditing = false
+        self.onQuickAskSubmit = nil
 
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.15
@@ -341,9 +385,42 @@ public final class FloatingPreviewController: ObservableObject {
         NSLog("[VoiceIME] 📋 テキストを手動でクリップボードにコピーしました")
     }
 
+    /// 最前面アプリケーションのアクティブ化変更通知を監視
+    private func setupWorkspaceNotifications() {
+        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self = self else { return }
+            if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+               app.bundleIdentifier != Bundle.main.bundleIdentifier {
+                MainActor.assumeIsolated {
+                    self.targetApp = app
+                }
+                NSLog("[VoiceIME] 🎯 最前面アプリ変更を検知・記録: [%@]", app.localizedName ?? "")
+            }
+        }
+    }
+
+    /// 直前の作業アプリケーションを記録（VoiceIME自身以外）
+    public func recordFrontmostApp() {
+        if let frontApp = NSWorkspace.shared.frontmostApplication,
+           frontApp.bundleIdentifier != Bundle.main.bundleIdentifier {
+            self.targetApp = frontApp
+            NSLog("[VoiceIME] 🎯 ペースト対象の直前アプリを記録: [%@]", frontApp.localizedName ?? "")
+        }
+    }
+
     /// 最前面のアクティブアプリケーションへテキストを挿入（ペースト）
     public func insertTextToFrontmostApp() {
-        guard phase == .ready else { return }
+        // AIクイック質問の質問文修正中の場合は、ペーストではなくAIへの送信を実行
+        if isQuickAskQuestionEditing {
+            submitQuickAskQuestion()
+            return
+        }
+
+        guard phase == .ready || isPinned else { return }
         let textToInsert = currentText
         guard !textToInsert.isEmpty else {
             hide()
@@ -351,10 +428,43 @@ public final class FloatingPreviewController: ObservableObject {
         }
 
         NSLog("[VoiceIME] ⚡️ フローティングプレビューから挿入実行: [%@]", textToInsert)
+
+        // 🌟 修正モードで編集した後に別の入力欄や別アプリをクリックした場合への対応:
+        // 現在すでに VoiceIME 以外の別アプリが最前面にある場合は、その「今ユーザーがクリックしたアプリ」を最優先でペースト先とする！
+        let currentFrontApp = NSWorkspace.shared.frontmostApplication
+        let myBundleId = Bundle.main.bundleIdentifier
+
+        let appToActivate: NSRunningApplication?
+        if let current = currentFrontApp, current.bundleIdentifier != myBundleId {
+            appToActivate = current
+            self.targetApp = current
+            NSLog("[VoiceIME] 🎯 ユーザーがクリックした現在の前面アプリ [%@] をペースト先として採用", current.localizedName ?? "")
+        } else {
+            appToActivate = self.targetApp
+            NSLog("[VoiceIME] 🎯 記録済みの直前アプリ [%@] をアクティブ化して復元", appToActivate?.localizedName ?? "")
+        }
+
+        saveCorrectionStockIfNeeded()
+        if isPinned || currentText != originalTextForCorrection {
+            PipelineLogger.shared.logUserCorrection(text: textToInsert, originalText: originalTextForCorrection)
+        }
         hide()
 
-        // パネルが退いて前のアクティブ入力欄へフォーカスが確実に通るよう微小遅延を入れてペースト
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+        // 1. 必要に応じてアプリを最前面にアクティブ化して入力フォーカスを戻す
+        // ※すでにそのアプリが最前面になっているなら再度 activate を呼ばずフォーカスを維持する
+        if let app = appToActivate, !app.isTerminated {
+            if currentFrontApp?.bundleIdentifier != app.bundleIdentifier {
+                NSLog("[VoiceIME] 🚀 直前のアプリ [%@] をアクティブ化してフォーカスを復元", app.localizedName ?? "")
+                if #available(macOS 14.0, *) {
+                    app.activate()
+                } else {
+                    app.activate(options: [.activateIgnoringOtherApps])
+                }
+            }
+        }
+
+        // 2. アプリがアクティブ化され入力カーソルが安定するのを確実に待ってペースト (180ms)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
             TextPasterService.shared.paste(
                 text: textToInsert,
                 restoreClipboard: AppSettings.shared.restoreClipboard
@@ -362,12 +472,62 @@ public final class FloatingPreviewController: ObservableObject {
         }
     }
 
+    /// AIクイック質問の質問文を修正用に表示
+    public func showQuickAskQuestionForEditing(question: String, onSubmit: @escaping (String) -> Void) {
+        self.mode = .quickAsk
+        self.phase = .ready
+        self.isPinned = true
+        self.isQuickAskQuestionEditing = true
+        self.currentText = question
+        self.originalTextForCorrection = question
+        self.isRegisteredInCurrentSession = false
+        self.onQuickAskSubmit = onSubmit
+        let noticeSuffix = AppSettings.shared.correctionStockEnabled ? " / - で単語登録" : ""
+        self.customNotice = "質問を修正 ➔ ⌘↩ でAIに送信\(noticeSuffix) / + で閉じる"
+
+        if panel == nil {
+            setupPanel()
+        }
+
+        updatePanelPosition()
+
+        if !isVisible {
+            panel?.alphaValue = 0.0
+            panel?.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.15
+                self.panel?.animator().alphaValue = 1.0
+            }
+            self.isVisible = true
+        }
+
+        registerHotkeys()
+        activateAndFocusForEditing()
+        NSLog("[VoiceIME] 🟣 AIクイック質問: 送信前修正モード表示 (文字数: %d)", question.count)
+    }
+
+    /// 修正された質問を AI に送信
+    public func submitQuickAskQuestion() {
+        guard isQuickAskQuestionEditing, let onSubmit = onQuickAskSubmit else { return }
+        let questionToSubmit = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !questionToSubmit.isEmpty else {
+            hide()
+            return
+        }
+
+        self.isQuickAskQuestionEditing = false
+        self.onQuickAskSubmit = nil
+        self.phase = .processing
+        NSLog("[VoiceIME] 🟣 AIクイック質問: 修正後質問をAIへ送信実行: [%@]", questionToSubmit)
+        onSubmit(questionToSubmit)
+    }
+
     // MARK: - Panel Setup & Layout
 
     private func setupPanel() {
         let hostingView = NSHostingView(rootView: FloatingPreviewView(controller: self))
 
-        let panel = NSPanel(
+        let panel = KeyableFloatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 440, height: 180),
             styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
             backing: .buffered,
@@ -381,7 +541,7 @@ public final class FloatingPreviewController: ObservableObject {
         panel.isOpaque = false
         panel.hasShadow = false
         panel.isMovableByWindowBackground = true
-        panel.becomesKeyOnlyIfNeeded = true
+        panel.becomesKeyOnlyIfNeeded = false
         panel.contentView = hostingView
 
         self.panel = panel
@@ -409,6 +569,9 @@ public final class FloatingPreviewController: ObservableObject {
     private func resetDismissTimer() {
         dismissTimer?.invalidate()
         dismissTimer = nil
+
+        // ピン留め（固定保持モード）中は自動消去タイマーを動かさない
+        if isPinned { return }
 
         let duration = AppSettings.shared.floatingPreviewDuration
         guard duration > 0 else { return }
@@ -517,8 +680,224 @@ public final class FloatingPreviewController: ObservableObject {
         }
     }
 
+    // MARK: - Pin & Editing Mode (+ Key Support)
+
+    /// + キー等による固定（ピン留め・キーリリース時維持）のトグル
+    public func togglePinned() {
+        isPinned.toggle()
+        if isPinned {
+            dismissTimer?.invalidate()
+            dismissTimer = nil
+            NSLog("[VoiceIME] 📌 フローティングウィンドウをピン留め固定（キーを離しても維持・修正モード有効化）")
+            if phase == .ready {
+                activateAndFocusForEditing()
+            }
+        } else {
+            NSLog("[VoiceIME] 📌 フローティングウィンドウのピン留め固定を解除")
+            if phase == .ready {
+                resetDismissTimer()
+            }
+        }
+    }
+
+    /// フローティングウィンドウを前面アクティブ化し、テキスト編集フィールドにフォーカスを当てる
+    public func activateAndFocusForEditing() {
+        guard let panel = panel, isVisible else { return }
+
+        // VoiceIME がアクティブになる直前の最前面作業アプリを保持（ペースト復元先）
+        recordFrontmostApp()
+
+        // アプリケーションおよびパネルをキーウィンドウとして前面アクティブ化
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+
+        // SwiftUIのビュー階層が確実に描画・更新されるよう微小遅延を置いてフォーカスを適用
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            guard let self = self, let panel = self.panel else { return }
+            panel.makeKeyAndOrderFront(nil)
+            if let hostingView = panel.contentView, let textView = self.findTextView(in: hostingView) {
+                panel.makeFirstResponder(textView)
+                let length = (textView.string as NSString).length
+                textView.setSelectedRange(NSRange(location: length, length: 0))
+                NSLog("[VoiceIME] ✏️ テキスト編集欄（NSTextView）にフォーカスを設定しました（文字数: %d）", length)
+            } else {
+                NSLog("[VoiceIME] ⚠️ NSTextView が見つかりませんでした")
+            }
+        }
+    }
+
+    private func findTextView(in view: NSView) -> NSTextView? {
+        if let tv = view as? NSTextView {
+            return tv
+        }
+        if let sv = view as? NSScrollView, let tv = sv.documentView as? NSTextView {
+            return tv
+        }
+        for subview in view.subviews {
+            if let found = findTextView(in: subview) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    /// 修正モード終了・+ キーによるウィンドウ消去（編集後テキストをクリップボードに退避し、ピン留め解除して消去）
+    public func dismissAfterEditing() {
+        let trimmed = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            setTemporaryClipboard(text: currentText, duration: 45.0)
+            AppState.shared.lastProcessedText = currentText
+            if currentText != originalTextForCorrection {
+                PipelineLogger.shared.logUserCorrection(text: currentText, originalText: originalTextForCorrection)
+            }
+            NSLog("[VoiceIME] 📝 修正後テキストをクリップボードに保持してプレビューを消去: [%@]", currentText)
+        }
+        saveCorrectionStockIfNeeded()
+        isPinned = false
+        hide()
+    }
+
+    /// 編集差分を検知し、未登録であれば ~/.voiceime/corrections.json にストック保存
+    private func saveCorrectionStockIfNeeded() {
+        guard AppSettings.shared.correctionStockEnabled else { return }
+        let orig = originalTextForCorrection.trimmingCharacters(in: .whitespacesAndNewlines)
+        let corr = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !orig.isEmpty, orig != corr else { return }
+
+        if let diff = CorrectionStockService.detectWordDiff(original: orig, corrected: corr) {
+            CorrectionStockService.shared.recordCorrection(
+                original: orig,
+                corrected: corr,
+                diffBefore: diff.before,
+                diffAfter: diff.after,
+                isRegistered: isRegisteredInCurrentSession
+            )
+        }
+    }
+
+    /// -（マイナスキー）の押下判定（テンキー78、メインキーボードJIS44/US27等）
+    private func isMinusKey(event: NSEvent) -> Bool {
+        // Command / Option が押されている場合は別コマンドなので除外
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.command) || flags.contains(.option) {
+            return false
+        }
+
+        // テンキーの - (keyCode: 78)
+        if event.keyCode == 78 {
+            return true
+        }
+
+        // 入力文字が "-" (Shiftなし)
+        if let chars = event.characters, chars == "-" {
+            return true
+        }
+
+        // JIS配列 (keyCode 44: -) または US配列 (keyCode 27: -) かつ Shift なし
+        if (event.keyCode == 44 || event.keyCode == 27) && !flags.contains(.shift) {
+            return true
+        }
+
+        return false
+    }
+
+    /// - キーによる差分単語予測・単語登録処理
+    @discardableResult
+    private func handleMinusKeyForVocabulary() -> Bool {
+        guard AppSettings.shared.correctionStockEnabled else { return false }
+        guard isPinned || phase == .ready else { return false }
+
+        let orig = originalTextForCorrection.trimmingCharacters(in: .whitespacesAndNewlines)
+        let corr = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let diff = CorrectionStockService.detectWordDiff(original: orig, corrected: corr), !diff.after.isEmpty {
+            let success = CorrectionStockService.shared.registerVocabularyWord(diff.after)
+            if success {
+                isRegisteredInCurrentSession = true
+                CorrectionStockService.shared.recordCorrection(
+                    original: orig,
+                    corrected: corr,
+                    diffBefore: diff.before,
+                    diffAfter: diff.after,
+                    isRegistered: true
+                )
+                showTemporaryNotice("✨ 単語登録完了: [\(diff.after)]")
+            }
+            return true
+        } else {
+            showTemporaryNotice("⚠️ 修正差分が見つかりません")
+            return true
+        }
+    }
+
+    /// 一時的なトースト案内を表示
+    public func showTemporaryNotice(_ notice: String) {
+        noticeResetTimer?.invalidate()
+        let previousNotice = customNotice
+        customNotice = notice
+        noticeResetTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.customNotice = previousNotice
+            }
+        }
+    }
+
+    /// +（プラスキー）の押下判定（テンキー、JIS Shift+;、US Shift+=等に全対応）
+    private func isPlusKey(event: NSEvent) -> Bool {
+        // Command / Option が押されている場合は別コマンドなので除外
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.command) || flags.contains(.option) {
+            return false
+        }
+
+        // テンキーの + (keyCode: 69)
+        if event.keyCode == 69 {
+            return true
+        }
+
+        // 入力文字が "+" (Shift+; や Shift+= など)
+        if let chars = event.characters, chars == "+" {
+            return true
+        }
+
+        // JIS配列 (keyCode 41: ;) または US配列 (keyCode 24: =) かつ Shift 押下
+        if (event.keyCode == 41 || event.keyCode == 24) && flags.contains(.shift) {
+            return true
+        }
+
+        return false
+    }
+
+    /// 挿入（ペースト）ホットキー判定（⌘+Enter等、Return(36)とテンキーEnter(76)の両方に対応）
+    private func isPasteShortcutEvent(_ event: NSEvent) -> Bool {
+        let targetCode = AppSettings.shared.pasteShortcutKeyCode
+        let targetMods = AppSettings.shared.pasteShortcutModifiers
+
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let isCmd = flags.contains(.command)
+        let isShift = flags.contains(.shift)
+        let isOpt = flags.contains(.option)
+        let isCtrl = flags.contains(.control)
+
+        let targetCmd = (targetMods & UInt32(cmdKey)) != 0
+        let targetShift = (targetMods & UInt32(shiftKey)) != 0
+        let targetOpt = (targetMods & UInt32(optionKey)) != 0
+        let targetCtrl = (targetMods & UInt32(controlKey)) != 0
+
+        guard isCmd == targetCmd && isShift == targetShift && isOpt == targetOpt && isCtrl == targetCtrl else {
+            return false
+        }
+
+        // Return (36) と テンキーEnter (76) は同等に扱う
+        if targetCode == 36 || targetCode == 76 {
+            return event.keyCode == 36 || event.keyCode == 76
+        }
+
+        return UInt32(event.keyCode) == targetCode
+    }
+
     private func setupKeyMonitors() {
-        // パネルにフォーカスがある場合の Esc / 挿入キーハンドリング
+        // パネルにフォーカスがある場合のキーハンドリング
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self, self.isVisible else { return event }
 
@@ -528,24 +907,80 @@ public final class FloatingPreviewController: ObservableObject {
                 return nil
             }
 
-            // ユーザー設定のペーストキー判定
-            let targetCode = AppSettings.shared.pasteShortcutKeyCode
-            let targetMods = AppSettings.shared.pasteShortcutModifiers
-            if UInt32(event.keyCode) == targetCode && self.matchesModifiers(event.modifierFlags, carbonModifiers: targetMods) {
+            // + キー押下時のハンドリング
+            if self.isPlusKey(event: event) {
+                if self.isPinned || self.phase == .ready {
+                    // すでにピン留め中または確定表示中に再度 + が押されたらウィンドウを消去
+                    self.dismissAfterEditing()
+                    return nil // テキスト入力欄に "+" が入力されないよう消費
+                } else {
+                    self.togglePinned()
+                    return nil
+                }
+            }
+
+            // - キー押下時の単語登録ハンドリング（修正履歴ストックが有効な場合）
+            if self.isMinusKey(event: event) && AppSettings.shared.correctionStockEnabled {
+                if self.isPinned || self.phase == .ready {
+                    if self.handleMinusKeyForVocabulary() {
+                        return nil // テキスト入力欄に "-" が入力されないよう消費
+                    }
+                }
+            }
+
+            // ユーザー設定のペーストキー（⌘+Enter等）判定
+            if self.isPasteShortcutEvent(event) {
+                NSLog("[VoiceIME] ⚡️ localKeyMonitor: 挿入ショートカット（⌘+Enter等）を検知 ➔ テキスト挿入実行")
                 self.insertTextToFrontmostApp()
-                return nil
+                return nil // テキスト欄に改行が入らないよう消費
             }
 
             return event
         }
 
-        // 他アプリにフォーカスがある状態でも、ウィンドウ表示中は Esc キーで即座にキャンセル & クリップボード消去
+        // 他アプリにフォーカスがある状態でも、ウィンドウ表示中は Esc / + / 挿入キーを監視
         globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return }
+
             // Esc キー (keyCode 53)
             if event.keyCode == 53 {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self, self.isVisible else { return }
                     self.cancel()
+                }
+                return
+            }
+
+            // + キー
+            if self.isPlusKey(event: event) {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.isVisible else { return }
+                    if self.isPinned && self.phase == .ready {
+                        self.dismissAfterEditing()
+                    } else {
+                        self.togglePinned()
+                    }
+                }
+                return
+            }
+
+            // - キー（単語登録）
+            if self.isMinusKey(event: event) && AppSettings.shared.correctionStockEnabled {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.isVisible else { return }
+                    if self.isPinned || self.phase == .ready {
+                        self.handleMinusKeyForVocabulary()
+                    }
+                }
+                return
+            }
+
+            // ユーザー設定のペーストキー（⌘+Enter等）判定
+            if self.isPasteShortcutEvent(event) {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.isVisible else { return }
+                    NSLog("[VoiceIME] ⚡️ globalKeyMonitor: 挿入ショートカット（⌘+Enter等）を検知 ➔ テキスト挿入実行")
+                    self.insertTextToFrontmostApp()
                 }
             }
         }

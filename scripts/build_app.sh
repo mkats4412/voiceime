@@ -96,6 +96,8 @@ if [[ "${1:-}" == "--install" ]]; then
     rm -rf "${DEST_DIR}/${APP_NAME}.app"
     cp -R "${APP_BUNDLE}" "${DEST_DIR}/"
     echo "Installed to ${DEST_DIR}/${APP_NAME}.app"
+    # 新規ビルド反映後の初回起動時に確実に案内ダイアログ（キーチェーン認証案内）を表示するため日時記録をリセット
+    defaults delete com.voiceime.app voiceime_last_executable_mod_date 2>/dev/null || true
 fi
 
 echo ""

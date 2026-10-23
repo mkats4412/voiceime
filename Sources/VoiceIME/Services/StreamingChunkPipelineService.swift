@@ -142,25 +142,24 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
 
             // トリガー条件:
             // A. 初回トリガー (lastTriggerSampleCount == 0):
-            //    録音開始から有声の発話が0.35秒以上あり、かつ息継ぎ・小休止(0.10秒以上) または 0.8秒以上の発話があれば即座に第1回Whisperを送信！
+            //    1) 通常: 有声発話が0.30秒以上かつ息継ぎ(0.10秒以上)または0.8秒以上の連続発話
+            //    2) 極短発話（「はい」等）: 有声発話が0.10秒以上かつ言い終わり小休止(0.20秒以上)
             //    ※ 無音（沈黙）のまま放置されている場合は絶対に送信しない！
             // B. 2回目以降 (lastTriggerSampleCount > 0):
-            //    前回送信から新たに有声の発話が0.35秒以上追加され、かつ前回送信から1.2秒以上経過し、
-            //    かつ息継ぎ(0.10秒以上) または 1.2秒以上の連続発話があれば送信！
+            //    1) 連続発話中: 新たな有声発話が0.30秒以上かつ息継ぎ(0.12秒以上)または1.0秒以上の連続発話
+            //    2) 語尾・言い終わり（「〜します」等）: 新たな有声発話が0.10秒以上かつ言い終わり小休止(0.20秒以上)
             //    ※ 話し終えて沈黙している間は newSpeechDuration が増えないため、同じ音声が無駄に再送信されるのを100%防止！
             let isFirstTrigger = (self.lastTriggerSampleCount == 0)
-            let shouldTrigger: Bool
-
-            if isFirstTrigger {
-                let hasInitialSpeech = (totalSpeechDuration >= 0.35)
-                let hasPauseOrContinuous = (silentDuration >= 0.10 || totalSpeechDuration >= 0.8)
-                shouldTrigger = hasInitialSpeech && hasPauseOrContinuous && !self.isTranscribing
-            } else {
-                let isRateLimitSatisfied = (timeSinceLastTrigger >= self.minIntervalSeconds)
-                let hasSufficientNewSpeech = (newSpeechDuration >= 0.35)
-                let hasPauseOrContinuous = (silentDuration >= self.minSilenceDuration || newSpeechDuration >= 1.2)
-                shouldTrigger = isRateLimitSatisfied && hasSufficientNewSpeech && hasPauseOrContinuous && !self.isTranscribing
-            }
+            let shouldTrigger = Self.evaluateTrigger(
+                isFirstTrigger: isFirstTrigger,
+                totalSpeechDuration: totalSpeechDuration,
+                newSpeechDuration: newSpeechDuration,
+                silentDuration: silentDuration,
+                timeSinceLastTrigger: timeSinceLastTrigger,
+                minIntervalSeconds: self.minIntervalSeconds,
+                minSilenceDuration: self.minSilenceDuration,
+                isTranscribing: self.isTranscribing
+            )
 
             if shouldTrigger {
                 self.lastTriggerTime = now
@@ -436,6 +435,9 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
 
                     // 2. 推敲が有効な場合は LLM の推敲完了も確実に待つ（ステップ4）
                     if isLLMEnabled, let llmCfg = llmConfig, !preprocessedForLLM.isEmpty, !llmCfg.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Task { @MainActor in
+                            FloatingPreviewController.shared.setProcessing()
+                        }
                         // 🌟 ログ: 2. Whisperから推敲LLMへ送られる文字列（辞書置換済み）
                         PipelineLogger.shared.logLLMInput(type: "最終確定推敲", text: preprocessedForLLM)
                         do {
@@ -472,7 +474,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                     NSLog("[VoiceIME] ✅ 最後の一つが到着しました: [%@]", result)
 
                     Task { @MainActor in
-                        FloatingPreviewController.shared.updatePipelineText(result)
+                        FloatingPreviewController.shared.updateConfirmedText(result)
                     }
 
                     // 🌟 ログ: セッション完了（確定出力テキスト）
@@ -500,6 +502,39 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             self.latestRefinedText = ""
             self.lastWhisperBaseText = ""
             self.isTranscribing = false
+        }
+    }
+
+    /// 紙芝居トリガー成立条件の純粋判定（テストおよび堅牢性担保用）
+    public static func evaluateTrigger(
+        isFirstTrigger: Bool,
+        totalSpeechDuration: Double,
+        newSpeechDuration: Double,
+        silentDuration: Double,
+        timeSinceLastTrigger: Double,
+        minIntervalSeconds: Double,
+        minSilenceDuration: Double,
+        isTranscribing: Bool
+    ) -> Bool {
+        if isTranscribing { return false }
+
+        if isFirstTrigger {
+            // A. 初回トリガー:
+            // 1) 通常発話: 0.30秒以上の有声発話があり、息継ぎ(0.10秒以上)または0.8秒以上の連続発話
+            // 2) 短い発話（「はい」「うん」等の極短発話）: 0.10秒以上の有声発話があり、言い終わり小休止(0.20秒以上)
+            let isNormalSpeechReady = (totalSpeechDuration >= 0.30 && (silentDuration >= 0.10 || totalSpeechDuration >= 0.8))
+            let isShortSpeechEnding = (totalSpeechDuration >= 0.10 && silentDuration >= 0.20)
+            return (isNormalSpeechReady || isShortSpeechEnding)
+        } else {
+            // B. 2回目以降のトリガー:
+            // 1) 通常の連続発話進行中: 前回送信から新たな有声発話が0.30秒以上あり、息継ぎ(0.12秒以上)または1.0秒以上の連続発話
+            // 2) 語尾・言い終わり（「〜します」「〜です」等）: 前回送信から新たな有声発話が0.10秒以上あり、言い終わりの小休止(0.20秒以上)
+            // ※ 話し終えて沈黙している間は newSpeechDuration == 0 のため、無駄な再送信ループは100%発生しない
+            let isRateLimitSatisfied = (timeSinceLastTrigger >= minIntervalSeconds)
+            let isNormalAdditionReady = (newSpeechDuration >= 0.30 && (silentDuration >= minSilenceDuration || newSpeechDuration >= 1.0))
+            let isTailEndingDetected = (newSpeechDuration >= 0.10 && silentDuration >= 0.20)
+            let hasValidSpeechActivity = (isNormalAdditionReady || isTailEndingDetected)
+            return isRateLimitSatisfied && hasValidSpeechActivity
         }
     }
 

@@ -202,6 +202,10 @@ public final class AppSettings: ObservableObject {
 
         // ログ出力設定
         static let pipelineLoggingEnabled = "voiceime_pipelineLoggingEnabled"
+
+        // MCP連携 & AI Agent編集全般（修正ストック・単語登録・置換ルール更新）
+        static let mcpAgentEditingEnabled = "voiceime_mcpAgentEditingEnabled"
+        static let correctionStockEnabled = "voiceime_correctionStockEnabled"
     }
 
     private let defaults = UserDefaults.standard
@@ -316,6 +320,11 @@ public final class AppSettings: ObservableObject {
             }
             VoiceIMEDiskSyncService.shared.exportToDisk(rules: dictionaryRules, vocabulary: customVocabulary)
         }
+    }
+
+    /// `customVocabulary` へのエイリアス
+    public var vocabulary: [String] {
+        customVocabulary
     }
 
     // MARK: - 推敲プロンプト設定 (prompts.json 連動)
@@ -469,6 +478,21 @@ public final class AppSettings: ObservableObject {
     /// パイプラインログ (~/.voiceime/pipeline.log) の記録フラグ (デフォルト: true)
     @Published public var pipelineLoggingEnabled: Bool {
         didSet { defaults.set(pipelineLoggingEnabled, forKey: Keys.pipelineLoggingEnabled) }
+    }
+
+    /// MCP連携 & AI Agent編集全般（単語登録・置換ルール・修正ストック）の有効化フラグ
+    /// ※ 本来のデフォルトは OFF。現在はテスト・検証のため初期値 ON
+    @Published public var mcpAgentEditingEnabled: Bool {
+        didSet {
+            defaults.set(mcpAgentEditingEnabled, forKey: Keys.mcpAgentEditingEnabled)
+            defaults.set(mcpAgentEditingEnabled, forKey: Keys.correctionStockEnabled)
+        }
+    }
+
+    /// 修正履歴ストック・単語登録への互換エイリアス
+    public var correctionStockEnabled: Bool {
+        get { mcpAgentEditingEnabled }
+        set { mcpAgentEditingEnabled = newValue }
     }
 
     // MARK: - プロパティ連携ヘルパー
@@ -748,6 +772,9 @@ public final class AppSettings: ObservableObject {
         self.autoPasteEnabled = defaults.object(forKey: Keys.autoPasteEnabled) != nil ? defaults.bool(forKey: Keys.autoPasteEnabled) : true
         self.floatingPreviewDuration = defaults.object(forKey: Keys.floatingPreviewDuration) as? Double ?? 45.0
         self.pipelineLoggingEnabled = defaults.object(forKey: Keys.pipelineLoggingEnabled) != nil ? defaults.bool(forKey: Keys.pipelineLoggingEnabled) : true
+        // ユーザー要望: デフォルトはOFF
+        let mcpVal = defaults.object(forKey: Keys.mcpAgentEditingEnabled) ?? defaults.object(forKey: Keys.correctionStockEnabled)
+        self.mcpAgentEditingEnabled = mcpVal != nil ? (mcpVal as? Bool ?? false) : false
 
         // Load dictionary rules with auto-migration (古い単語破壊ルールや旧記号ルールを自動除去・アップグレード)
         if let data = defaults.data(forKey: Keys.dictionaryRules),
@@ -1057,6 +1084,7 @@ public final class AppSettings: ObservableObject {
         audioThresholdDB = -32.0
         audioTrimmingEnabled = true
         pipelineLoggingEnabled = true
+        mcpAgentEditingEnabled = false // 本来の推奨初期値は OFF
         dictionaryRules = AppSettings.defaultDictionaryRules
     }
 }

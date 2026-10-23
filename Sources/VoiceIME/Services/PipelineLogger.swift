@@ -78,6 +78,27 @@ public final class PipelineLogger: @unchecked Sendable {
         }
     }
 
+    /// 4. ユーザー手動修正による最終確定出力（修正モード）
+    public func logUserCorrection(text: String, originalText: String? = nil) {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            let timeStr = self.dateFormatter.string(from: Date())
+            var entry = "\n\n4. ユーザー手動修正による最終確定出力 [修正モード - \(timeStr)]:\n\(text)\n"
+            if let orig = originalText?.trimmingCharacters(in: .whitespacesAndNewlines), !orig.isEmpty, orig != text {
+                entry += "(修正前: \(orig))\n"
+            }
+            entry += """
+
+==================================================
+[\(timeStr)] ✅ 修正モード挿入完了
+\(text)
+==================================================
+
+"""
+            self.appendToFile(entry)
+        }
+    }
+
     /// デバッグ・トレースログ
     public func logDebug(_ message: String) {
         queue.async { [weak self] in

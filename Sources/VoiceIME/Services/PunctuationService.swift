@@ -613,6 +613,12 @@ public final class PunctuationService {
         // 1. 純粋な発話内容が完全に一致する場合:
         // ユーザーがプレビュー画面で見ていた formattedRef そのものの句読点・改行構造を最優先
         if cleanText == cleanRef {
+            // 🌟 プレビュー画面の末尾に句点（。や.）が無かった場合は、画面表示と完全に一致させるため勝手な末尾句点を付加しない
+            if !trimmedRef.hasSuffix("。") && !trimmedRef.hasSuffix(".") && !trimmedRef.hasSuffix("？") && !trimmedRef.hasSuffix("?") {
+                if formattedRef.hasSuffix("。") || formattedRef.hasSuffix(".") {
+                    return String(formattedRef.dropLast())
+                }
+            }
             return formattedRef
         }
 
