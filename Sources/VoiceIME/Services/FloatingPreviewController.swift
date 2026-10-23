@@ -147,6 +147,8 @@ public final class FloatingPreviewController: ObservableObject {
     /// 確定テキストの同期・更新（推敲・辞書適用後の最終確定成果物を即座に反映）
     public func updateConfirmedText(_ text: String) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        dismissTimer?.invalidate()
+        dismissTimer = nil
         self.currentText = text
         self.originalTextForCorrection = text
         self.isRegisteredInCurrentSession = false
@@ -154,6 +156,8 @@ public final class FloatingPreviewController: ObservableObject {
         self.copySuccess = false
 
         if isVisible {
+            panel?.alphaValue = 1.0
+            panel?.orderFrontRegardless()
             updatePanelPosition()
             registerHotkeys()
         }

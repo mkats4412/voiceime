@@ -1503,17 +1503,23 @@ VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を
             if self.settings.autoPasteEnabled {
                 self.phase = .pasting
                 self.statusMessage = "入力中..."
-                NSLog("[VoiceIME] 🚀 確実な入力欄へ自動ペースト実行 (\(role): \(detail)): %d文字", processedText.count)
+                NSLog("[VoiceIME] 🚀 確実な入力欄へ自動ペースト準備 (\(role): \(detail)): %d文字", processedText.count)
 
-                self.paster.paste(text: processedText, restoreClipboard: self.settings.restoreClipboard) { [weak self] in
-                    Task { @MainActor [weak self] in
-                        guard let self = self else { return }
-                        self.phase = .idle
-                        self.statusMessage = completionMessage
-                        if self.settings.floatingPreviewEnabled {
-                            FloatingPreviewController.shared.hideWithDelay(seconds: 0.35)
+                // 確定テキスト（推敲・辞書適用後の最終結果）を画面にハッキリと描画し、
+                // ユーザーが目視確認できる表示猶予（LLM推敲時は0.22秒、通常は0.05秒）を設けてからペーストを実行
+                let pasteDelay: Double = self.settings.isLLMRefinementActive ? 0.22 : 0.05
+                DispatchQueue.main.asyncAfter(deadline: .now() + pasteDelay) { [weak self] in
+                    guard let self = self else { return }
+                    self.paster.paste(text: processedText, restoreClipboard: self.settings.restoreClipboard) { [weak self] in
+                        Task { @MainActor [weak self] in
+                            guard let self = self else { return }
+                            self.phase = .idle
+                            self.statusMessage = completionMessage
+                            if self.settings.floatingPreviewEnabled {
+                                FloatingPreviewController.shared.hideWithDelay(seconds: 0.35)
+                            }
+                            NSLog("[VoiceIME] ✅ 入力完了・プレビューウィンドウ消去 (余韻0.35s)")
                         }
-                        NSLog("[VoiceIME] ✅ 入力完了・プレビューウィンドウ消去 (余韻0.35s)")
                     }
                 }
             } else {
