@@ -417,8 +417,13 @@ public final class FloatingPreviewController: ObservableObject {
     }
 
     /// 直前に作業していたアプリを安全にアクティブ化（最前面化）してフォーカスを復元
-    public func activateTargetAppIfNeeded() {
-        guard let app = self.targetApp, !app.isTerminated else { return }
+    /// アクティベーションを実行した場合はフォーカスが安定するまでディレイ（120ms）を置き、
+    /// すでに最前面だった場合でもわずかな安定マージン（20ms）を置いてから completion を実行
+    public func activateTargetAppIfNeeded(completion: (@MainActor () -> Void)? = nil) {
+        guard let app = self.targetApp, !app.isTerminated else {
+            completion?()
+            return
+        }
         let currentFront = NSWorkspace.shared.frontmostApplication
         if currentFront?.bundleIdentifier != app.bundleIdentifier {
             NSLog("[VoiceIME] 🎯 ペースト前に直前アプリ [%@] をアクティブ化してフォーカス復元", app.localizedName ?? "")
@@ -426,6 +431,17 @@ public final class FloatingPreviewController: ObservableObject {
                 app.activate()
             } else {
                 app.activate(options: [.activateIgnoringOtherApps])
+            }
+            // macOS WindowServer によるウィンドウフォーカス切り替えが完了するのを確実に待つ (120ms)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                completion?()
+            }
+        } else {
+            // すでに最前面の場合でも、キーストローク受け付けの安定マージン (20ms)
+            if let completion = completion {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                    completion()
+                }
             }
         }
     }

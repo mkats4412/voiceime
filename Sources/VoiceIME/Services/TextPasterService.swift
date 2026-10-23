@@ -107,7 +107,8 @@ public final class TextPasterService {
 
         // kVK_ANSI_V = 0x09
         let keyCode: CGKeyCode = 0x09
-        let source = CGEventSource(stateID: .hidSystemState)
+        // combinedSessionState を使用して物理キー（Control等）のHID残存干渉を排除
+        let source = CGEventSource(stateID: .combinedSessionState)
 
         guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
               let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
@@ -115,12 +116,13 @@ public final class TextPasterService {
             return
         }
 
+        // 確実に Command キーのみを付与し、他の物理キー（ControlやShift等）のフラグを排除
         keyDown.flags = .maskCommand
         keyUp.flags = .maskCommand
 
         keyDown.post(tap: .cghidEventTap)
-        // わずかなディレイを置いて離す
-        usleep(10000) // 10ms
+        // アプリ側（VSCode, Chrome, Slack等）のイベントループが確実に認識できるよう十分な押下時間（25ms）を確保
+        usleep(25000) // 25ms
         keyUp.post(tap: .cghidEventTap)
     }
 }
