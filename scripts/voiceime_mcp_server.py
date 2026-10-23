@@ -434,19 +434,19 @@ def is_pipeline_logging_enabled() -> bool:
     return bool(val)
 
 def is_mcp_agent_editing_enabled() -> bool:
-    """MCP連携 & AI Agent編集（単語登録・置換ルール・修正ストック）がVoiceIMEで有効化されているか確認"""
+    """MCP連携（単語登録・置換ルール・修正ストック・ログ参照等）がVoiceIMEで有効化されているか確認"""
     val = get_app_setting("voiceime_mcpAgentEditingEnabled")
     if val is None:
-        val = get_app_setting("voiceime_correctionStockEnabled", True)
+        val = get_app_setting("voiceime_correctionStockEnabled", False)
     return bool(val)
 
 def check_editing_allowed() -> Optional[str]:
-    """編集操作が許可されているかチェック。OFFの場合は親切な案内文を返す"""
+    """MCPアクセスが許可されているかチェック。OFFの場合は親切な案内文を返す"""
     if not is_mcp_agent_editing_enabled():
         return (
-            "【操作制限】VoiceIME の設定で『MCP連携 & AI Agent編集』が無効(OFF)になっています。\n"
-            "AI Agent による単語登録や置換ルールの変更、修正ストックの操作を行うには、"
-            "メニューバーの VoiceIME ➔ 設定 ➔ 『単語登録・辞書』タブから『MCP連携 & AI Agent編集』をONに切り替えてください。"
+            "【アクセス制限】VoiceIME の設定で『MCP連携』が無効(OFF)になっています。\n"
+            "AI Agent (Cursor, Claude, Antigravity等) から VoiceIME の機能・辞書・ログ・単語登録にアクセスするには、"
+            "メニューバーの VoiceIME ➔ 設定 ➔ 『単語登録・辞書』タブから『MCP連携』をONに切り替えてください。"
         )
     return None
 
@@ -1310,6 +1310,24 @@ def handle_json_rpc(line: str):
     elif method == "tools/call":
         tool_name = params.get("name")
         tool_args = params.get("arguments", {})
+
+        # MCP連携がOFFの場合は全ツールの実行を安全にブロック
+        mcp_guard = check_editing_allowed()
+        if mcp_guard:
+            send_response({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": mcp_guard
+                        }
+                    ],
+                    "isError": True
+                }
+            })
+            return
 
         handler = TOOL_MAP.get(tool_name)
         if handler:

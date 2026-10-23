@@ -117,14 +117,14 @@ public struct DictionarySettingsTab: View {
                 // MCP連携 & AI Agent編集（修正ストック含む）
                 // ==========================================
                 VStack(alignment: .leading, spacing: 8) {
-                    Toggle("MCP連携 & AI Agent編集（修正ストック・単語登録）を有効にする", isOn: $settings.mcpAgentEditingEnabled)
+                    Toggle("MCP連携（AI Agent による辞書・ログ・単語登録へのアクセス）を有効にする", isOn: $settings.mcpAgentEditingEnabled)
                         .font(.subheadline)
                         .fontWeight(.medium)
 
                     HStack(spacing: 8) {
                         Image(systemName: "cpu")
                             .foregroundColor(.accentColor)
-                        Text("ONにすると、AI Agent (MCP) から単語帳・辞書ルールの自動編集が可能になり、修正モードでの '-' キー単語登録や修正差分のストック (~/.voiceime/corrections.json) が有効化されます。（OFFにすると外部からの編集やストック保存が安全に制限されます）")
+                        Text("ONにすると、外部のAI Agent (Cursor, Claude, Antigravity等) からMCP経由での辞書参照・編集・修正ストック管理が可能になり、修正モードでの '-' キー単語登録や修正差分のストックが有効化されます。OFFにするとMCPからのすべてのツールアクセスが安全に遮断されます。（デフォルト: OFF）")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
