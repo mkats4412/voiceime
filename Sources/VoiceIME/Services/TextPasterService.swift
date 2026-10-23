@@ -50,8 +50,11 @@ public final class TextPasterService {
         simulatePasteKeystroke()
 
         // 4. ペースト完了を見計らい、元のクリップボード内容を復元
+        // ※長文テキストや重いアプリ（Electron/Web等）がCmd+Vを受信してPasteboardから読み取る前に
+        // 復元（上書き）されてペーストが消失するレースコンディションを完全防止（最低0.35秒、文字数に応じた猶予）
         if restoreClipboard, let backup = backup {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            let restoreDelay: Double = max(0.35, min(0.60, 0.25 + Double(text.count) * 0.001))
+            DispatchQueue.main.asyncAfter(deadline: .now() + restoreDelay) { [weak self] in
                 // completion は self の生存に関わらず必ず呼ぶ（呼び出し側の状態が .pasting のまま固まるのを防止）
                 defer { completion?() }
                 guard let self = self, pasteboard.changeCount == ourChangeCount else { return }

@@ -416,6 +416,20 @@ public final class FloatingPreviewController: ObservableObject {
         }
     }
 
+    /// 直前に作業していたアプリを安全にアクティブ化（最前面化）してフォーカスを復元
+    public func activateTargetAppIfNeeded() {
+        guard let app = self.targetApp, !app.isTerminated else { return }
+        let currentFront = NSWorkspace.shared.frontmostApplication
+        if currentFront?.bundleIdentifier != app.bundleIdentifier {
+            NSLog("[VoiceIME] 🎯 ペースト前に直前アプリ [%@] をアクティブ化してフォーカス復元", app.localizedName ?? "")
+            if #available(macOS 14.0, *) {
+                app.activate()
+            } else {
+                app.activate(options: [.activateIgnoringOtherApps])
+            }
+        }
+    }
+
     /// 最前面のアクティブアプリケーションへテキストを挿入（ペースト）
     public func insertTextToFrontmostApp() {
         // AIクイック質問の質問文修正中の場合は、ペーストではなくAIへの送信を実行

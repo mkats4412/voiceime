@@ -702,8 +702,8 @@ public final class AppState: ObservableObject {
                 }
             }
 
-            // 最大録音時間セーフティ（Push-to-Talkは45秒、トグルは120秒で自動カットオフし録音スタックを完全防止）
-            let maxDuration: TimeInterval = settings.triggerMode == .pushToTalk ? 45.0 : 120.0
+            // 最大録音時間セーフティ（Push-to-Talk・トグル共に120秒＝2分間。長文音声入力での強制切断を完全防止）
+            let maxDuration: TimeInterval = 120.0
             maxRecordingTimer?.invalidate()
             maxRecordingTimer = Timer.scheduledTimer(withTimeInterval: maxDuration, repeats: false) { [weak self] _ in
                 Task { @MainActor [weak self] in
@@ -1514,6 +1514,8 @@ VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を
                 let pasteDelay: Double = self.settings.isLLMRefinementActive ? 0.22 : 0.05
                 DispatchQueue.main.asyncAfter(deadline: .now() + pasteDelay) { [weak self] in
                     guard let self = self else { return }
+                    // ペースト直前に対象作業アプリを確実に最前面へアクティブ化
+                    FloatingPreviewController.shared.activateTargetAppIfNeeded()
                     self.paster.paste(text: processedText, restoreClipboard: self.settings.restoreClipboard) { [weak self] in
                         Task { @MainActor [weak self] in
                             guard let self = self else { return }
@@ -1540,9 +1542,29 @@ VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を
             if self.settings.floatingPreviewEnabled {
                 FloatingPreviewController.shared.show(text: processedText, notice: "45秒間コピー有効: ⌘V または \(self.settings.pasteShortcutDisplayString)")
             }
-            self.phase = .idle
-            self.statusMessage = "\(completionMessage) [45秒限定コピー: ⌘V/\(self.settings.pasteShortcutDisplayString)で入力]"
-            NSLog("[VoiceIME] ⚠️ 非入力要素（\(role): \(detail)）を検出。45秒限定でクリップボードに退避しウィンドウを残します")
+            if self.settings.autoPasteEnabled {
+                // Webブラウザ（AXWebArea）や独自UIでAXがnotEditableと誤判定した場合でも、ユーザーの自動ペースト希望を尊重してペースト試行
+                self.phase = .pasting
+                self.statusMessage = "入力中..."
+                NSLog("[VoiceIME] 🚀 非入力判定（\(role): \(detail)）だがWeb/独自入力欄の可能性があるためペースト試行＋ウィンドウ保留: %d文字", processedText.count)
+                let pasteDelay: Double = self.settings.isLLMRefinementActive ? 0.22 : 0.05
+                DispatchQueue.main.asyncAfter(deadline: .now() + pasteDelay) { [weak self] in
+                    guard let self = self else { return }
+                    FloatingPreviewController.shared.activateTargetAppIfNeeded()
+                    self.paster.paste(text: processedText, restoreClipboard: self.settings.restoreClipboard) { [weak self] in
+                        Task { @MainActor [weak self] in
+                            guard let self = self else { return }
+                            self.phase = .idle
+                            self.statusMessage = completionMessage
+                            NSLog("[VoiceIME] ✅ 非入力判定要素へのペースト試行完了（ウィンドウは保留維持）")
+                        }
+                    }
+                }
+            } else {
+                self.phase = .idle
+                self.statusMessage = "\(completionMessage) [45秒限定コピー: ⌘V/\(self.settings.pasteShortcutDisplayString)で入力]"
+                NSLog("[VoiceIME] ⚠️ 非入力要素（\(role): \(detail)）を検出。45秒限定でクリップボードに退避しウィンドウを残します")
+            }
 
         case .ambiguous(let role, let detail):
             let tempDuration = self.settings.floatingPreviewDuration > 0 ? min(self.settings.floatingPreviewDuration, 45.0) : 45.0
@@ -1554,12 +1576,17 @@ VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を
                 self.phase = .pasting
                 self.statusMessage = "入力中..."
                 NSLog("[VoiceIME] 🚀 判定微妙（\(role): \(detail)）のためペースト試行＋ウィンドウ保留: [%@]", processedText)
-                self.paster.paste(text: processedText, restoreClipboard: self.settings.restoreClipboard) { [weak self] in
-                    Task { @MainActor [weak self] in
-                        guard let self = self else { return }
-                        self.phase = .idle
-                        self.statusMessage = completionMessage
-                        NSLog("[VoiceIME] ✅ ペースト試行完了（ウィンドウは保留維持）")
+                let pasteDelay: Double = self.settings.isLLMRefinementActive ? 0.22 : 0.05
+                DispatchQueue.main.asyncAfter(deadline: .now() + pasteDelay) { [weak self] in
+                    guard let self = self else { return }
+                    FloatingPreviewController.shared.activateTargetAppIfNeeded()
+                    self.paster.paste(text: processedText, restoreClipboard: self.settings.restoreClipboard) { [weak self] in
+                        Task { @MainActor [weak self] in
+                            guard let self = self else { return }
+                            self.phase = .idle
+                            self.statusMessage = completionMessage
+                            NSLog("[VoiceIME] ✅ ペースト試行完了（ウィンドウは保留維持）")
+                        }
                     }
                 }
             } else {
