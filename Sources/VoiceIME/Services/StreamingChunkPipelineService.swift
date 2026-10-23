@@ -550,10 +550,11 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         let stepSize = Int(sampleRate * 0.025)  // 25ms ステップ
         guard windowSize > 0, totalSamples >= windowSize else { return pcmData }
 
-        // 発話開始判定しきい値（ユーザー設定の音声しきい値と連動）
-        let startThresholdLinear = pow(10.0, speechThresholdDB / 20.0) * 32767.0
-        // 語尾終了判定しきい値（語尾の減衰を救うため、開始しきい値より約3dB低い音量まで許容）
-        let trailingFloorDB = speechThresholdDB - 3.0
+        // 発話開始判定しきい値（語頭の微弱な子音や立ち上がりも漏らさず拾えるよう、しきい値より6dB低く設定）
+        let speechStartFloorDB = speechThresholdDB - 6.0
+        let startThresholdLinear = pow(10.0, speechStartFloorDB / 20.0) * 32767.0
+        // 語尾終了判定しきい値（語尾の減衰を救うため、開始しきい値より約4dB低い音量まで許容）
+        let trailingFloorDB = speechThresholdDB - 4.0
         let trailingThresholdLinear = pow(10.0, trailingFloorDB / 20.0) * 32767.0
 
         var firstSpeechSample: Int? = nil
@@ -586,11 +587,12 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             return pcmData
         }
 
-        // 先頭マージン 120ms、末尾マージン 250ms を確保
-        let leadingMargin = Int(sampleRate * 0.12)
-        let trailingMargin = Int(sampleRate * 0.25)
+        // 先頭マージン 400ms、末尾マージン 300ms を確保（主語や語頭子音の欠落を完全防止）
+        let leadingMargin = Int(sampleRate * 0.40)
+        let trailingMargin = Int(sampleRate * 0.30)
 
-        let startSample = max(0, first - leadingMargin)
+        // 発話開始位置が先頭400ms以内の場合は、先頭をカットせずそのまま0サンプル目から保持
+        let startSample = first <= leadingMargin ? 0 : max(0, first - leadingMargin)
         let endSample = min(totalSamples, last + trailingMargin)
         guard endSample > startSample else { return pcmData }
 

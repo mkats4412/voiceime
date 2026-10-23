@@ -650,7 +650,8 @@ public final class AppState: ObservableObject {
             errorMessage = nil
             NSLog("[VoiceIME] 🎤 録音開始 (動作モード: %@, 一括送信: %d)", settings.triggerMode.rawValue, settings.batchTranscriptionEnabled ? 1 : 0)
 
-            // 一括送信がOFF（累積紙芝居ストリーミングモード）の場合、パイプラインを開始
+            // 🌟 1. マイク音声入力とストリーミングパイプラインを最優先で即座に開始
+            // （辞書走査やUI描画アニメーションによるマイク起動遅延を完全排除）
             if !settings.batchTranscriptionEnabled {
                 let currentProvider = settings.selectedProvider
                 let currentConfig = settings.config(for: currentProvider)
@@ -665,7 +666,8 @@ public final class AppState: ObservableObject {
                 if let custom = settings.promptHint.isEmpty ? nil : settings.promptHint {
                     prompt = custom
                 } else if effectiveLanguage == "ja" {
-                    prompt = isLLM ? (settings.refinementStyle == .casual ? "こんにちは。そうですね、承知いたしました。" : "こんにちは。本件について報告いたします。") : "日本語の音声入力です。話された言葉を正確にそのまま文字起こしします。"
+                    // 主語や冒頭の語句がWhisperによって脱落するのを防ぐ自然な日本語文頭コンテキスト
+                    prompt = isLLM ? (settings.refinementStyle == .casual ? "私は、本日の件についてお話しします。そうですね、承知いたしました。" : "本日は、本件についてご報告いたします。よろしくお願いいたします。") : "日本語の音声入力です。文頭の主語や言葉を正確にそのまま文字起こしします。"
                 } else {
                     prompt = nil
                 }
@@ -680,6 +682,16 @@ public final class AppState: ObservableObject {
                     speechThresholdDB: settings.audioThresholdDB
                 )
             }
+
+            // マイクタップ（LiveSpeechService）を直ちに開始
+            LiveSpeechService.shared.startLiveRecognition(
+                languageCode: settings.language,
+                contextualStrings: []
+            ) { _ in
+                // Apple Speech のフェイク推論は画面に出さず、Whisperから戻ってきた本物の結果のみを表示する
+            }
+
+            // 🌟 2. マイクが動き出した後に UI 表示と辞書単語コンテキストの構築を行う
             if settings.floatingPreviewEnabled {
                 FloatingPreviewController.shared.showLiveRecording()
 
@@ -692,13 +704,6 @@ public final class AppState: ObservableObject {
                     if !w.isEmpty && !contextWords.contains(w) {
                         contextWords.append(w)
                     }
-                }
-
-                LiveSpeechService.shared.startLiveRecognition(
-                    languageCode: settings.language,
-                    contextualStrings: contextWords
-                ) { _ in
-                    // Apple Speech のフェイク推論は画面に出さず、Whisperから戻ってきた本物の結果のみを表示する
                 }
             }
 

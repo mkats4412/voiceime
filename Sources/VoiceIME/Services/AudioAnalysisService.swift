@@ -200,7 +200,7 @@ public final class AudioAnalysisService {
     public func trimLeadingTrailingNoise(
         audioFileURL: URL,
         thresholdDB: Float,
-        leadingMarginSeconds: Double = 0.15,
+        leadingMarginSeconds: Double = 0.25,
         trailingMarginSeconds: Double = 0.70
     ) -> URL? {
         guard let file = try? AVAudioFile(forReading: audioFileURL) else { return nil }
@@ -220,6 +220,8 @@ public final class AudioAnalysisService {
         var firstSpeechFrame: Int?
         var lastSpeechFrame: Int?
 
+        // 語頭の微弱な子音（主語）を逃さないよう、開始判定はしきい値より6dB低く設定
+        let leadingThresholdDB = thresholdDB - 6.0
         // 語尾（「〜でしょう」「〜出ている」「〜ですよね」等）の減衰・息づかいを確実に拾うため、
         // 終了判定の感度は -48.0 dBFS まで高感度に設定
         let trailingThresholdDB = min(thresholdDB, -48.0)
@@ -233,7 +235,7 @@ public final class AudioAnalysisService {
             }
             let rms = sqrt(sumSq / Float(windowSize))
             let rmsDB = rms > 1e-5 ? 20.0 * log10(rms) : -100.0
-            if rmsDB >= thresholdDB {
+            if rmsDB >= leadingThresholdDB {
                 if firstSpeechFrame == nil { firstSpeechFrame = pos }
             }
             if rmsDB >= trailingThresholdDB && firstSpeechFrame != nil {
@@ -246,11 +248,11 @@ public final class AudioAnalysisService {
             return nil
         }
 
-        // 先頭（150ms）と末尾（700ms）のマージンを確保。
-        // 特に語尾の終助詞（〜でしょう、〜ね等）のフェードアウトや息づかいが脱落しないよう末尾マージンを十分に確保する。
+        // 先頭（400ms）と末尾（700ms）のマージンを確保。
+        // 主語や語頭子音、語尾の終助詞（〜でしょう、〜ね等）の息づかいが脱落しないよう十分に確保する。
         let leadingMarginFrames = Int(sampleRate * Float(leadingMarginSeconds))
         let trailingMarginFrames = Int(sampleRate * Float(trailingMarginSeconds))
-        let startFrame = max(0, first - leadingMarginFrames)
+        let startFrame = first <= leadingMarginFrames ? 0 : max(0, first - leadingMarginFrames)
         let endFrame = min(totalFrames, last + trailingMarginFrames)
         let trimmedLength = endFrame - startFrame
 

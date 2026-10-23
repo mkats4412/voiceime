@@ -92,7 +92,45 @@ public final class LiveSpeechService: ObservableObject {
         self.recognitionRequest = request
         self.audioEngine = engine
 
-        // 親プロセスの音声認識タスク（ゼロ遅延で話している最中にテキストを画面出力）
+        let audioQueue = self.helperAudioQueue
+
+        // 🌟 核心: 何よりも最優先でマイクタップの設置とAVAudioEngineの起動を直ちに実行！
+        // （別プロセス起動やタスク初期化による出だしの音声・主語の取りこぼしを完全防止）
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self, weak request] buffer, _ in
+            guard let self = self, self.isRunning else { return }
+
+            // 1. 親プロセスの認識器へバッファ供給（ゼロ遅延リアルタイム出力）
+            request?.append(buffer)
+
+            // 2. 英語ヘルパープロセスの stdin へ PCM Float32 を非同期シリアルキューで送信
+            if self.isDualMode, let pipe = self.helperStdinPipe,
+               let channelData = buffer.floatChannelData, buffer.frameLength > 0 {
+                let byteCount = Int(buffer.frameLength) * MemoryLayout<Float>.size
+                let data = Data(bytes: channelData[0], count: byteCount)
+                audioQueue.async {
+                    try? pipe.fileHandleForWriting.write(contentsOf: data)
+                }
+            }
+
+            // 3. 一括送信がOFFの場合、ストリーミングパイプラインへ供給
+            if !AppSettings.shared.batchTranscriptionEnabled {
+                StreamingChunkPipelineService.shared.appendAudioBuffer(buffer)
+            }
+        }
+
+        do {
+            try engine.start()
+            self.isRunning = true
+            PipelineLogger.shared.logDebug("🎙️ AVAudioEngine 正常起動完了 (マイクタップ開始)")
+            NSLog("[VoiceIME] 🎙️ リアルタイム音声認識エンジン開始 (%@, isAuto: %d)", localeIdentifier, isAuto ? 1 : 0)
+        } catch {
+            PipelineLogger.shared.logDebug("❌ AVAudioEngine 開始失敗: \(error.localizedDescription)")
+            NSLog("[VoiceIME] ⚠️ AVAudioEngine 開始失敗: %@", error.localizedDescription)
+            stopLiveRecognition()
+            return
+        }
+
+        // 親プロセスの音声認識タスク（マイク起動後に非同期で開始）
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             Task { @MainActor [weak self] in
                 guard let self = self, self.isRunning else { return }
@@ -123,47 +161,12 @@ public final class LiveSpeechService: ObservableObject {
             }
         }
 
-        // 自動判定モードの場合: 別プロセスで英語認識ヘルパーを立ち上げ、デュアル認識を行う
+        // 自動判定モードの場合: マイク起動完了後に英語認識ヘルパー子プロセスを立ち上げ
         if isAuto, let execPath = Bundle.main.executablePath, FileManager.default.isExecutableFile(atPath: execPath) {
-            startEnglishHelperProcess(executablePath: execPath, format: recordingFormat)
-        }
-
-        let currentHelperPipe = self.helperStdinPipe
-        let dualModeActive = self.isDualMode
-        let audioQueue = self.helperAudioQueue
-
-        // マイク入力バッファの取得と配信
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self, weak request] buffer, _ in
-            guard self != nil else { return }
-
-            // 1. 親プロセスの認識器へバッファ供給（ゼロ遅延リアルタイム出力）
-            request?.append(buffer)
-
-            // 2. 英語ヘルパープロセスの stdin へ PCM Float32 を非同期シリアルキューで送信
-            if dualModeActive, let pipe = currentHelperPipe,
-               let channelData = buffer.floatChannelData, buffer.frameLength > 0 {
-                let byteCount = Int(buffer.frameLength) * MemoryLayout<Float>.size
-                let data = Data(bytes: channelData[0], count: byteCount)
-                audioQueue.async {
-                    try? pipe.fileHandleForWriting.write(contentsOf: data)
-                }
+            Task { @MainActor [weak self] in
+                guard let self = self, self.isRunning else { return }
+                self.startEnglishHelperProcess(executablePath: execPath, format: recordingFormat)
             }
-
-            // 3. 一括送信がOFFの場合、ストリーミングパイプラインへ供給
-            if !AppSettings.shared.batchTranscriptionEnabled {
-                StreamingChunkPipelineService.shared.appendAudioBuffer(buffer)
-            }
-        }
-
-        do {
-            try engine.start()
-            self.isRunning = true
-            PipelineLogger.shared.logDebug("🎙️ AVAudioEngine 正常起動完了 (マイクタップ開始)")
-            NSLog("[VoiceIME] 🎙️ リアルタイム音声認識エンジン開始 (%@, isAuto: %d)", localeIdentifier, isAuto ? 1 : 0)
-        } catch {
-            PipelineLogger.shared.logDebug("❌ AVAudioEngine 開始失敗: \(error.localizedDescription)")
-            NSLog("[VoiceIME] ⚠️ AVAudioEngine 開始失敗: %@", error.localizedDescription)
-            stopLiveRecognition()
         }
     }
 
