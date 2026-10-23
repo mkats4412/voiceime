@@ -13,13 +13,15 @@ public enum FloatingPreviewMode: Equatable {
     case quickAsk      // AIクイック質問
 }
 
-/// キーボード入力・テキスト編集を受け取れるように canBecomeKey / canBecomeMain をオーバーライドしたフローティングパネル
+/// キーボード入力・テキスト編集を受け取れるように canBecomeKey / canBecomeMain を制御するフローティングパネル
 final class KeyableFloatingPanel: NSPanel {
     override var canBecomeKey: Bool {
-        return true
+        // ピン留め（修正モード）または質問編集モード中のみキーボード入力を受け付け、
+        // 通常の音声入力・録音中・確定プレビュー中は作業アプリのキーフォーカスを絶対に奪わない
+        return FloatingPreviewController.shared.isPinned || FloatingPreviewController.shared.isQuickAskQuestionEditing
     }
     override var canBecomeMain: Bool {
-        return true
+        return FloatingPreviewController.shared.isPinned || FloatingPreviewController.shared.isQuickAskQuestionEditing
     }
 }
 
@@ -338,7 +340,6 @@ public final class FloatingPreviewController: ObservableObject {
 
     /// フローティングプレビューを非表示
     public func hide() {
-        clearTemporaryClipboard()
         unregisterHotkeys()
         guard isVisible, let panel = panel else { return }
 
@@ -416,33 +417,21 @@ public final class FloatingPreviewController: ObservableObject {
         }
     }
 
-    /// 直前に作業していたアプリを安全にアクティブ化（最前面化）してフォーカスを復元
-    /// アクティベーションを実行した場合はフォーカスが安定するまでディレイ（120ms）を置き、
-    /// すでに最前面だった場合でもわずかな安定マージン（20ms）を置いてから completion を実行
+    /// 直前に作業していたアプリを安全にアクティブ化（最前面化）してフォーカスを確実に復元
     public func activateTargetAppIfNeeded(completion: (@MainActor () -> Void)? = nil) {
         guard let app = self.targetApp, !app.isTerminated else {
             completion?()
             return
         }
-        let currentFront = NSWorkspace.shared.frontmostApplication
-        if currentFront?.bundleIdentifier != app.bundleIdentifier {
-            NSLog("[VoiceIME] 🎯 ペースト前に直前アプリ [%@] をアクティブ化してフォーカス復元", app.localizedName ?? "")
-            if #available(macOS 14.0, *) {
-                app.activate()
-            } else {
-                app.activate(options: [.activateIgnoringOtherApps])
-            }
-            // macOS WindowServer によるウィンドウフォーカス切り替えが完了するのを確実に待つ (120ms)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                completion?()
-            }
+        NSLog("[VoiceIME] 🎯 ペースト前に対象作業アプリ [%@] を最前面化してフォーカス復元", app.localizedName ?? "")
+        if #available(macOS 14.0, *) {
+            app.activate()
         } else {
-            // すでに最前面の場合でも、キーストローク受け付けの安定マージン (20ms)
-            if let completion = completion {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-                    completion()
-                }
-            }
+            app.activate(options: [.activateIgnoringOtherApps])
+        }
+        // macOS WindowServer によるウィンドウフォーカス切り替えが完了するのを確実に待つ (150ms)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            completion?()
         }
     }
 
