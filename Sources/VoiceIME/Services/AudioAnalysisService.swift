@@ -220,8 +220,8 @@ public final class AudioAnalysisService {
         var firstSpeechFrame: Int?
         var lastSpeechFrame: Int?
 
-        // 語頭の微弱な子音（主語）を逃さないよう、開始判定はしきい値より6dB低く設定
-        let leadingThresholdDB = thresholdDB - 6.0
+        // 語頭の微弱な子音（主語・第一声）を逃さないよう、開始判定はしきい値より8dB低くかつ最低-45dB以下に設定
+        let leadingThresholdDB = min(thresholdDB - 8.0, -45.0)
         // 語尾（「〜でしょう」「〜出ている」「〜ですよね」等）の減衰・息づかいを確実に拾うため、
         // 終了判定の感度は -48.0 dBFS まで高感度に設定
         let trailingThresholdDB = min(thresholdDB, -48.0)

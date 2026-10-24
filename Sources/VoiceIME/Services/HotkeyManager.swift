@@ -132,12 +132,20 @@ public final class HotkeyManager {
         if status == noErr && hotKeyID.signature == self.signature {
             if let type = HotkeyType(rawValue: hotKeyID.id) {
                 let eventKind = GetEventKind(event)
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
+                if Thread.isMainThread {
                     if eventKind == UInt32(kEventHotKeyPressed) {
                         self.onKeyDownHandlers[type]?()
                     } else if eventKind == UInt32(kEventHotKeyReleased) {
                         self.onKeyUpHandlers[type]?()
+                    }
+                } else {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self else { return }
+                        if eventKind == UInt32(kEventHotKeyPressed) {
+                            self.onKeyDownHandlers[type]?()
+                        } else if eventKind == UInt32(kEventHotKeyReleased) {
+                            self.onKeyUpHandlers[type]?()
+                        }
                     }
                 }
             }

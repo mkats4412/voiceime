@@ -19,8 +19,16 @@ public final class VoiceIMEDiskSyncService {
         baseDirectory.appendingPathComponent("dictionary.json")
     }
 
+    public var dictionaryBackupFileURL: URL {
+        baseDirectory.appendingPathComponent("dictionary.json.bak")
+    }
+
     public var vocabularyFileURL: URL {
         baseDirectory.appendingPathComponent("vocabulary.json")
+    }
+
+    public var vocabularyBackupFileURL: URL {
+        baseDirectory.appendingPathComponent("vocabulary.json.bak")
     }
 
     public var promptsFileURL: URL {
@@ -74,8 +82,8 @@ public final class VoiceIMEDiskSyncService {
     private var lastVocabularyContentHash: Int = 0
     private weak var targetSettings: AppSettings?
 
-    /// アプリの設定内容を `~/.voiceime/*.json` に整形して書き出し
-    public func exportToDisk(rules: [DictionaryRule], vocabulary: [String]) {
+    /// 辞書置換ルール（dictionary.json）のみを整形して書き出し
+    public func exportDictionaryRulesToDisk(rules: [DictionaryRule]) {
         guard !isSyncingInternal else { return }
         ensureDirectoryExists()
 
@@ -84,18 +92,45 @@ public final class VoiceIMEDiskSyncService {
 
         lastExportTimestamp = Date().timeIntervalSince1970
 
-        // 1. dictionary.json
         if let dictData = try? encoder.encode(rules) {
             lastDictionaryContentHash = dictData.hashValue
+            backupFileIfExists(fileURL: dictionaryFileURL, backupURL: dictionaryBackupFileURL)
             try? dictData.write(to: dictionaryFileURL, options: .atomic)
             NSLog("[VoiceIME] 💾 ~/.voiceime/dictionary.json を更新しました (%d ルール)", rules.count)
         }
+    }
 
-        // 2. vocabulary.json
+    /// 単語登録リスト（vocabulary.json）のみを整形して書き出し
+    public func exportVocabularyToDisk(vocabulary: [String]) {
+        guard !isSyncingInternal else { return }
+        ensureDirectoryExists()
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+
+        lastExportTimestamp = Date().timeIntervalSince1970
+
         if let vocabData = try? encoder.encode(vocabulary) {
             lastVocabularyContentHash = vocabData.hashValue
+            backupFileIfExists(fileURL: vocabularyFileURL, backupURL: vocabularyBackupFileURL)
             try? vocabData.write(to: vocabularyFileURL, options: .atomic)
             NSLog("[VoiceIME] 💾 ~/.voiceime/vocabulary.json を更新しました (%d 語)", vocabulary.count)
+        }
+    }
+
+    /// アプリの設定内容を `~/.voiceime/*.json` に整形して書き出し（互換用）
+    public func exportToDisk(rules: [DictionaryRule], vocabulary: [String]) {
+        exportDictionaryRulesToDisk(rules: rules)
+        exportVocabularyToDisk(vocabulary: vocabulary)
+    }
+
+    /// 既存ファイルが有効な内容を持つ場合、自動的に `.bak` へ退避
+    private func backupFileIfExists(fileURL: URL, backupURL: URL) {
+        guard fileManager.fileExists(atPath: fileURL.path) else { return }
+        if let attrs = try? fileManager.attributesOfItem(atPath: fileURL.path),
+           let size = attrs[.size] as? UInt64, size > 10 {
+            try? fileManager.removeItem(at: backupURL)
+            try? fileManager.copyItem(at: fileURL, to: backupURL)
         }
     }
 
@@ -184,27 +219,49 @@ public final class VoiceIMEDiskSyncService {
             startMonitoring(settings: settings)
         }
 
-        // 辞書ルールの同期
+        // 1. 辞書ルールの同期
         if let diskRules = importDictionaryFromDisk(), !diskRules.isEmpty {
             let migrated = AppSettings.migrateRules(diskRules)
             settings.dictionaryRules = migrated
             if migrated != diskRules {
-                exportToDisk(rules: migrated, vocabulary: settings.customVocabulary)
+                exportDictionaryRulesToDisk(rules: migrated)
             }
             didImport = true
+        } else if !fileManager.fileExists(atPath: dictionaryFileURL.path) {
+            exportDictionaryRulesToDisk(rules: settings.dictionaryRules)
         }
 
-        // 単語リストの同期
+        // 2. 単語リストの同期（ディスク上の単語を最優先で保護・復元）
         if let diskVocab = importVocabularyFromDisk(), !diskVocab.isEmpty {
             settings.customVocabulary = diskVocab
             didImport = true
+        } else if let diskVocab = importVocabularyFromDisk(), diskVocab.isEmpty, !settings.customVocabulary.isEmpty {
+            // ディスクが空配列だがUserDefaultsに有効な単語が残っている場合はサルベージして書き出し
+            exportVocabularyToDisk(vocabulary: settings.customVocabulary)
+        } else if !fileManager.fileExists(atPath: vocabularyFileURL.path) {
+            exportVocabularyToDisk(vocabulary: settings.customVocabulary)
         }
 
-        // 推敲プロンプト設定の同期
-        if let diskPrompts = importPromptsFromDisk() {
+        // 3. 推敲プロンプト設定の同期（旧デフォルトプロンプトの場合は語尾保全ルール付き最新プロンプトへ自動アップグレード）
+        if var diskPrompts = importPromptsFromDisk() {
+            var needsPromptUpgrade = false
+            if diskPrompts.casualSystemPrompt == PromptConfig.legacyCasualPrompt {
+                diskPrompts.casualSystemPrompt = PromptConfig.defaultCasualPrompt
+                needsPromptUpgrade = true
+            }
+            if diskPrompts.formalSystemPrompt == PromptConfig.legacyFormalPrompt {
+                diskPrompts.formalSystemPrompt = PromptConfig.defaultFormalPrompt
+                needsPromptUpgrade = true
+            }
             settings.systemPromptCasual = diskPrompts.casualSystemPrompt
             settings.systemPromptFormal = diskPrompts.formalSystemPrompt
             settings.userPromptTemplate = diskPrompts.userPromptTemplate
+            if needsPromptUpgrade {
+                let prev = isSyncingInternal
+                isSyncingInternal = false
+                exportPromptsToDisk(config: diskPrompts)
+                isSyncingInternal = prev
+            }
             didImport = true
         } else {
             let current = PromptConfig(
@@ -215,11 +272,7 @@ public final class VoiceIMEDiskSyncService {
             exportPromptsToDisk(config: current)
         }
 
-        // ファイルがまだ無かった場合は、現在の設定（初期ルール等）をJSONとして初回書き出し
-        if !fileManager.fileExists(atPath: dictionaryFileURL.path) || !fileManager.fileExists(atPath: vocabularyFileURL.path) {
-            isSyncingInternal = false
-            exportToDisk(rules: settings.dictionaryRules, vocabulary: settings.customVocabulary)
-        } else if didImport {
+        if didImport {
             NSLog("[VoiceIME] ✅ ~/.voiceime からの初期設定読み込みが完了しました")
         }
     }
@@ -291,7 +344,7 @@ public final class VoiceIMEDiskSyncService {
         let now = Date().timeIntervalSince1970
         guard now - lastExportTimestamp > 0.5 else { return }
 
-        // デバウンス処理（0.3秒待機して書き込み完了を待つ）
+        // デバウンス処理（0.1秒待機して書き込み完了を待つ）
         reloadDebounceWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             guard self != nil else { return }
@@ -303,7 +356,7 @@ public final class VoiceIMEDiskSyncService {
         }
 
         self.reloadDebounceWorkItem = workItem
-        monitorQueue.asyncAfter(deadline: .now() + 0.3, execute: workItem)
+        monitorQueue.asyncAfter(deadline: .now() + 0.1, execute: workItem)
     }
 
     /// 外部（MCPやスクリプト）からアプリにリロードを促す通知を送信するヘルパー
@@ -341,7 +394,7 @@ public struct PromptConfig: Codable, Equatable {
         self.userPromptTemplate = userPromptTemplate
     }
 
-    public static let defaultCasualPrompt = """
+    public static let legacyCasualPrompt = """
 あなたは音声認識テキストの校正・推敲エキスパートです（口語モード）。
 話者の語尾・文体・口語ニュアンスを維持しながら、以下の観点で自然で読みやすい文章に修正してください：
 ・音声入力特有の誤字脱字、聞き間違い、同音異義語の誤変換（漢字の修正）を文脈から見つけ出して正しく修正する。
@@ -352,7 +405,7 @@ public struct PromptConfig: Codable, Equatable {
 2. 修正後の文章のみを必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。前置きや解説は一切不要です。
 """
 
-    public static let defaultFormalPrompt = """
+    public static let legacyFormalPrompt = """
 あなたは音声認識テキストの校正・推敲エキスパートです（文章モード）。
 ビジネスや記録に適した端正で自然な文章にするため、以下の観点で修正してください：
 ・音声入力特有の誤字脱字、聞き間違い、同音異義語の誤変換（漢字の修正）を文脈から見つけ出して正しく修正する。
@@ -363,9 +416,34 @@ public struct PromptConfig: Codable, Equatable {
 2. 修正後の文章のみを必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。前置きや解説は一切不要です。
 """
 
+    public static let defaultCasualPrompt = """
+あなたは音声認識テキストの校正・推敲エキスパートです（口語モード）。
+話者の語尾・文体・口語ニュアンスを維持しながら、以下の観点で自然で読みやすい文章に修正してください：
+・音声入力特有の誤字脱字、聞き間違い、同音異義語の誤変換（漢字の修正）を文脈から見つけ出して正しく修正する。
+・音声入力で句読点（句点「。」や読点「、」）が抜けているため、必ず文末には句点（。）を付け、文の息継ぎや節の区切り（〜と、〜ので、〜から、〜だが 等）には読点（、）を積極的に補って読みやすくする。
+・同じ言葉や動詞の不自然な重複（例：「表示するすることが」➔「表示することが」）があれば自然な日本語に整える。
+
+【厳守事項】
+1. 発話内容の要約・大幅な削除・文の省略は絶対に禁止です。話された全ての文と話題を最初から最後の語尾まで一言も漏らさず含めてください。
+2. 日本語では文末・語尾（「〜する」と「〜しない」、「〜である」と「〜ではない」等の肯定・否定や語尾表現）が文全体の意味を決定づけます。文末の肯定・否定や語尾の意味を絶対に反転・省略・改変しないでください。
+3. 修正後の文章のみを必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。前置きや解説は一切不要です。
+"""
+
+    public static let defaultFormalPrompt = """
+あなたは音声認識テキストの校正・推敲エキスパートです（文章モード）。
+ビジネスや記録に適した端正で自然な文章にするため、以下の観点で修正してください：
+・音声入力特有の誤字脱字、聞き間違い、同音異義語の誤変換（漢字の修正）を文脈から見つけ出して正しく修正する。
+・音声入力で句読点（句点「。」や読点「、」）が抜けているため、必ず文末には句点（。）を付け、文の息継ぎや節の区切り（〜と、〜ので、〜から、〜だが 等）には読点（、）を積極的に補って読みやすくする。
+・同じ言葉や動詞の不自然な重複（例：「表示するすることが」➔「表示することが」）があれば自然な日本語に整える。
+
+【厳守事項】
+1. 発話内容の要約・大幅な削除・文の省略は絶対に禁止です。話された全ての文と話題を最初から最後の語尾まで一言も漏らさず含めてください。
+2. 日本語では文末・語尾（「〜する」と「〜しない」、「〜である」と「〜ではない」等の肯定・否定や語尾表現）が文全体の意味を決定づけます。文末の肯定・否定や語尾の意味を絶対に反転・省略・改変しないでください。
+3. 修正後の文章のみを必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。前置きや解説は一切不要です。
+"""
+
     public static let defaultUserPromptTemplate = """
-以下の <input> タグで囲まれた音声テキストを校正し、必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。
-※発話内容の要約や削除は禁止します。最初から最後まで全ての文を含めてください。
+以下の <input> タグで囲まれた音声テキストを校正し、文末には句点「。」、文の切れ目には読点「、」を必ず補って <formatted_text> と </formatted_text> タグで囲んで出力してください。
 
 <input>
 {input}

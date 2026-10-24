@@ -762,22 +762,6 @@ public struct APISettingsTab: View {
                             }
                         }
                     }
-
-                    Divider()
-                        .padding(.vertical, 2)
-
-                    // 一括データ送信トグル
-                    Toggle(isOn: $settings.batchTranscriptionEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("録音終了時に一括送信する")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-                            Text("OFF時は音声認識結果をリアルタイムに累積表示します。")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .toggleStyle(.checkbox)
                 }
                 .padding(14)
                 .background(

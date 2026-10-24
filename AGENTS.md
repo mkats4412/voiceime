@@ -6,9 +6,17 @@
 
 ## 🚨 最重要ルール：コード修正・チェック前の事前スキル確認と stash 退避
 
-**コードチェック、静的解析、リファクタリング、バグ修正、機能追加を行う前に、必ず事前スキル [voiceime-pre-check](.agents/skills/voiceime-pre-check/SKILL.md) または [ARCHITECTURE_GUARDRAILS.md](ARCHITECTURE_GUARDRAILS.md) を読み込み、禁止事項を確認してください。**
+**コードチェック、静的解析、リファクタリング、バグ修正、機能追加を行う前に、必ず事前スキル [voiceime-pre-check](.agents/skills/voiceime-pre-check/SKILL.md) および [continuous-spec-sync](.agents/skills/continuous-spec-sync/SKILL.md)、[ARCHITECTURE_GUARDRAILS.md](ARCHITECTURE_GUARDRAILS.md) を読み込み、禁止事項と仕様同期ルールを確認してください。**
 
 **また、チェックやリファクタリングを始める直前には、作業ツリーに未コミットの変更がある場合、必ず `git stash push -u -m "pre-check-backup-..."` でスタッシュし、チェック前の状態を確実に保持・退避してください。**
+
+---
+
+## 📘 継続的仕様同期ルール（Doc-First Sync）
+対話を通じて決まった挙動、制約事項、データ構造の変更は、コードを変更する前に必ず事前スキル [continuous-spec-sync](.agents/skills/continuous-spec-sync/SKILL.md) に従って `doc/SPEC.md`（または `docs/SPEC.md`）へ即座に反映してください。
+1. **仕様ドキュメント先行更新**: ユーザー要求や不変制約（Invariant Rules）をコード変更前に `doc/SPEC.md` に追記・更新する。
+2. **完了報告への明記**: 完了報告には「`doc/SPEC.md` のどの項目を更新・追記したか」を明記する。
+3. **リファクタリング時の検証義務**: 仕様書（`doc/SPEC.md`）を照合し、仕様・制約の逸脱を防止する。
 
 ### 厳守すべき 4 大保護領域
 1. **CoreAudio / AVAudioEngine**:

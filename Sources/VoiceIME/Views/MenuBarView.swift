@@ -272,6 +272,13 @@ public struct MenuBarView: View {
                         )
                         .help("整った標準的な書き言葉に推敲（メール・報告書向け）\n推敲モデル: \(settings.effectiveLLMConfig.modelName)")
 
+                        Text(settings.effectiveLLMConfig.modelName)
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .help("推敲モデル: \(settings.effectiveLLMConfig.modelName) (\(settings.resolvedLLMProvider.displayName))")
+
                         Circle()
                             .fill(providerColor(for: settings.resolvedLLMProvider))
                             .frame(width: 5, height: 5)
@@ -286,31 +293,28 @@ public struct MenuBarView: View {
                 }
                 .padding(.horizontal, 4)
 
-                // 一括送信 ON/OFF（チェックボックス）
-                HStack(spacing: 5) {
-                    Toggle("一括:", isOn: $settings.batchTranscriptionEnabled)
-                        .toggleStyle(.checkbox)
-                        .font(.system(size: 11))
+                // STT & LLM プロバイダ状態の明示
+                HStack(spacing: 4) {
+                    Text("構成:")
+                        .font(.system(size: 9.5))
                         .foregroundColor(.secondary)
-
-                    if settings.batchTranscriptionEnabled {
-                        Text("ON")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(.accentColor)
-                        Text("(一括)")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    } else {
-                        Text("OFF")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                        Text("(累積)")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(.accentColor)
-                            .lineLimit(1)
-                    }
-
+                    Text("STT: \(settings.selectedProvider.displayName)")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundColor(.primary)
+                    Text("|")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary.opacity(0.5))
+                    Text(settings.isLLMRefinementActive ? "LLM: \(settings.resolvedLLMProvider.displayName) (\(settings.effectiveLLMConfig.modelName))" : "LLM: OFF")
+                        .font(.system(size: 9.5, weight: settings.isLLMRefinementActive ? .semibold : .regular))
+                        .foregroundColor(settings.isLLMRefinementActive ? .accentColor : .secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text("|")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary.opacity(0.5))
+                    Text(settings.mcpAgentEditingEnabled ? "MCP: ON" : "MCP: OFF")
+                        .font(.system(size: 9.5, weight: settings.mcpAgentEditingEnabled ? .semibold : .regular))
+                        .foregroundColor(settings.mcpAgentEditingEnabled ? .accentColor : .secondary)
                     Spacer()
                 }
                 .padding(.horizontal, 4)

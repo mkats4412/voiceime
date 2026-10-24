@@ -4,6 +4,7 @@ import Carbon
 
 public enum FloatingPreviewPhase: Equatable {
     case liveRecording // 録音・リアルタイム音声認識中
+    case paused        // 思考中・一時停止中 (Space再押下で再開、修飾キー離脱で確定)
     case processing    // クラウドWhisper/AI推敲中
     case ready         // 完了・保留中 (ペースト可能)
 }
@@ -31,6 +32,7 @@ public final class FloatingPreviewController: ObservableObject {
 
     @Published public var phase: FloatingPreviewPhase = .ready
     @Published public var mode: FloatingPreviewMode = .speechInput
+    @Published public var isMicReady: Bool = false
     @Published public var currentText: String = ""
     @Published public var isVisible: Bool = false
     @Published public var copySuccess: Bool = false
@@ -97,6 +99,13 @@ public final class FloatingPreviewController: ObservableObject {
         }
     }
 
+    /// ホットキー押下時のパネル生成コストをゼロにするため、NSPanelとSwiftUI HostingViewを事前生成する
+    public func warmUpPanelIfNeeded() {
+        if panel == nil {
+            setupPanel()
+        }
+    }
+
     /// 録音開始時のリアルタイムプレビュー表示
     public func showLiveRecording(mode: FloatingPreviewMode = .speechInput) {
         dismissTimer?.invalidate()
@@ -106,6 +115,7 @@ public final class FloatingPreviewController: ObservableObject {
 
         self.mode = mode
         self.phase = .liveRecording
+        self.isMicReady = LiveSpeechService.shared.hasReceivedFirstBuffer
         self.currentText = ""
         self.copySuccess = false
         self.hasPipelineText = false
@@ -118,17 +128,20 @@ public final class FloatingPreviewController: ObservableObject {
         updatePanelPosition()
 
         if !isVisible {
-            panel?.alphaValue = 0.0
+            panel?.alphaValue = 1.0
             panel?.orderFrontRegardless()
-
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.15
-                panel?.animator().alphaValue = 1.0
-            }
             self.isVisible = true
         } else {
             panel?.alphaValue = 1.0
             panel?.orderFrontRegardless()
+        }
+    }
+
+    /// マイクの最初の音声バッファが到達し、発話の取り込み準備が完了した瞬間に青紫表示へ切り替える
+    public func setMicReady() {
+        if !self.isMicReady {
+            self.isMicReady = true
+            NSLog("[VoiceIME] 🟣 マイク入力バッファ到達検知: インジケーターを青紫（発話可能）に切り替えました")
         }
     }
 
@@ -140,10 +153,42 @@ public final class FloatingPreviewController: ObservableObject {
 
     /// 累積紙芝居ストリーミングパイプラインからのリアルタイム＆処理中テキスト更新（Whisper API からの速報・確定テキスト）
     public func updatePipelineText(_ text: String) {
-        guard phase == .liveRecording || phase == .processing else { return }
+        guard phase == .liveRecording || phase == .processing || phase == .paused else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         self.currentText = text
+        if isVisible {
+            updatePanelPosition()
+        }
+        PipelineLogger.shared.logDebug("📺 [ウィンドウ表示更新(ホールド中)] (\(text.count)文字): [\(text)]")
+    }
+
+    /// 一時停止（修飾キーを押したままSpaceを離したとき）
+    public func setPaused(mode: FloatingPreviewMode? = nil) {
+        if let mode = mode {
+            self.mode = mode
+        }
+        self.phase = .paused
+        self.isMicReady = false
+        if isVisible {
+            panel?.alphaValue = 1.0
+            panel?.orderFrontRegardless()
+        }
+        NSLog("[VoiceIME] ⏸️ フローティングプレビュー: 一時停止状態へ遷移")
+    }
+
+    /// 一時停止からの再開（修飾キーを押したまま再度Spaceを押したとき）
+    public func resumeLiveRecording(mode: FloatingPreviewMode? = nil) {
+        if let mode = mode {
+            self.mode = mode
+        }
+        self.phase = .liveRecording
+        self.isMicReady = LiveSpeechService.shared.hasReceivedFirstBuffer
+        if isVisible {
+            panel?.alphaValue = 1.0
+            panel?.orderFrontRegardless()
+        }
+        NSLog("[VoiceIME] ▶️ フローティングプレビュー: 録音再開へ遷移")
     }
 
     /// 確定テキストの同期・更新（推敲・辞書適用後の最終確定成果物を即座に反映）
@@ -163,6 +208,7 @@ public final class FloatingPreviewController: ObservableObject {
             updatePanelPosition()
             registerHotkeys()
         }
+        PipelineLogger.shared.logDebug("📺 [ウィンドウ確定表示] (\(text.count)文字): [\(text)]")
         NSLog("[VoiceIME] 💬 フローティングプレビュー確定テキスト同期: %d文字", text.count)
     }
 
@@ -213,7 +259,7 @@ public final class FloatingPreviewController: ObservableObject {
 
         // 自動非表示タイマーの開始（設定が0より大きい場合）
         resetDismissTimer()
-        NSLog("[VoiceIME] 💬 フローティングプレビュー確定表示: [%@]", text)
+        NSLog("[VoiceIME] 💬 フローティングプレビュー確定表示: %d文字", text.count)
     }
 
     /// 一時的にクリップボードにセット（最大45秒間保持、時間経過またはウィンドウ消去時に元のクリップボードへ復元・消去）
@@ -450,7 +496,7 @@ public final class FloatingPreviewController: ObservableObject {
             return
         }
 
-        NSLog("[VoiceIME] ⚡️ フローティングプレビューから挿入実行: [%@]", textToInsert)
+        NSLog("[VoiceIME] ⚡️ フローティングプレビューから挿入実行: %d文字", textToInsert.count)
 
         // 🌟 修正モードで編集した後に別の入力欄や別アプリをクリックした場合への対応:
         // 現在すでに VoiceIME 以外の別アプリが最前面にある場合は、その「今ユーザーがクリックしたアプリ」を最優先でペースト先とする！
@@ -541,7 +587,7 @@ public final class FloatingPreviewController: ObservableObject {
         self.isQuickAskQuestionEditing = false
         self.onQuickAskSubmit = nil
         self.phase = .processing
-        NSLog("[VoiceIME] 🟣 AIクイック質問: 修正後質問をAIへ送信実行: [%@]", questionToSubmit)
+        NSLog("[VoiceIME] 🟣 AIクイック質問: 修正後質問をAIへ送信実行: %d文字", questionToSubmit.count)
         onSubmit(questionToSubmit)
     }
 
@@ -773,7 +819,7 @@ public final class FloatingPreviewController: ObservableObject {
             if currentText != originalTextForCorrection {
                 PipelineLogger.shared.logUserCorrection(text: currentText, originalText: originalTextForCorrection)
             }
-            NSLog("[VoiceIME] 📝 修正後テキストをクリップボードに保持してプレビューを消去: [%@]", currentText)
+            NSLog("[VoiceIME] 📝 修正後テキストをクリップボードに保持してプレビューを消去: %d文字", currentText.count)
         }
         saveCorrectionStockIfNeeded()
         isPinned = false

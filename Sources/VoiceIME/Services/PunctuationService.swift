@@ -91,8 +91,9 @@ public final class PunctuationService {
         }
 
         // 5. 一般文末表現（「ですよね」「ですね」「ですよ」「ますよね」などの複合終助詞を最優先）
-        // ※「です」「ます」などの単独形は、後続に終助詞（よね/よ/ね/か等）や接続助詞（が/から/けど/ので/し等）がない場合のみ句点「。」を付与
-        let fullEndings = [
+        // ※「です」「ます」などの単独2文字形は、「ので＋すべて（のですべて）」「で＋すぐ（ですぐ）」「いま＋すぐ（いますぐ）」など
+        //   助詞「で/ま」＋「す〜」の語中連接と重なるため、直後にスペース無しでひらがなが続く場合は絶対に句点「。」を挿入しない
+        let compoundEndings = [
             // 4文字以上・複合終助詞（最長一致）
             "ですよねー", "ですよねえ", "ですねー", "ですねえ", "ですよー",
             "ますよねー", "ますよねえ", "ますねー", "ますねえ", "ますよー",
@@ -105,10 +106,9 @@ public final class PunctuationService {
             // 敬体・丁寧表現
             "ございます", "ございました", "と思います", "と考えます", "とのことです",
             "ませんでした",
-            "でした", "ました", "ません",
-            // 終止形（後続に助詞が続かないことが条件）
-            "です", "ます"
+            "でした", "ました", "ません"
         ]
+        let fullEndings = compoundEndings + ["です", "ます"]
 
         // 文末表現の直後に「、\n」がある場合は「。\n」に整える
         let commaBeforeNewlinePattern = "(\(fullEndings.joined(separator: "|")))[、，][ 　]*\\n"
@@ -117,16 +117,69 @@ public final class PunctuationService {
             formatted = regexCBN.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1。\n")
         }
 
-        let endingsPattern = "(\(fullEndings.joined(separator: "|")))(?![がからけどのでのにしたらたりならよねかもわぞぜさ])($|[ 　\t]+|(?=[\\nあ-んア-ン一-龥a-zA-Z0-9]))"
-        if let regexE = try? NSRegularExpression(pattern: endingsPattern, options: []) {
+        // 5-a. 3文字以上の複合文末表現（でした・ました・ません・ですね・ですよね等）
+        let compoundEndingsPattern = "(\(compoundEndings.joined(separator: "|")))(?![がからけどのでのにしたらたりならよねかもわぞぜさしとへもやなでを])($|[ 　\t]+|(?=[\\nあ-んア-ン一-龥a-zA-Z0-9]))"
+        if let regexCE = try? NSRegularExpression(pattern: compoundEndingsPattern, options: []) {
             let range = NSRange(location: 0, length: (formatted as NSString).length)
-            formatted = regexE.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1。")
+            formatted = regexCE.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1。")
+        }
+
+        // 5-b. 2文字の単独終止形（「です」「ます」）
+        // 直後に空白無しでひらがな（[ぁ-んー]）が続く場合は語中（「のですべて」「ですぐ」「いますぐ」等）または助詞連接のため句点を挿入しない
+        let bareDesuMasuPattern = "(です|ます)(?![がからけどのでのにしたらたりならよねかもわぞぜさしとへもやなでをぁ-んー])($|[ 　\t]+|(?=[\\nア-ン一-龥a-zA-Z0-9]))"
+        if let regexBM = try? NSRegularExpression(pattern: bareDesuMasuPattern, options: []) {
+            let range = NSRange(location: 0, length: (formatted as NSString).length)
+            formatted = regexBM.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1。")
         }
 
         // 6. 重複句読点および不自然な空白・行頭孤立句読点・括弧周辺の句読点クリーンアップ
         formatted = cleanupDuplicatePunctuation(formatted)
 
         return formatted
+    }
+
+    /// LLM推敲へ渡す前の前処理専用:
+    /// 機械的な正規表現による句読点挿入（文中の「、」「。」推測挿入）を行わず、
+    /// ユーザー辞書ルールおよび音声コマンド（改行・括弧・感嘆符・疑問符）のみを適用して自然な原文を保つ
+    public func formatVoiceCommandsAndDictionaryOnly(text: String, isJapanese: Bool) -> String {
+        guard !text.isEmpty else { return text }
+
+        var formatted = text
+        formatted = normalizeNewlineVoiceCommand(formatted)
+        formatted = DictionaryService.shared.apply(
+            text: formatted,
+            rules: AppSettings.shared.dictionaryRules
+        )
+        formatted = cleanupBracketPunctuation(formatted)
+        formatted = normalizeNewlineVoiceCommand(formatted)
+
+        guard isJapanese else { return formatted }
+
+        let trailingExclPattern = "(?:(?<=[あ-んア-ン一-龥a-zA-Z0-9])[、， 　\t]*|^[ 　\t]*)(?:[びビ][っッ]?[くク][りリ][まマ][ー|ー]?[くク]|感嘆符|エクスクラメーション(?:マーク)?)[ 　\t]*[!！]?[。、., 　\t]*(?=[」』）\\)\\n]|$)"
+        if let regexTE = try? NSRegularExpression(pattern: trailingExclPattern, options: []) {
+            let range = NSRange(location: 0, length: (formatted as NSString).length)
+            formatted = regexTE.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "！")
+        }
+
+        let trailingQuestPattern = "(?:(?<=[あ-んア-ン一-龥a-zA-Z0-9])[、， 　\t]*|^[ 　\t]*)(?:[はハ][てテ][なナ][まマ][ー|ー]?[くク]|ハテナマーク|疑問符|クエスチョン(?:マーク)?|クエッション(?:マーク)?)[ 　\t]*[?？]?[。、., 　\t]*(?=[」』）\\)\\n]|$)"
+        if let regexTQ = try? NSRegularExpression(pattern: trailingQuestPattern, options: []) {
+            let range = NSRange(location: 0, length: (formatted as NSString).length)
+            formatted = regexTQ.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "？")
+        }
+
+        let duplicateExclPattern = "([!！])[ 　\t]*(?:[びビ][っッ]?[くク][りリ][まマ][ー|ー]?[くク]|感嘆符|エクスクラメーション(?:マーク)?)[!！。、., 　\t]*"
+        if let regexDupE = try? NSRegularExpression(pattern: duplicateExclPattern, options: []) {
+            let range = NSRange(location: 0, length: (formatted as NSString).length)
+            formatted = regexDupE.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1")
+        }
+
+        let duplicateQuestPattern = "([?？])[ 　\t]*(?:[はハ][てテ][なナ][まマ][ー|ー]?[くク]|ハテナマーク|疑問符|クエスチョン(?:マーク)?|クエッション(?:マーク)?)[?？。、., 　\t]*"
+        if let regexDupQ = try? NSRegularExpression(pattern: duplicateQuestPattern, options: []) {
+            let range = NSRange(location: 0, length: (formatted as NSString).length)
+            formatted = regexDupQ.stringByReplacingMatches(in: formatted, options: [], range: range, withTemplate: "$1")
+        }
+
+        return cleanupDuplicatePunctuation(formatted)
     }
 
     /// 括弧・引用符（「」、『』、（）、()、[]、{}、""、''）の前後（開き括弧の前後・閉じ括弧の前後）に
@@ -503,6 +556,20 @@ public final class PunctuationService {
         if let regexBP = try? NSRegularExpression(pattern: brokenParticlePattern, options: []) {
             let range = NSRange(location: 0, length: (result as NSString).length)
             result = regexBP.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1$3")
+        }
+
+        // 「のです。べて」「です。ぐ」「います。ぐ」など、助詞「で/ま」＋「す〜」の語中分断の修復
+        let brokenDeSuCompoundPattern = "(で|ま)す[。、][ 　]*(べて|ぐに|ぐ|こし|でに|ごく|みません|ばらしい)"
+        if let regexDSC = try? NSRegularExpression(pattern: brokenDeSuCompoundPattern, options: []) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexDSC.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1す$2")
+        }
+
+        // 「表示するすることが」「確認するすること」等のサ変動詞重複（スタッター）の修復
+        let stutterSuruPattern = "([一-龥ァ-ヶー]{2,})するする(こと|ため|ので|から|には|よう|べき|必要|場合|とき|時|の|が|を|は)"
+        if let regexStutter = try? NSRegularExpression(pattern: stutterSuruPattern, options: []) {
+            let range = NSRange(location: 0, length: (result as NSString).length)
+            result = regexStutter.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1する$2")
         }
 
         // 改行前後の不要な空白を整理

@@ -151,10 +151,10 @@ public final class CorrectionStockService: @unchecked Sendable {
         let settings = AppSettings.shared
         if !settings.customVocabulary.contains(trimmed) {
             settings.addVocabularyWord(trimmed)
-            NSLog("[VoiceIME] 📝 '-' キーにより単語登録を実行しました: [%@]", trimmed)
+            NSLog("[VoiceIME] 📝 '-' キーにより単語登録を実行しました (%d文字)", trimmed.count)
             return true
         } else {
-            NSLog("[VoiceIME] ℹ️ すでに登録済みの単語です: [%@]", trimmed)
+            NSLog("[VoiceIME] ℹ️ すでに登録済みの単語です (%d文字)", trimmed.count)
             return true
         }
     }

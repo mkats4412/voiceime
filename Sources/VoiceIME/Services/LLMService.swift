@@ -474,6 +474,13 @@ public final class LLMService {
             text = Self.suppressHallucinatedEndings(output: text, originalInput: orig)
         }
 
+        // LLMによるサ変動詞の不自然な重複（「表示するすることが」➔「表示することが」等）を除去
+        let stutterPattern = "([一-龥ァ-ヶー]{2,})するする(こと|ため|ので|から|には|よう|べき|必要|場合|とき|時|の|が|を|は)"
+        if let regexStutter = try? NSRegularExpression(pattern: stutterPattern, options: []) {
+            let range = NSRange(location: 0, length: (text as NSString).length)
+            text = regexStutter.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1する$2")
+        }
+
         guard !text.isEmpty else { return fallback }
         return Self.normalizePunctuation(for: text)
     }

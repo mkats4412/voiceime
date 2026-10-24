@@ -11,9 +11,9 @@ public final class PipelineLogger: @unchecked Sendable {
         VoiceIMEDiskSyncService.shared.baseDirectory.appendingPathComponent("pipeline.log")
     }
 
-    /// パイプラインログが有効かどうか (UserDefaults "voiceime_pipelineLoggingEnabled" と連動)
+    /// パイプラインログが有効かどうか (UserDefaults "voiceime_pipelineLoggingEnabled" と連動、デフォルト: false)
     public var isLoggingEnabled: Bool {
-        UserDefaults.standard.object(forKey: "voiceime_pipelineLoggingEnabled") as? Bool ?? true
+        UserDefaults.standard.object(forKey: "voiceime_pipelineLoggingEnabled") as? Bool ?? false
     }
 
     /// ログファイルをクリア
@@ -126,21 +126,42 @@ public final class PipelineLogger: @unchecked Sendable {
         }
     }
 
+    /// ログファイルの上限サイズ（超過時は古いログを破棄して肥大化を防止）
+    private static let maxLogFileBytes: UInt64 = 5 * 1024 * 1024
+
     private func appendToFile(_ string: String) {
         guard isLoggingEnabled else { return }
         guard let data = string.data(using: .utf8) else { return }
+        let fm = FileManager.default
         let url = logFileURL
         let dir = url.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: dir.path) {
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if !fm.fileExists(atPath: dir.path) {
+            // 音声認識テキストを含むため所有者のみアクセス可能（0700）で作成
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        }
+
+        // 肥大化防止: 上限超過時は古いログを破棄
+        if let attrs = try? fm.attributesOfItem(atPath: url.path),
+           let size = attrs[.size] as? UInt64, size > Self.maxLogFileBytes {
+            try? fm.removeItem(at: url)
         }
 
         if let fileHandle = try? FileHandle(forWritingTo: url) {
-            fileHandle.seekToEndOfFile()
-            fileHandle.write(data)
-            try? fileHandle.close()
+            defer { try? fileHandle.close() }
+            do {
+                try fileHandle.seekToEnd()
+                try fileHandle.write(contentsOf: data)
+            } catch {
+                NSLog("[VoiceIME] ⚠️ パイプラインログの書き込みに失敗: %@", error.localizedDescription)
+            }
         } else {
-            try? data.write(to: url, options: .atomic)
+            do {
+                try data.write(to: url, options: .atomic)
+                // 新規作成時は所有者のみ読み書き可能（0600）
+                try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            } catch {
+                NSLog("[VoiceIME] ⚠️ パイプラインログの作成に失敗: %@", error.localizedDescription)
+            }
         }
     }
 }

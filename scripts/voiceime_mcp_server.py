@@ -27,6 +27,19 @@ PROMPTS_FILE = VOICEIME_DIR / "prompts.json"
 API_KEYS_FILE = VOICEIME_DIR / "api_keys.json"
 LOG_FILE = VOICEIME_DIR / "pipeline.log"
 CORRECTIONS_FILE = VOICEIME_DIR / "corrections.json"
+SYSTEM_LOG_DIR = Path.home() / "Library" / "Logs" / "voiceime"
+
+def log_to_system_log(level: str, message: str):
+    """~/Library/Logs/voiceime/YYYYMMDD.log にセキュリティ監査・システム例外ログを記録"""
+    try:
+        SYSTEM_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        today_str = datetime.now().strftime("%Y%m%d")
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        log_file = SYSTEM_LOG_DIR / f"{today_str}.log"
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{now_str}] [{level}] {message}\n")
+    except Exception as e:
+        sys.stderr.write(f"[VoiceIME MCP] Error writing to system log: {e}\n")
 
 DEFAULT_CASUAL_PROMPT = """あなたは音声認識テキストの校正・推敲エキスパートです（口語モード）。
 話者の語尾・文体・口語ニュアンスを維持しながら、音声入力特有の誤字脱字、聞き間違い、同音異義語の誤変換、言い直し・重複を文脈から見つけ出し、自然で読みやすい文章に修正してください。
@@ -406,6 +419,15 @@ def get_app_setting(key: str, default: Any = None) -> Any:
     except Exception:
         return default
 
+def notify_app_reload() -> None:
+    """VoiceIME アプリに設定変更を通知し、GUI（設定画面等）を即座に再描画させる"""
+    ensure_voiceime_dir()
+    reload_trigger = VOICEIME_DIR / ".reload"
+    try:
+        reload_trigger.touch()
+    except Exception:
+        pass
+
 def set_app_setting(key: str, value: Any) -> bool:
     try:
         if isinstance(value, bool):
@@ -424,13 +446,14 @@ def set_app_setting(key: str, value: Any) -> bool:
             ["defaults", "write", "com.voiceime.app", key, arg, val_str],
             capture_output=True, check=True
         )
+        notify_app_reload()
         return True
     except Exception as e:
         sys.stderr.write(f"[VoiceIME MCP] Error setting defaults {key}: {e}\n")
         return False
 
 def is_pipeline_logging_enabled() -> bool:
-    val = get_app_setting("voiceime_pipelineLoggingEnabled", True)
+    val = get_app_setting("voiceime_pipelineLoggingEnabled", False)
     return bool(val)
 
 def is_mcp_agent_editing_enabled() -> bool:
@@ -780,17 +803,32 @@ def tool_get_pipeline_logging(args: Dict[str, Any]) -> str:
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 def tool_set_pipeline_logging(args: Dict[str, Any]) -> str:
+    guard = check_editing_allowed()
+    if guard:
+        return guard
     enabled = args.get("enabled")
     if enabled is None:
         return "エラー: 'enabled' (boolean: true または false) を指定してください。"
     val = bool(enabled)
     if set_app_setting("voiceime_pipelineLoggingEnabled", val):
         status_str = "有効 (ON)" if val else "無効 (OFF)"
+        if val:
+            log_to_system_log("AUDIT", "MCPツール経由でパイプラインログ記録が有効化されました (User consent / User responsibility acknowledged)")
+        else:
+            log_to_system_log("AUDIT", "MCPツール経由でパイプラインログ記録が無効化されました")
         return f"パイプラインログ記録 (~/.voiceime/pipeline.log) を {status_str} に設定しました。(VoiceIMEアプリにも即座に反映されます)"
     else:
         return "エラー: ログ設定の更新に失敗しました。"
 
 def tool_get_latest_pipeline_log(args: Dict[str, Any]) -> str:
+    if not is_pipeline_logging_enabled():
+        log_to_system_log("SECURITY", "MCPからのログアクセス拒否: パイプラインログが無効(OFF)のためアクセスをブロックしました")
+        return (
+            "【アクセス拒否 / セキュリティ保護】パイプラインログ記録が無効（OFF）です。\n"
+            "プライバシー保護のため、ログが無効な状態ではMCPから音声入力ログを取得・閲覧することはできません。\n"
+            "必要な場合はVoiceIMEの設定画面または明示的な操作でログ記録をONに設定してください。"
+        )
+
     max_lines = args.get("max_lines", 50)
     try:
         max_lines = max(1, int(max_lines))

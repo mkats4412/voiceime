@@ -4,6 +4,15 @@ import AppKit
 @MainActor
 public struct FloatingPreviewView: View {
     @ObservedObject var controller: FloatingPreviewController
+    @ObservedObject private var settings = AppSettings.shared
+
+    // ユーザー設定可能な発話準備完了カラー（青紫、グリーン、ブルー等）
+    private var readyColor: Color {
+        settings.recordingIndicatorColor.color
+    }
+    private var colorNameJa: String {
+        settings.recordingIndicatorColor.colorNameJa
+    }
 
     public init(controller: FloatingPreviewController? = nil) {
         self.controller = controller ?? FloatingPreviewController.shared
@@ -15,12 +24,36 @@ public struct FloatingPreviewView: View {
             HStack(alignment: .center, spacing: 6) {
                 switch controller.phase {
                 case .liveRecording:
-                    Circle()
-                        .fill(controller.mode == .quickAsk ? Color.purple : Color.red)
-                        .frame(width: 9, height: 9)
-                    Text(controller.mode == .quickAsk ? "AIクイック質問中..." : "音声入力中です..")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.primary)
+                    if controller.isMicReady {
+                        // 🟣/🟢 マイク到達完了: 発話可能
+                        Circle()
+                            .fill(readyColor)
+                            .frame(width: 10, height: 10)
+                            .shadow(color: readyColor.opacity(0.85), radius: 4)
+
+                        Text(controller.mode == .quickAsk ? "どうぞ話してください (AI質問中)" : "どうぞ話してください (録音中)")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.primary)
+
+                        Text("マイク準備完了")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundColor(readyColor)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(
+                                Capsule()
+                                    .fill(readyColor.opacity(0.15))
+                            )
+                    } else {
+                        // 🟡 マイク起動中（数ミリ秒〜数百ミリ秒の間）
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 9, height: 9)
+
+                        Text("マイク起動中... (\(colorNameJa)になったら話してください)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.secondary)
+                    }
 
                     Spacer()
 
@@ -53,6 +86,39 @@ public struct FloatingPreviewView: View {
                             .font(.system(size: 10, weight: .regular))
                             .foregroundColor(.secondary.opacity(0.8))
                     }
+
+                case .paused:
+                    // ⏸️ 一時停止中（考え中）
+                    Image(systemName: "pause.circle.fill")
+                        .foregroundColor(.orange)
+                        .font(.system(size: 12, weight: .bold))
+
+                    Text("一時停止中 (考え中)")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.primary)
+
+                    Text("マイク停止中")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1.5)
+                        .background(
+                            Capsule()
+                                .fill(Color.secondary.opacity(0.15))
+                        )
+
+                    Spacer()
+
+                    let pauseHint = controller.mode == .quickAsk ? "Spaceで再開 / ⌃⇧離して送信" : "Spaceで再開 / ⌃離して入力"
+                    Text(pauseHint)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(Color.orange.opacity(0.15))
+                        )
 
                 case .processing:
                     ProgressView()
@@ -170,12 +236,23 @@ public struct FloatingPreviewView: View {
                     .fill(Color(NSColor.controlBackgroundColor).opacity(0.65))
 
                 if controller.currentText.isEmpty {
-                    let placeholder = controller.mode == .quickAsk
-                        ? "質問を話してください... (例: ゴミの英語のスペルは?)"
-                        : "話した言葉がリアルタイムでここに表示されます..."
-                    Text(controller.phase == .liveRecording ? placeholder : "")
+                    let placeholder: String = {
+                        if controller.phase == .liveRecording {
+                            if controller.isMicReady {
+                                return controller.mode == .quickAsk
+                                    ? "どうぞ質問を話してください... (例: ゴミの英語のスペルは?)"
+                                    : "どうぞ話してください。話した言葉がリアルタイムでここに表示されます..."
+                            } else {
+                                return "マイクを起動しています... \(colorNameJa)の表示になったらお話しください"
+                            }
+                        } else if controller.phase == .paused {
+                            return "一時停止中: 考えがまとまったら Space を押して続きをお話しください..."
+                        }
+                        return ""
+                    }()
+                    Text(placeholder)
                         .font(.system(size: 13, weight: .regular))
-                        .foregroundColor(.secondary.opacity(0.6))
+                        .foregroundColor(controller.phase == .paused ? .orange.opacity(0.85) : (controller.isMicReady ? .secondary.opacity(0.8) : .orange.opacity(0.8)))
                         .padding(10)
                 }
 
@@ -183,7 +260,7 @@ public struct FloatingPreviewView: View {
                     text: $controller.currentText,
                     isEditable: controller.phase == .ready || controller.isPinned
                 )
-                .frame(minHeight: 56, maxHeight: 150)
+                .frame(minHeight: 56, maxHeight: 260)
                 .padding(4)
                 .onTapGesture {
                     if controller.phase == .ready || controller.isPinned {
@@ -196,10 +273,12 @@ public struct FloatingPreviewView: View {
                     .stroke(
                         controller.isPinned
                             ? Color.orange.opacity(0.65)
-                            : (controller.phase == .liveRecording
-                                ? (controller.mode == .quickAsk ? Color.purple.opacity(0.5) : Color.red.opacity(0.4))
-                                : Color.primary.opacity(0.12)),
-                        lineWidth: controller.isPinned ? 1.5 : 1
+                            : (controller.phase == .paused
+                                ? Color.orange.opacity(0.6)
+                                : (controller.phase == .liveRecording
+                                    ? (controller.isMicReady ? readyColor.opacity(0.85) : Color.orange.opacity(0.5))
+                                    : Color.primary.opacity(0.12))),
+                        lineWidth: controller.isPinned ? 1.5 : (controller.phase == .liveRecording && controller.isMicReady ? 1.5 : (controller.phase == .paused ? 1.5 : 1))
                     )
             )
 
@@ -279,7 +358,14 @@ public struct FloatingPreviewView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .stroke(controller.phase == .liveRecording ? Color.red.opacity(0.3) : Color.primary.opacity(0.12), lineWidth: 1)
+                .stroke(
+                    controller.phase == .paused
+                        ? Color.orange.opacity(0.6)
+                        : (controller.phase == .liveRecording
+                            ? (controller.isMicReady ? readyColor.opacity(0.65) : Color.orange.opacity(0.4))
+                            : Color.primary.opacity(0.12)),
+                    lineWidth: (controller.phase == .liveRecording && controller.isMicReady) || controller.phase == .paused ? 1.5 : 1
+                )
         )
         .padding(10)
     }
@@ -342,8 +428,19 @@ struct AutoScrollingTextView: NSViewRepresentable {
 
         if textView.string != text {
             textView.string = text
-            // 音声入力中やテキスト追加時に最新の最下行へ自動スクロール
+            // 非編集モード（Ctrl+Spaceホールド中: isEditable == false）でも確実にレイアウト計算を完了させて最下行（語尾）まで表示・スクロールさせる
+            if let tc = textView.textContainer {
+                textView.layoutManager?.ensureLayout(for: tc)
+            }
+            let endRange = NSRange(location: (text as NSString).length, length: 0)
+            textView.scrollRangeToVisible(endRange)
+            textView.scrollToEndOfDocument(nil)
             DispatchQueue.main.async {
+                if let tc = textView.textContainer {
+                    textView.layoutManager?.ensureLayout(for: tc)
+                }
+                let latestEnd = NSRange(location: (textView.string as NSString).length, length: 0)
+                textView.scrollRangeToVisible(latestEnd)
                 textView.scrollToEndOfDocument(nil)
             }
         }

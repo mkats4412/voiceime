@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Carbon
 
 public enum SpeechAPIMode: String, CaseIterable, Identifiable {
@@ -99,6 +100,54 @@ public enum QuickAskProviderMode: String, CaseIterable, Identifiable {
     }
 }
 
+public enum RecordingIndicatorColor: String, CaseIterable, Identifiable {
+    case indigo = "indigo"
+    case blue = "blue"
+    case purple = "purple"
+    case green = "green"
+    case orange = "orange"
+    case red = "red"
+    case pink = "pink"
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .indigo: return "青紫 (デフォルト)"
+        case .blue: return "ブルー"
+        case .purple: return "パープル"
+        case .green: return "グリーン"
+        case .orange: return "オレンジ"
+        case .red: return "レッド"
+        case .pink: return "ピンク"
+        }
+    }
+
+    public var colorNameJa: String {
+        switch self {
+        case .indigo: return "青紫"
+        case .blue: return "ブルー"
+        case .purple: return "紫"
+        case .green: return "緑"
+        case .orange: return "オレンジ"
+        case .red: return "赤"
+        case .pink: return "ピンク"
+        }
+    }
+
+    public var color: Color {
+        switch self {
+        case .indigo: return Color(red: 0.42, green: 0.36, blue: 0.98)
+        case .blue: return Color(red: 0.15, green: 0.55, blue: 0.98)
+        case .purple: return Color(red: 0.72, green: 0.25, blue: 0.95)
+        case .green: return Color(red: 0.20, green: 0.82, blue: 0.45)
+        case .orange: return Color(red: 0.98, green: 0.55, blue: 0.15)
+        case .red: return Color(red: 0.98, green: 0.30, blue: 0.35)
+        case .pink: return Color(red: 0.98, green: 0.35, blue: 0.65)
+        }
+    }
+}
+
 public enum AudioSensitivityPreset: String, CaseIterable, Identifiable {
     case whisperQuiet = "whisperQuiet"
     case standard = "standard"
@@ -156,7 +205,6 @@ public final class AppSettings: ObservableObject {
         static let apiMode = "voiceime_apiMode"
         static let triggerMode = "voiceime_triggerMode"
         static let autoFallbackEnabled = "voiceime_autoFallbackEnabled"
-        static let batchTranscriptionEnabled = "voiceime_batchTranscriptionEnabled"
         static let llmRefinementEnabled = "voiceime_llmRefinementEnabled"
         static let refinementStyle = "voiceime_refinementStyle"
         static let promptHint = "voiceime_promptHint"
@@ -180,6 +228,7 @@ public final class AppSettings: ObservableObject {
         static let floatingPreviewEnabled = "voiceime_floatingPreviewEnabled"
         static let autoPasteEnabled = "voiceime_autoPasteEnabled"
         static let floatingPreviewDuration = "voiceime_floatingPreviewDuration"
+        static let recordingIndicatorColor = "voiceime_recordingIndicatorColor"
 
         // AI クイック質問 (Quick Ask) 設定
         static let quickAskHotkeyCode = "voiceime_quickAskHotkeyCode"
@@ -213,7 +262,10 @@ public final class AppSettings: ObservableObject {
     // MARK: - プロバイダー別設定 (Whisper & LLM)
 
     @Published public var selectedProvider: APIProvider {
-        didSet { defaults.set(selectedProvider.rawValue, forKey: Keys.selectedProvider) }
+        didSet {
+            defaults.set(selectedProvider.rawValue, forKey: Keys.selectedProvider)
+            SystemLogger.shared.logAudit("音声認識(STT)プロバイダが変更されました: [\(selectedProvider.displayName), モデル: \(config(for: selectedProvider).modelName)]")
+        }
     }
 
     @Published public var groqBaseURL: String {
@@ -244,12 +296,18 @@ public final class AppSettings: ObservableObject {
 
     /// ユーザーが直接指定する推敲 Base URL (例: https://api.sarashina.ai/v1, https://api.openai.com/v1, http://localhost:11434/v1)
     @Published public var userLLMBaseURL: String {
-        didSet { defaults.set(userLLMBaseURL, forKey: Keys.userLLMBaseURL) }
+        didSet {
+            defaults.set(userLLMBaseURL, forKey: Keys.userLLMBaseURL)
+            SystemLogger.shared.logAudit("AI推敲URLが変更されました: [\(userLLMBaseURL), 判定プロバイダ: \(resolvedLLMProvider.displayName)]")
+        }
     }
 
     /// ユーザーが直接指定する推敲モデル名 (例: sarashina3-mini, gpt-4o-mini 等。未指定・空欄時は推敲を使用しない)
     @Published public var userLLMModel: String {
-        didSet { defaults.set(userLLMModel, forKey: Keys.userLLMModel) }
+        didSet {
+            defaults.set(userLLMModel, forKey: Keys.userLLMModel)
+            SystemLogger.shared.logAudit("AI推敲モデルが変更されました: [\(userLLMModel), プロバイダ: \(resolvedLLMProvider.displayName)]")
+        }
     }
 
     /// AI推敲（文脈理解）のプロバイダーモード（後方互換用）
@@ -291,14 +349,14 @@ public final class AppSettings: ObservableObject {
         didSet { defaults.set(autoFallbackEnabled, forKey: Keys.autoFallbackEnabled) }
     }
 
-    /// 録音完了時に音声を分割せずまとめて一括送信するかどうか（true: 一括送信で文脈・漢字認識精度を最大化、false: 4.5〜7秒ごとの分割逐次送信）
-    @Published public var batchTranscriptionEnabled: Bool {
-        didSet { defaults.set(batchTranscriptionEnabled, forKey: Keys.batchTranscriptionEnabled) }
-    }
-
     /// AI（LLM）による文脈理解・句読点・推敲の有効化フラグ
     @Published public var llmRefinementEnabled: Bool {
-        didSet { defaults.set(llmRefinementEnabled, forKey: Keys.llmRefinementEnabled) }
+        didSet {
+            defaults.set(llmRefinementEnabled, forKey: Keys.llmRefinementEnabled)
+            let status = isLLMRefinementActive ? "有効 (ON)" : (llmRefinementEnabled ? "OFF (モデル未指定)" : "無効 (OFF)")
+            let llmInfo = "\(resolvedLLMProvider.displayName): \(effectiveLLMConfig.modelName)"
+            SystemLogger.shared.logAudit("AI推敲設定が変更されました: \(status) [使用LLM: \(llmInfo)]")
+        }
     }
 
     /// AI推敲のスタイル（口語モード / 文章モード）
@@ -318,7 +376,7 @@ public final class AppSettings: ObservableObject {
             if promptHint != joined {
                 promptHint = joined
             }
-            VoiceIMEDiskSyncService.shared.exportToDisk(rules: dictionaryRules, vocabulary: customVocabulary)
+            VoiceIMEDiskSyncService.shared.exportVocabularyToDisk(vocabulary: customVocabulary)
         }
     }
 
@@ -475,17 +533,31 @@ public final class AppSettings: ObservableObject {
         didSet { defaults.set(floatingPreviewDuration, forKey: Keys.floatingPreviewDuration) }
     }
 
-    /// パイプラインログ (~/.voiceime/pipeline.log) の記録フラグ (デフォルト: true)
+    /// マイク準備完了（発話可能）時のインジケーターカラー
+    @Published public var recordingIndicatorColor: RecordingIndicatorColor {
+        didSet { defaults.set(recordingIndicatorColor.rawValue, forKey: Keys.recordingIndicatorColor) }
+    }
+
+    /// パイプラインログ (~/.voiceime/pipeline.log) の記録フラグ (デフォルト: false)
     @Published public var pipelineLoggingEnabled: Bool {
-        didSet { defaults.set(pipelineLoggingEnabled, forKey: Keys.pipelineLoggingEnabled) }
+        didSet {
+            defaults.set(pipelineLoggingEnabled, forKey: Keys.pipelineLoggingEnabled)
+            if pipelineLoggingEnabled {
+                SystemLogger.shared.logAudit("ユーザー操作によりパイプラインログ記録が有効化されました (User consent / User responsibility acknowledged)")
+            } else {
+                SystemLogger.shared.logAudit("ユーザー操作によりパイプラインログ記録が無効化されました")
+            }
+        }
     }
 
     /// MCP連携 & AI Agent編集全般（単語登録・置換ルール・修正ストック）の有効化フラグ
-    /// ※ 本来のデフォルトは OFF。現在はテスト・検証のため初期値 ON
+    /// ※ デフォルトは OFF（プライバシー・セキュリティ保護）
     @Published public var mcpAgentEditingEnabled: Bool {
         didSet {
             defaults.set(mcpAgentEditingEnabled, forKey: Keys.mcpAgentEditingEnabled)
             defaults.set(mcpAgentEditingEnabled, forKey: Keys.correctionStockEnabled)
+            let status = mcpAgentEditingEnabled ? "有効 (ON - ユーザー責任)" : "無効 (OFF)"
+            SystemLogger.shared.logAudit("MCP連携設定が変更されました: \(status)")
         }
     }
 
@@ -695,7 +767,6 @@ public final class AppSettings: ObservableObject {
         self.triggerMode = TriggerMode(rawValue: savedTrigger) ?? .pushToTalk
 
         self.autoFallbackEnabled = defaults.object(forKey: Keys.autoFallbackEnabled) != nil ? defaults.bool(forKey: Keys.autoFallbackEnabled) : true
-        self.batchTranscriptionEnabled = defaults.object(forKey: Keys.batchTranscriptionEnabled) != nil ? defaults.bool(forKey: Keys.batchTranscriptionEnabled) : false
         self.llmRefinementEnabled = defaults.object(forKey: Keys.llmRefinementEnabled) != nil ? defaults.bool(forKey: Keys.llmRefinementEnabled) : true
 
         let savedStyle = defaults.string(forKey: Keys.refinementStyle) ?? RefinementStyle.casual.rawValue
@@ -771,20 +842,21 @@ public final class AppSettings: ObservableObject {
         self.floatingPreviewEnabled = defaults.object(forKey: Keys.floatingPreviewEnabled) != nil ? defaults.bool(forKey: Keys.floatingPreviewEnabled) : true
         self.autoPasteEnabled = defaults.object(forKey: Keys.autoPasteEnabled) != nil ? defaults.bool(forKey: Keys.autoPasteEnabled) : true
         self.floatingPreviewDuration = defaults.object(forKey: Keys.floatingPreviewDuration) as? Double ?? 45.0
-        self.pipelineLoggingEnabled = defaults.object(forKey: Keys.pipelineLoggingEnabled) != nil ? defaults.bool(forKey: Keys.pipelineLoggingEnabled) : true
+        let savedIndicatorColor = defaults.string(forKey: Keys.recordingIndicatorColor) ?? RecordingIndicatorColor.indigo.rawValue
+        self.recordingIndicatorColor = RecordingIndicatorColor(rawValue: savedIndicatorColor) ?? .indigo
+        self.pipelineLoggingEnabled = defaults.object(forKey: Keys.pipelineLoggingEnabled) != nil ? defaults.bool(forKey: Keys.pipelineLoggingEnabled) : false
         // ユーザー要望: デフォルトはOFF
         let mcpVal = defaults.object(forKey: Keys.mcpAgentEditingEnabled) ?? defaults.object(forKey: Keys.correctionStockEnabled)
         self.mcpAgentEditingEnabled = mcpVal != nil ? (mcpVal as? Bool ?? false) : false
 
         // Load dictionary rules with auto-migration (古い単語破壊ルールや旧記号ルールを自動除去・アップグレード)
+        // 注意: Swift の init 内では didSet は発火しないため、ここでは disk sync への余計な export は行わずに初期化のみを行う
         if let data = defaults.data(forKey: Keys.dictionaryRules),
            let rules = try? JSONDecoder().decode([DictionaryRule].self, from: data) {
             let migrated = AppSettings.migrateRules(rules)
             self.dictionaryRules = migrated.isEmpty ? AppSettings.defaultDictionaryRules : migrated
-            saveDictionaryRules()
         } else {
             self.dictionaryRules = AppSettings.defaultDictionaryRules
-            saveDictionaryRules()
         }
 
         // ~/.voiceime/ ディレクトリとの同期 (JSON読み込み / 書き出し)
@@ -1033,12 +1105,27 @@ public final class AppSettings: ObservableObject {
         if let data = try? JSONEncoder().encode(dictionaryRules) {
             defaults.set(data, forKey: Keys.dictionaryRules)
         }
-        VoiceIMEDiskSyncService.shared.exportToDisk(rules: dictionaryRules, vocabulary: customVocabulary)
+        VoiceIMEDiskSyncService.shared.exportDictionaryRulesToDisk(rules: dictionaryRules)
+    }
+
+    /// 外部（MCP / defaults write）で変更された設定を UserDefaults から再同期
+    public func reloadPreferencesFromDefaults() {
+        defaults.synchronize()
+        let diskLog = defaults.object(forKey: Keys.pipelineLoggingEnabled) as? Bool ?? false
+        if self.pipelineLoggingEnabled != diskLog {
+            self.pipelineLoggingEnabled = diskLog
+        }
+        let diskMcp = defaults.object(forKey: Keys.mcpAgentEditingEnabled) as? Bool ?? false
+        if self.mcpAgentEditingEnabled != diskMcp {
+            self.mcpAgentEditingEnabled = diskMcp
+        }
     }
 
     /// `~/.voiceime/` の JSON ファイル（dictionary.json, vocabulary.json）から強制再読み込みして設定に反映
     public func reloadFromDisk() {
         VoiceIMEDiskSyncService.shared.performWithoutExport {
+            self.reloadPreferencesFromDefaults()
+
             if let rules = VoiceIMEDiskSyncService.shared.importDictionaryFromDisk() {
                 self.dictionaryRules = rules
                 if let data = try? JSONEncoder().encode(rules) {
@@ -1083,7 +1170,7 @@ public final class AppSettings: ObservableObject {
         audioThresholdEnabled = true
         audioThresholdDB = -32.0
         audioTrimmingEnabled = true
-        pipelineLoggingEnabled = true
+        pipelineLoggingEnabled = false
         mcpAgentEditingEnabled = false // 本来の推奨初期値は OFF
         dictionaryRules = AppSettings.defaultDictionaryRules
     }

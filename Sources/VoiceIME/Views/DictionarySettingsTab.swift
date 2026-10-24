@@ -429,6 +429,9 @@ public struct DictionarySettingsTab: View {
             }
             .padding(18)
         }
+        .onAppear {
+            settings.reloadPreferencesFromDefaults()
+        }
     }
 
     private var testOutput: String {

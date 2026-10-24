@@ -8,6 +8,15 @@ struct TestRunner {
     static func main() {
         print("=== Running VoiceIME Tests ===")
 
+        // 本番環境（~/.voiceime）を100%保護するための完全隔離サンドボックス
+        let testSandboxDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceime_test_sandbox_\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: testSandboxDir, withIntermediateDirectories: true)
+        VoiceIMEDiskSyncService.shared.customBaseDirectory = testSandboxDir
+        defer {
+            VoiceIMEDiskSyncService.shared.customBaseDirectory = nil
+            try? FileManager.default.removeItem(at: testSandboxDir)
+        }
+
         testDictionaryService()
         testSymbolDictionaryRules()
         testVoiceIMEDiskSync()
@@ -23,6 +32,9 @@ struct TestRunner {
         testPipelineLogger()
         testAudioDeviceService()
         testCorrectionStockService()
+        testImmediateCaptureAndLeadingVoicePreservation()
+        testPushToTalkPauseAndResume()
+        testSystemLogger()
 
         print("=== All Tests Passed Successfully! ===")
     }
@@ -304,11 +316,12 @@ struct TestRunner {
     static func testVoiceIMEDiskSync() {
         print("[TEST] VoiceIMEDiskSyncService (一時ディレクトリによる安全な同期 & JSON復元)...")
         let syncService = VoiceIMEDiskSyncService.shared
+        let originalBase = syncService.customBaseDirectory
         let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("voiceime_test_\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         syncService.customBaseDirectory = tempDir
         defer {
-            syncService.customBaseDirectory = nil
+            syncService.customBaseDirectory = originalBase
             try? FileManager.default.removeItem(at: tempDir)
         }
 
@@ -321,9 +334,17 @@ struct TestRunner {
         ]
         let testVocab = ["テスト単語A", "テスト単語B"]
 
-        syncService.exportToDisk(rules: testRules, vocabulary: testVocab)
+        // 個別書き出し (Granular Export) テスト
+        syncService.exportDictionaryRulesToDisk(rules: testRules)
         assert(FileManager.default.fileExists(atPath: syncService.dictionaryFileURL.path), "dictionary.json should exist")
+
+        syncService.exportVocabularyToDisk(vocabulary: testVocab)
         assert(FileManager.default.fileExists(atPath: syncService.vocabularyFileURL.path), "vocabulary.json should exist")
+
+        // バックアップ（.bak）自動作成テスト: 更新時に直前のファイルが退避されるか
+        let updatedVocab = ["テスト単語A", "テスト単語B", "新単語C"]
+        syncService.exportVocabularyToDisk(vocabulary: updatedVocab)
+        assert(FileManager.default.fileExists(atPath: syncService.vocabularyBackupFileURL.path), "vocabulary.json.bak should exist")
 
         // 読み込みテスト
         let loadedRules = syncService.importDictionaryFromDisk()
@@ -670,7 +691,6 @@ struct TestRunner {
         let settings = AppSettings.shared
 
         // 1. AppSettings デフォルト値確認
-        assert(settings.batchTranscriptionEnabled == false, "batchTranscriptionEnabled should be false by default")
         assert(settings.audioThresholdEnabled == true, "audioThresholdEnabled should be true by default")
         assert(settings.audioThresholdDB == -32.0, "audioThresholdDB should be -32.0 by default")
         assert(settings.audioTrimmingEnabled == true, "audioTrimmingEnabled should be true by default")
@@ -793,11 +813,19 @@ struct TestRunner {
         assert(settings.floatingPreviewEnabled == true, "floatingPreviewEnabled should default to true")
         assert(settings.autoPasteEnabled == true, "autoPasteEnabled should default to true")
         assert(settings.floatingPreviewDuration >= 30.0, "floatingPreviewDuration should be positive default")
+        assert(RecordingIndicatorColor.allCases.count >= 7, "RecordingIndicatorColor should have preset color choices")
 
         // 変更と復元のテスト
         let origFloating = settings.floatingPreviewEnabled
         let origAuto = settings.autoPasteEnabled
         let origDuration = settings.floatingPreviewDuration
+        let origColor = settings.recordingIndicatorColor
+
+        settings.recordingIndicatorColor = .purple
+        assert(settings.recordingIndicatorColor == .purple, "recordingIndicatorColor should update to purple")
+        settings.recordingIndicatorColor = .green
+        assert(settings.recordingIndicatorColor == .green, "recordingIndicatorColor should update to green")
+        settings.recordingIndicatorColor = origColor
 
         settings.floatingPreviewEnabled = false
         assert(!settings.floatingPreviewEnabled, "floatingPreviewEnabled should update to false")
@@ -1085,6 +1113,24 @@ struct TestRunner {
         let outBracketEndExcl = PunctuationService.shared.format(text: inBracketEndExcl, isJapanese: true)
         assert(outBracketEndExcl == "彼は言った「お前な！」", "Bracket end exclamation mark failed: got '\(outBracketEndExcl)'")
 
+        // 16. 「のですべて」「いますぐ」「あとでする」等の語中「です/ます」誤分断防止および動詞重複（スタッター）修復テスト
+        let inNodeSubete = "日本語は文字列が最後が重要で何何しないとするでは全然違うのですべてを表示することがすごく大事です"
+        let outNodeSubete = PunctuationService.shared.format(text: inNodeSubete, isJapanese: true)
+        assert(!outNodeSubete.contains("のです。べて"), "'のですべて' must NEVER be split into 'のです。べて': got '\(outNodeSubete)'")
+        assert(outNodeSubete == "日本語は文字列が最後が重要で何何しないとするでは全然違うのですべてを表示することがすごく大事です。", "Expected preserved 'のですべて' and trailing period, got '\(outNodeSubete)'")
+
+        let llmInputNodeSubete = StreamingChunkPipelineService.applyDictionaryRulesForLLMInput(to: inNodeSubete)
+        assert(!llmInputNodeSubete.contains("のです。べて"), "LLM input preprocessing must NEVER split 'のですべて': got '\(llmInputNodeSubete)'")
+        assert(llmInputNodeSubete == inNodeSubete, "LLM input preprocessing should preserve natural text: got '\(llmInputNodeSubete)'")
+
+        let inImasugu = "いますぐ確認してあとでする予定です"
+        let outImasugu = PunctuationService.shared.format(text: inImasugu, isJapanese: true)
+        assert(!outImasugu.contains("います。ぐ") && !outImasugu.contains("あとです。る"), "'いますぐ' and 'あとでする' must not be split: got '\(outImasugu)'")
+
+        let inStutter = "<formatted_text>すべてを表示するすることがすごく大事です。</formatted_text>"
+        let outStutter = LLMService.shared.sanitizeLLMOutput(inStutter, originalInput: inNodeSubete, fallback: inNodeSubete)
+        assert(outStutter == "すべてを表示することがすごく大事です。", "Verb stutter '表示するすることが' should be cleaned: got '\(outStutter)'")
+
         print("  -> Live Punctuation Formatting & PunctuationService passed!")
     }
 
@@ -1177,10 +1223,18 @@ struct TestRunner {
     }
 
     static func testPipelineLogger() {
-        print("[TEST] PipelineLogger (リアルタイムパイプラインログ記録)...")
+        print("[TEST] PipelineLogger (リアルタイムパイプラインログ記録 - デフォルトOFF & 有効化テスト)...")
 
         let logger = PipelineLogger.shared
         let logURL = logger.logFileURL
+
+        // 1. デフォルト (未設定時) は OFF であることを検証
+        UserDefaults.standard.removeObject(forKey: "voiceime_pipelineLoggingEnabled")
+        assert(!logger.isLoggingEnabled, "isLoggingEnabled should default to false (Privacy by Default)")
+
+        // 2. ログ有効化 (ON - ユーザー同意時) のテスト
+        UserDefaults.standard.set(true, forKey: "voiceime_pipelineLoggingEnabled")
+        assert(logger.isLoggingEnabled, "isLoggingEnabled should be true after explicit user enable")
 
         // テスト用のログ書き込み
         logger.logSessionStart()
@@ -1208,7 +1262,7 @@ struct TestRunner {
         assert(content.contains("海人の中東派遣1年延長へ"), "Expected logged transcribed text")
         assert(content.contains("海自の中東派遣1年延長へ"), "Expected logged refined text")
 
-        // ログ無効化 (OFF) のテスト
+        // 3. ログ無効化 (OFF) のテスト
         UserDefaults.standard.set(false, forKey: "voiceime_pipelineLoggingEnabled")
         assert(!logger.isLoggingEnabled, "isLoggingEnabled should be false")
         let lengthBefore = (try? String(contentsOf: logURL, encoding: .utf8))?.count ?? 0
@@ -1217,11 +1271,34 @@ struct TestRunner {
         let lengthAfter = (try? String(contentsOf: logURL, encoding: .utf8))?.count ?? 0
         assert(lengthBefore == lengthAfter, "Log should not grow when disabled")
 
-        // ログ有効化 (ON) に戻す
-        UserDefaults.standard.set(true, forKey: "voiceime_pipelineLoggingEnabled")
-        assert(logger.isLoggingEnabled, "isLoggingEnabled should be true")
-
         print("  -> PipelineLogger passed! Log location: \(logURL.path)")
+    }
+
+    static func testSystemLogger() {
+        print("[TEST] SystemLogger (~/Library/Logs/voiceime/YYYYMMDD.log 診断・監査・例外ログ)...")
+
+        let sysLogger = SystemLogger.shared
+        let logURL = sysLogger.currentLogFileURL()
+
+        sysLogger.logAudit("ユーザー操作によりパイプラインログ記録が有効化されました (テスト監査)")
+        sysLogger.logInfo("システム構成テスト: STT=Groq, LLM=OpenAI (有効)")
+        sysLogger.logError("テストAPI通信エラー (401 Unauthorized)")
+        sysLogger.logException("テスト例外ハンドリング", error: NSError(domain: "test", code: -1, userInfo: [NSLocalizedDescriptionKey: "Sample exception"]))
+
+        Thread.sleep(forTimeInterval: 0.15)
+
+        assert(FileManager.default.fileExists(atPath: logURL.path), "System log file must exist at \(logURL.path)")
+
+        guard let content = try? String(contentsOf: logURL, encoding: .utf8) else {
+            fatalError("Failed to read system log file at \(logURL.path)")
+        }
+
+        assert(content.contains("[AUDIT] ユーザー操作によりパイプラインログ記録が有効化されました"), "Expected AUDIT log")
+        assert(content.contains("[INFO] システム構成テスト"), "Expected INFO log")
+        assert(content.contains("[ERROR] テストAPI通信エラー"), "Expected ERROR log")
+        assert(content.contains("[EXCEPTION] テスト例外ハンドリング"), "Expected EXCEPTION log")
+
+        print("  -> SystemLogger passed! System log location: \(logURL.path)")
     }
 
     @MainActor
@@ -1323,6 +1400,124 @@ struct TestRunner {
         CorrectionStockService.shared.clearStock()
 
         print("  -> CorrectionStockService passed!")
+    }
+
+    @MainActor
+    static func testImmediateCaptureAndLeadingVoicePreservation() {
+        print("[TEST] Immediate Capture, Pre-Roll Ring Buffer & Leading Voice Preservation...")
+
+        let pipeline = StreamingChunkPipelineService.shared
+        pipeline.prepareImmediateCapture(speechThresholdDB: -32.0, isStreamingTriggerEnabled: false)
+
+        let format = AVAudioFormat(standardFormatWithSampleRate: 16000.0, channels: 1)!
+
+        // 1. 0.30秒のプリロールバッファ（キーを押した瞬間の小さな出だし声: -38dB = 振幅 0.0126）を投入
+        let preRollFrames: AVAudioFrameCount = 4800 // 0.30s
+        let preRollBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: preRollFrames)!
+        preRollBuf.frameLength = preRollFrames
+        for i in 0..<Int(preRollFrames) {
+            preRollBuf.floatChannelData![0][i] = 0.015 * sin(Float(i) * 0.1)
+        }
+        pipeline.appendAudioBuffer(preRollBuf, isPreRoll: true)
+
+        // 2. start() が後から呼ばれても、先行キャプチャしたプリロール音声が消えずに保持されることを検証
+        pipeline.start(
+            whisperConfig: (baseURL: "https://api.groq.com/openai/v1", apiKey: nil, model: "whisper-large-v3-turbo"),
+            llmConfig: (baseURL: "", apiKey: nil, model: "", isCustom: false),
+            style: .casual,
+            isLLMEnabled: false,
+            whisperPrompt: nil,
+            language: "ja",
+            speechThresholdDB: -32.0
+        )
+
+        // 3. 続く本発話（0.50秒: -20dB = 振幅 0.1）を投入
+        let liveFrames: AVAudioFrameCount = 8000 // 0.50s
+        let liveBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: liveFrames)!
+        liveBuf.frameLength = liveFrames
+        for i in 0..<Int(liveFrames) {
+            liveBuf.floatChannelData![0][i] = 0.1 * sin(Float(i) * 0.1)
+        }
+        pipeline.appendAudioBuffer(liveBuf, isPreRoll: false)
+
+        // 4. exportFullAudioWAV() でプリロール(0.30s) + 本発話(0.50s) = 0.80s のWAVが書き出されることを検証
+        guard let exportedWAV = pipeline.exportFullAudioWAV() else {
+            assertionFailure("exportFullAudioWAV() must return a valid WAV URL")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: exportedWAV) }
+
+        if let audioFile = try? AVAudioFile(forReading: exportedWAV) {
+            let duration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
+            assert(abs(duration - 0.80) < 0.05, "Exported WAV must contain both 0.30s pre-roll and 0.50s live audio (expected ~0.80s, got \(duration)s)")
+            print("  -> Pre-roll + immediate capture WAV export verified: duration=\(String(format: "%.2f", duration))s")
+        } else {
+            assertionFailure("Failed to read exported WAV file")
+        }
+
+        pipeline.cancel()
+        print("  -> Immediate Capture & Leading Voice Preservation passed!")
+    }
+
+    static func testPushToTalkPauseAndResume() {
+        print("[TEST] Push-to-Talk Pause and Resume (思考サポート・マイク一時停止 & 継続録音)...")
+
+        let pipeline = StreamingChunkPipelineService.shared
+        pipeline.prepareImmediateCapture(speechThresholdDB: -40.0, isStreamingTriggerEnabled: false)
+
+        pipeline.start(
+            whisperConfig: (baseURL: "https://api.groq.com/openai/v1", apiKey: nil, model: "whisper-large-v3-turbo"),
+            llmConfig: (baseURL: "", apiKey: nil, model: "", isCustom: false),
+            style: .casual,
+            isLLMEnabled: false,
+            whisperPrompt: nil,
+            language: "ja",
+            speechThresholdDB: -40.0
+        )
+
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
+
+        // 1. 最初の発話（0.40秒）
+        let frames1: AVAudioFrameCount = 6400 // 0.40s
+        let buf1 = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames1)!
+        buf1.frameLength = frames1
+        for i in 0..<Int(frames1) {
+            buf1.floatChannelData![0][i] = 0.1 * sin(Float(i) * 0.1)
+        }
+        pipeline.appendAudioBuffer(buf1, isPreRoll: false)
+
+        // 2. Spaceキーを離して一時停止（マイクOFF）
+        pipeline.pauseCapture()
+
+        // 3. 再度Spaceキーを押して再開（マイクON）
+        pipeline.resumeCapture()
+
+        // 4. 続きの発話（0.60秒）
+        let frames2: AVAudioFrameCount = 9600 // 0.60s
+        let buf2 = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames2)!
+        buf2.frameLength = frames2
+        for i in 0..<Int(frames2) {
+            buf2.floatChannelData![0][i] = 0.1 * sin(Float(i) * 0.1)
+        }
+        pipeline.appendAudioBuffer(buf2, isPreRoll: false)
+
+        // 5. フル音声 WAV 書き出しの検証 (0.40s + 0.60s = 1.00s)
+        guard let exportedWAV = pipeline.exportFullAudioWAV() else {
+            assertionFailure("exportFullAudioWAV() must succeed after resume")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: exportedWAV) }
+
+        if let audioFile = try? AVAudioFile(forReading: exportedWAV) {
+            let duration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
+            assert(abs(duration - 1.00) < 0.05, "Exported WAV after resume must contain all segments (expected ~1.00s, got \(duration)s)")
+            print("  -> Combined audio duration verified: \(String(format: "%.2f", duration))s")
+        } else {
+            assertionFailure("Failed to read exported WAV after resume")
+        }
+
+        pipeline.cancel()
+        print("  -> Push-to-Talk Pause and Resume passed!")
     }
 }
 

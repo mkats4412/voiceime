@@ -89,14 +89,45 @@ public final class AppState: ObservableObject {
     private var keyUpMonitorLocal: Any?
     private var keyUpMonitorGlobal: Any?
 
+    // MARK: - 一時停止 (Push-to-Talk 思考サポート) 状態管理
+    @Published public private(set) var isRecordingPaused: Bool = false
+
     private init() {
         setupHotkey()
         setupModifierKeyMonitors()
         setupKeyUpMonitors()
-        // アプリ起動とAppKitランループの開始完了後に、Keychainアクセスの事前案内とウォームアップを実行
+        logSystemStartupConfiguration()
+        // アプリ起動とAppKitランループの開始完了後に、Keychainアクセスの事前案内とウォームアップ、
+        // ならびにフローティングパネルの事前描画準備を実行（※マイクは録音開始時のみ完全オンデマンドで起動）
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            self?.promptKeychainWarmupIfNeeded()
+            guard let self = self else { return }
+            self.promptKeychainWarmupIfNeeded()
+            FloatingPreviewController.shared.warmUpPanelIfNeeded()
+            self.permissions.checkPermissions()
         }
+    }
+
+    /// アプリ起動時のシステム構成・LLM推敲設定・STTプロバイダ状態をログに記録
+    public func logSystemStartupConfiguration() {
+        let stt = "\(settings.selectedProvider.displayName) (\(settings.config(for: settings.selectedProvider).modelName))"
+        let isRefine = settings.isLLMRefinementActive
+        let llm = isRefine
+            ? "有効 (ON) - \(settings.resolvedLLMProvider.displayName) (\(settings.effectiveLLMConfig.modelName)) [スタイル: \(settings.refinementStyle.rawValue)]"
+            : (settings.llmRefinementEnabled ? "OFF (モデル未指定)" : "無効 (OFF)")
+        let quickAsk = "\(settings.effectiveQuickAskConfig.provider.displayName) (\(settings.effectiveQuickAskConfig.modelName))"
+        let backup = settings.backupProvider?.displayName ?? "なし"
+        let mcp = settings.mcpAgentEditingEnabled ? "有効 (ON - ユーザー責任)" : "無効 (OFF - デフォルト)"
+        let pipeLog = settings.pipelineLoggingEnabled ? "有効 (ON - ユーザー同意)" : "無効 (OFF - プライバシー保護・デフォルト)"
+
+        SystemLogger.shared.logInfo("==================================================")
+        SystemLogger.shared.logInfo("VoiceIME 起動完了")
+        SystemLogger.shared.logInfo("音声認識 (STT): \(stt)")
+        SystemLogger.shared.logInfo("AI推敲: \(llm)")
+        SystemLogger.shared.logInfo("AIクイック質問: \(quickAsk)")
+        SystemLogger.shared.logInfo("バックアップSTT: \(backup)")
+        SystemLogger.shared.logInfo("MCP連携: \(mcp)")
+        SystemLogger.shared.logInfo("パイプラインログ (~/.voiceime/pipeline.log): \(pipeLog)")
+        SystemLogger.shared.logInfo("==================================================")
     }
 
     deinit {
@@ -118,8 +149,14 @@ public final class AppState: ObservableObject {
                 self.isQuickAskModifierHeld = false
                 // クイック質問録音中に修飾キーが離されたら確実に録音停止
                 if self.isQuickAskActive && self.phase == .recording {
-                    NSLog("[VoiceIME] 🛡️ flagsChanged: クイック質問修飾キーの離脱を検知 ➔ handleQuickAskKeyUp")
-                    self.handleQuickAskKeyUp()
+                    if self.isRecordingPaused {
+                        NSLog("[VoiceIME] 🛡️ flagsChanged: クイック質問一時停止中に修飾キー離脱 ➔ stopQuickAskAndProcess")
+                        self.isRecordingPaused = false
+                        self.stopQuickAskAndProcess()
+                    } else {
+                        NSLog("[VoiceIME] 🛡️ flagsChanged: クイック質問修飾キーの離脱を検知 ➔ handleQuickAskKeyUp")
+                        self.handleQuickAskKeyUp()
+                    }
                 }
             }
 
@@ -129,8 +166,14 @@ public final class AppState: ObservableObject {
                 if requiredMods != 0 {
                     let isHoldingSpeechMods = self.matchesModifiers(event.modifierFlags, carbonModifiers: requiredMods)
                     if !isHoldingSpeechMods {
-                        NSLog("[VoiceIME] 🛡️ flagsChanged: Push-to-Talk 修飾キーの離脱を検知 ➔ handleHotKeyUp")
-                        self.handleHotKeyUp()
+                        if self.isRecordingPaused {
+                            NSLog("[VoiceIME] 🛡️ flagsChanged: Push-to-Talk 一時停止中に修飾キー離脱 ➔ stopRecordingAndTranscribe")
+                            self.isRecordingPaused = false
+                            self.stopRecordingAndTranscribe()
+                        } else {
+                            NSLog("[VoiceIME] 🛡️ flagsChanged: Push-to-Talk 修飾キーの離脱を検知 ➔ handleHotKeyUp")
+                            self.handleHotKeyUp()
+                        }
                     }
                 }
             }
@@ -202,13 +245,25 @@ public final class AppState: ObservableObject {
             keyCode: settings.hotkeyCode,
             modifiers: settings.hotkeyModifiers,
             onKeyDown: { [weak self] in
-                Task { @MainActor in
-                    self?.handleHotKeyDown()
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated {
+                        self?.handleHotKeyDown()
+                    }
+                } else {
+                    Task { @MainActor in
+                        self?.handleHotKeyDown()
+                    }
                 }
             },
             onKeyUp: { [weak self] in
-                Task { @MainActor in
-                    self?.handleHotKeyUp()
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated {
+                        self?.handleHotKeyUp()
+                    }
+                } else {
+                    Task { @MainActor in
+                        self?.handleHotKeyUp()
+                    }
                 }
             }
         )
@@ -219,13 +274,25 @@ public final class AppState: ObservableObject {
             keyCode: settings.quickAskHotkeyCode,
             modifiers: settings.quickAskHotkeyModifiers,
             onKeyDown: { [weak self] in
-                Task { @MainActor in
-                    self?.handleQuickAskKeyDown()
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated {
+                        self?.handleQuickAskKeyDown()
+                    }
+                } else {
+                    Task { @MainActor in
+                        self?.handleQuickAskKeyDown()
+                    }
                 }
             },
             onKeyUp: { [weak self] in
-                Task { @MainActor in
-                    self?.handleQuickAskKeyUp()
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated {
+                        self?.handleQuickAskKeyUp()
+                    }
+                } else {
+                    Task { @MainActor in
+                        self?.handleQuickAskKeyUp()
+                    }
                 }
             }
         )
@@ -234,7 +301,10 @@ public final class AppState: ObservableObject {
     /// ホットキーが押されたときのハンドラ
     public func handleHotKeyDown() {
         if settings.triggerMode == .pushToTalk {
-            if phase == .idle || isErrorPhase() {
+            if phase == .recording && isRecordingPaused && !isQuickAskActive {
+                // 一時停止からの再開！
+                resumeRecording()
+            } else if phase == .idle || isErrorPhase() {
                 startRecording()
             }
         } else {
@@ -251,20 +321,35 @@ public final class AppState: ObservableObject {
     public func handleHotKeyUp() {
         if settings.triggerMode == .pushToTalk {
             if phase == .recording && !isQuickAskActive {
+                // すでに一時停止中の場合、SpaceのKeyUpは無視（修飾キーの離脱で確定する）
+                if isRecordingPaused {
+                    return
+                }
+
                 // 誤タップ（0.15秒未満）の誤動作ガード
                 if let startTime = recordingStartTime, Date().timeIntervalSince(startTime) < 0.15 {
                     cancelRecording()
                     return
                 }
-                // キーを離した瞬間に視覚的フィードバック（処理中アニメーション）を即座に開始
-                if settings.floatingPreviewEnabled {
-                    FloatingPreviewController.shared.setProcessing(mode: .speechInput)
-                }
-                // 発話末尾の単語・語尾・余韻（「〜でしょう」「〜出ている」「〜ですよね」等）がマイクバッファから欠落するのを防ぐため、
-                // キー離脱から約420ms遅延させて録音を停止する
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) { [weak self] in
-                    guard let self = self, self.phase == .recording, !self.isQuickAskActive else { return }
-                    self.stopRecordingAndTranscribe()
+
+                // 修飾キー（Ctrl等）がまだ押されているか確認
+                let requiredMods = settings.hotkeyModifiers
+                let isHoldingMods = requiredMods != 0 && matchesModifiers(NSEvent.modifierFlags, carbonModifiers: requiredMods)
+
+                if isHoldingMods {
+                    // 修飾キーを押したままSpaceが離された ➔ 一時停止（思考サポート）
+                    pauseRecording()
+                } else {
+                    // キーを離した瞬間に視覚的フィードバック（処理中アニメーション）を即座に開始
+                    if settings.floatingPreviewEnabled {
+                        FloatingPreviewController.shared.setProcessing(mode: .speechInput)
+                    }
+                    // 発話末尾の単語・語尾・余韻（「〜でしょう」「〜出ている」「〜ですよね」等）がマイクバッファから欠落するのを防ぐため、
+                    // キー離脱から約420ms遅延させて録音を停止する
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) { [weak self] in
+                        guard let self = self, self.phase == .recording, !self.isQuickAskActive, !self.isRecordingPaused else { return }
+                        self.stopRecordingAndTranscribe()
+                    }
                 }
             }
         }
@@ -272,6 +357,11 @@ public final class AppState: ObservableObject {
 
     /// AIクイック質問ホットキー押下時
     public func handleQuickAskKeyDown() {
+        if isQuickAskActive && phase == .recording && isRecordingPaused {
+            resumeQuickAskRecording()
+            return
+        }
+
         // 修飾キーが前回の回答時から維持されているか判定
         let currentlyHolding = matchesModifiers(NSEvent.modifierFlags, carbonModifiers: settings.quickAskHotkeyModifiers)
         if !isQuickAskModifierHeld || !currentlyHolding {
@@ -291,18 +381,29 @@ public final class AppState: ObservableObject {
     /// AIクイック質問ホットキー離脱時
     public func handleQuickAskKeyUp() {
         if isQuickAskActive && phase == .recording {
+            if isRecordingPaused {
+                return
+            }
+
             // 誤タップガード
             if let startTime = recordingStartTime, Date().timeIntervalSince(startTime) < 0.15 {
                 cancelRecording()
                 return
             }
 
-            FloatingPreviewController.shared.setProcessing(mode: .quickAsk)
+            let quickAskMods = settings.quickAskHotkeyModifiers
+            let isHoldingMods = quickAskMods != 0 && matchesModifiers(NSEvent.modifierFlags, carbonModifiers: quickAskMods)
 
-            // 音声末尾の欠落防止のため約200ms遅延して停止・質問処理
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
-                guard let self = self, self.isQuickAskActive, self.phase == .recording else { return }
-                self.stopQuickAskAndProcess()
+            if isHoldingMods {
+                pauseQuickAskRecording()
+            } else {
+                FloatingPreviewController.shared.setProcessing(mode: .quickAsk)
+
+                // 音声末尾の欠落防止のため約200ms遅延して停止・質問処理
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
+                    guard let self = self, self.isQuickAskActive, self.phase == .recording, !self.isRecordingPaused else { return }
+                    self.stopQuickAskAndProcess()
+                }
             }
         }
     }
@@ -354,17 +455,87 @@ public final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - 一時停止・再開（思考サポート）
+
+    /// Push-to-Talkで修飾キー（Ctrl等）を押したままSpaceを離した際の一時停止処理
+    public func pauseRecording() {
+        guard phase == .recording, !isRecordingPaused else { return }
+        isRecordingPaused = true
+
+        // セキュリティ最優先: 一時停止中はマイクを完全に停止（オレンジの点灯を消灯）
+        LiveSpeechService.shared.stopLiveRecognition()
+        recorder.pauseRecording()
+        StreamingChunkPipelineService.shared.pauseCapture()
+
+        if settings.floatingPreviewEnabled {
+            FloatingPreviewController.shared.setPaused(mode: .speechInput)
+        }
+        statusMessage = "一時停止中 (Spaceで再開 / ⌃離して入力)"
+        NSLog("[VoiceIME] ⏸️ 音声入力 一時停止 (マイク停止中・思考待機)")
+    }
+
+    /// 一時停止中からSpaceを再度押した際の再開処理
+    public func resumeRecording() {
+        guard phase == .recording, isRecordingPaused else { return }
+        isRecordingPaused = false
+
+        // キャプチャの再開
+        recorder.resumeRecording()
+        StreamingChunkPipelineService.shared.resumeCapture()
+        _ = LiveSpeechService.shared.startImmediateCapture()
+        LiveSpeechService.shared.startLiveRecognition(
+            languageCode: settings.language,
+            contextualStrings: []
+        ) { _ in }
+
+        if settings.floatingPreviewEnabled {
+            FloatingPreviewController.shared.resumeLiveRecording(mode: .speechInput)
+        }
+        statusMessage = settings.triggerMode == .pushToTalk ? "録音中... (キーを離すと入力)" : "録音中... (もう一度キーを押して停止)"
+        NSLog("[VoiceIME] ▶️ 音声入力 再開 (マイクキャプチャ再開)")
+    }
+
+    /// AIクイック質問の一時停止処理
+    public func pauseQuickAskRecording() {
+        guard isQuickAskActive, phase == .recording, !isRecordingPaused else { return }
+        isRecordingPaused = true
+
+        LiveSpeechService.shared.stopLiveRecognition()
+        recorder.pauseRecording()
+        StreamingChunkPipelineService.shared.pauseCapture()
+
+        FloatingPreviewController.shared.setPaused(mode: .quickAsk)
+        statusMessage = "一時停止中 (Spaceで再開 / ⌃⇧離して送信)"
+        NSLog("[VoiceIME] ⏸️ AIクイック質問 一時停止 (マイク停止中・思考待機)")
+    }
+
+    /// AIクイック質問の再開処理
+    public func resumeQuickAskRecording() {
+        guard isQuickAskActive, phase == .recording, isRecordingPaused else { return }
+        isRecordingPaused = false
+
+        recorder.resumeRecording()
+        StreamingChunkPipelineService.shared.resumeCapture()
+        _ = LiveSpeechService.shared.startImmediateCapture()
+        LiveSpeechService.shared.startLiveRecognition(languageCode: settings.language) { _ in }
+
+        FloatingPreviewController.shared.resumeLiveRecording(mode: .quickAsk)
+        statusMessage = "AI質問中... (キーを離すと回答)"
+        NSLog("[VoiceIME] ▶️ AIクイック質問 再開 (マイクキャプチャ再開)")
+    }
+
     // MARK: - AI クイック質問 (Quick Ask) 録音・処理フロー
 
     /// AIクイック質問の録音開始
     public func startQuickAskRecording() {
-        // 音声入力開始前の直前アクティブアプリを記録（ペースト復元先）
-        FloatingPreviewController.shared.recordFrontmostApp()
+        isRecordingPaused = false
+        if MicrophoneLevelTester.shared.isTesting {
+            MicrophoneLevelTester.shared.stopTesting()
+        }
 
-        MicrophoneLevelTester.shared.stopTesting()
-        FloatingPreviewController.shared.hide()
-
-        permissions.checkPermissions()
+        if !permissions.isMicrophoneAuthorized {
+            permissions.checkPermissions()
+        }
         guard permissions.isMicrophoneAuthorized else {
             phase = .error("マイクへのアクセス権限が必要です。")
             statusMessage = "マイク権限エラー"
@@ -372,64 +543,84 @@ public final class AppState: ObservableObject {
             return
         }
 
-        do {
-            _ = try recorder.startRecording()
-            isQuickAskActive = true
-            phase = .recording
-            statusMessage = "AI質問中... (キーを離すと回答)"
-            errorMessage = nil
-            recordingStartTime = Date()
-            NSLog("[VoiceIME] 🟣 AIクイック質問 録音開始")
+        // 🌟 最優先: UI表示・アプリ検出・Keychain読込より先にマイク録音キャプチャを開始！
+        // （非録音時はセキュリティのためマイクOFF。ホットキー押下時のみ即座に起動）
+        isQuickAskActive = true
+        phase = .recording
+        recordingStartTime = Date()
+        StreamingChunkPipelineService.shared.prepareImmediateCapture(
+            speechThresholdDB: settings.audioThresholdDB,
+            isStreamingTriggerEnabled: true
+        )
+        let micStarted = LiveSpeechService.shared.startImmediateCapture()
 
-            FloatingPreviewController.shared.showLiveRecording(mode: .quickAsk)
+        // バックアップ録音も開始（万が一のAVAudioEngine失敗時のフォールバック用）
+        let recorderStarted = (try? recorder.startRecording()) != nil
+        guard micStarted || recorderStarted else {
+            isQuickAskActive = false
+            phase = .error("録音の開始に失敗しました。")
+            statusMessage = "録音開始に失敗しました。"
+            errorMessage = "マイク入力の初期化に失敗しました。"
+            SystemLogger.shared.logError("クイック質問 録音開始失敗: マイク入力初期化エラー")
+            NSLog("[VoiceIME] ❌ クイック質問 録音開始失敗")
+            return
+        }
 
-            // AI会話でもWhisperからプレビューをリアルタイム更新（中間推敲は不要なのでisLLMEnabled: false）
-            let currentProvider = settings.selectedProvider
-            let currentConfig = settings.config(for: currentProvider)
-            let apiKey = keychain.loadAPIKey(for: currentProvider)
-            let effectiveLanguage = settings.language.isEmpty ? "ja" : settings.language
+        statusMessage = "AI質問中... (キーを離すと回答)"
+        errorMessage = nil
+        NSLog("[VoiceIME] 🟣 AIクイック質問 録音開始 (即時キャプチャ完了)")
 
-            StreamingChunkPipelineService.shared.start(
-                whisperConfig: (baseURL: currentConfig.baseURL, apiKey: apiKey, model: currentConfig.modelName),
-                llmConfig: (baseURL: "", apiKey: nil, model: "", isCustom: false),
-                style: .casual,
-                isLLMEnabled: false,
-                whisperPrompt: "質問です。日本語で質問します。",
-                language: effectiveLanguage,
-                speechThresholdDB: settings.audioThresholdDB
-            )
+        // AI会話でもWhisperからプレビューをリアルタイム更新（中間推敲は不要なのでisLLMEnabled: false）
+        let currentProvider = settings.selectedProvider
+        let currentConfig = settings.config(for: currentProvider)
+        let apiKey = keychain.loadAPIKey(for: currentProvider)
+        let effectiveLanguage = settings.language.isEmpty ? "ja" : settings.language
 
-            LiveSpeechService.shared.startLiveRecognition(languageCode: settings.language) { _ in
-                // Apple Speech のフェイク推論は画面に出さず、Whisperから戻ってきた本物の結果のみを表示する
-            }
+        StreamingChunkPipelineService.shared.start(
+            whisperConfig: (baseURL: currentConfig.baseURL, apiKey: apiKey, model: currentConfig.modelName),
+            llmConfig: (baseURL: "", apiKey: nil, model: "", isCustom: false),
+            style: .casual,
+            isLLMEnabled: false,
+            whisperPrompt: "質問です。日本語で質問します。",
+            language: effectiveLanguage,
+            speechThresholdDB: settings.audioThresholdDB
+        )
 
-            maxRecordingTimer?.invalidate()
-            maxRecordingTimer = Timer.scheduledTimer(withTimeInterval: 45.0, repeats: false) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    if self?.isQuickAskActive == true && self?.phase == .recording {
-                        NSLog("[VoiceIME] ⏱️ クイック質問最大録音時間（45秒）に達したため自動停止")
-                        self?.stopQuickAskAndProcess()
-                    }
+        LiveSpeechService.shared.startLiveRecognition(languageCode: settings.language) { _ in
+            // Apple Speech のフェイク推論は画面に出さず、Whisperから戻ってきた本物の結果のみを表示する
+        }
+
+        // マイクが確実に回り始めた後に、前面アプリ記録とフローティングウィンドウ表示を実行
+        FloatingPreviewController.shared.recordFrontmostApp()
+        FloatingPreviewController.shared.showLiveRecording(mode: .quickAsk)
+
+        maxRecordingTimer?.invalidate()
+        maxRecordingTimer = Timer.scheduledTimer(withTimeInterval: 45.0, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                if self?.isQuickAskActive == true && self?.phase == .recording {
+                    NSLog("[VoiceIME] ⏱️ クイック質問最大録音時間（45秒）に達したため自動停止")
+                    self?.stopQuickAskAndProcess()
                 }
             }
-        } catch {
-            isQuickAskActive = false
-            phase = .error(error.localizedDescription)
-            statusMessage = "録音開始に失敗しました。"
-            errorMessage = error.localizedDescription
-            NSLog("[VoiceIME] ❌ クイック質問 録音開始失敗: %@", error.localizedDescription)
         }
     }
 
     /// AIクイック質問の録音停止・認識・回答生成処理
     public func stopQuickAskAndProcess() {
+        isRecordingPaused = false
         maxRecordingTimer?.invalidate()
         maxRecordingTimer = nil
 
         LiveSpeechService.shared.stopLiveRecognition()
         FloatingPreviewController.shared.setProcessing(mode: .quickAsk)
 
-        guard let audioURL = recorder.stopRecording() else {
+        let recorderURL = recorder.stopRecording()
+        let pipelineWAVURL = StreamingChunkPipelineService.shared.exportFullAudioWAV()
+        if let _ = pipelineWAVURL, let recURL = recorderURL {
+            try? FileManager.default.removeItem(at: recURL)
+        }
+
+        guard let audioURL = pipelineWAVURL ?? recorderURL else {
             isQuickAskActive = false
             phase = .idle
             statusMessage = "録音データがありません。"
@@ -471,7 +662,8 @@ public final class AppState: ObservableObject {
             if settings.audioTrimmingEnabled,
                let trimmedURL = AudioAnalysisService.shared.trimLeadingTrailingNoise(
                    audioFileURL: audioURL,
-                   thresholdDB: settings.audioThresholdDB
+                   thresholdDB: settings.audioThresholdDB,
+                   leadingMarginSeconds: 0.60
                ) {
                 try? FileManager.default.removeItem(at: audioURL)
                 targetAudioURL = trimmedURL
@@ -549,7 +741,7 @@ public final class AppState: ObservableObject {
                     }
                     self.phase = .idle
                     self.statusMessage = "AI質問修正中: ⌘↩で送信"
-                    NSLog("[VoiceIME] 🟣 ＋キー固定モードのためAI質問送信を保留し修正モードに移行: [%@]", trimmedQuestion)
+                    NSLog("[VoiceIME] 🟣 ＋キー固定モードのためAI質問送信を保留し修正モードに移行: %d文字", trimmedQuestion.count)
                     return
                 }
 
@@ -559,6 +751,7 @@ public final class AppState: ObservableObject {
                 self.phase = .idle
                 self.statusMessage = "AI質問エラー: \(error.localizedDescription)"
                 FloatingPreviewController.shared.show(text: "[回答エラー: \(error.localizedDescription)]", notice: "Esc で閉じる", mode: .quickAsk)
+                SystemLogger.shared.logError("クイック質問エラー", error: error)
                 NSLog("[VoiceIME] ❌ クイック質問エラー: %@", error.localizedDescription)
             }
         }
@@ -618,23 +811,25 @@ public final class AppState: ObservableObject {
             self.phase = .idle
             self.statusMessage = "AI質問エラー: \(error.localizedDescription)"
             FloatingPreviewController.shared.show(text: "[回答エラー: \(error.localizedDescription)]", notice: "Esc で閉じる", mode: .quickAsk)
+            SystemLogger.shared.logError("AIクイック回答取得エラー", error: error)
             NSLog("[VoiceIME] ❌ クイック質問エラー: %@", error.localizedDescription)
         }
     }
 
     /// 録音開始
     public func startRecording() {
-        // 通常の音声入力開始時は確実にクイック質問フラグを解除
+        // 通常の音声入力開始時は確実にクイック質問フラグおよび一時停止フラグを解除
         self.isQuickAskActive = false
-
-        // 音声入力開始前の直前アクティブアプリを記録（ペースト復元先）
-        FloatingPreviewController.shared.recordFrontmostApp()
+        self.isRecordingPaused = false
 
         // マイクレベルテストが実行中の場合は停止して競合を防止
-        MicrophoneLevelTester.shared.stopTesting()
-        FloatingPreviewController.shared.hide()
+        if MicrophoneLevelTester.shared.isTesting {
+            MicrophoneLevelTester.shared.stopTesting()
+        }
 
-        permissions.checkPermissions()
+        if !permissions.isMicrophoneAuthorized {
+            permissions.checkPermissions()
+        }
         guard permissions.isMicrophoneAuthorized else {
             phase = .error("マイクへのアクセス権限が必要です。")
             statusMessage = "マイク権限エラー"
@@ -642,92 +837,93 @@ public final class AppState: ObservableObject {
             return
         }
 
-        do {
-            _ = try recorder.startRecording()
-            phase = .recording
-            PipelineLogger.shared.logSessionStart()
-            statusMessage = settings.triggerMode == .pushToTalk ? "録音中... (キーを離すと入力)" : "録音中... (もう一度キーを押して停止)"
-            errorMessage = nil
-            NSLog("[VoiceIME] 🎤 録音開始 (動作モード: %@, 一括送信: %d)", settings.triggerMode.rawValue, settings.batchTranscriptionEnabled ? 1 : 0)
+        // 🌟 0. 何よりも最優先でマイク音声キャプチャをオンデマンド即座起動！
+        // （待機中はセキュリティ保護のためマイク完全OFF。ホットキー押下時のみ起動）
+        phase = .recording
+        recordingStartTime = Date()
+        StreamingChunkPipelineService.shared.prepareImmediateCapture(
+            speechThresholdDB: settings.audioThresholdDB,
+            isStreamingTriggerEnabled: true
+        )
+        let micStarted = LiveSpeechService.shared.startImmediateCapture()
+        let recorderStarted = (try? recorder.startRecording()) != nil
 
-            // 🌟 1. マイク音声入力とストリーミングパイプラインを最優先で即座に開始
-            // （辞書走査やUI描画アニメーションによるマイク起動遅延を完全排除）
-            if !settings.batchTranscriptionEnabled {
-                let currentProvider = settings.selectedProvider
-                let currentConfig = settings.config(for: currentProvider)
-                let currentLLMConfig = settings.effectiveLLMConfig
-                let resolvedLLMProvider = settings.resolvedLLMProvider
-                let llmApiKey = keychain.loadAPIKey(for: resolvedLLMProvider)
-                let apiKey = keychain.loadAPIKey(for: currentProvider)
-
-                let effectiveLanguage = settings.language.isEmpty ? "ja" : settings.language
-                let isLLM = settings.isLLMRefinementActive
-                let prompt: String?
-                if let custom = settings.promptHint.isEmpty ? nil : settings.promptHint {
-                    prompt = custom
-                } else if effectiveLanguage == "ja" {
-                    // 主語や冒頭の語句がWhisperによって脱落するのを防ぐ自然な日本語文頭コンテキスト
-                    prompt = isLLM ? (settings.refinementStyle == .casual ? "私は、本日の件についてお話しします。そうですね、承知いたしました。" : "本日は、本件についてご報告いたします。よろしくお願いいたします。") : "日本語の音声入力です。文頭の主語や言葉を正確にそのまま文字起こしします。"
-                } else {
-                    prompt = nil
-                }
-
-                StreamingChunkPipelineService.shared.start(
-                    whisperConfig: (baseURL: currentConfig.baseURL, apiKey: apiKey, model: currentConfig.modelName),
-                    llmConfig: (baseURL: currentLLMConfig.baseURL, apiKey: llmApiKey, model: currentLLMConfig.modelName, isCustom: currentLLMConfig.isCustom),
-                    style: settings.refinementStyle,
-                    isLLMEnabled: isLLM,
-                    whisperPrompt: prompt,
-                    language: effectiveLanguage,
-                    speechThresholdDB: settings.audioThresholdDB
-                )
-            }
-
-            // マイクタップ（LiveSpeechService）を直ちに開始
-            LiveSpeechService.shared.startLiveRecognition(
-                languageCode: settings.language,
-                contextualStrings: []
-            ) { _ in
-                // Apple Speech のフェイク推論は画面に出さず、Whisperから戻ってきた本物の結果のみを表示する
-            }
-
-            // 🌟 2. マイクが動き出した後に UI 表示と辞書単語コンテキストの構築を行う
-            if settings.floatingPreviewEnabled {
-                FloatingPreviewController.shared.showLiveRecording()
-
-                var contextWords: [String] = []
-                if settings.refinementStyle == .casual {
-                    contextWords.append(contentsOf: ["えーっと", "あのー", "ええと", "うーん", "まあ", "えっと", "あの"])
-                }
-                for rule in settings.dictionaryRules where !rule.isRegex {
-                    let w = rule.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !w.isEmpty && !contextWords.contains(w) {
-                        contextWords.append(w)
-                    }
-                }
-            }
-
-            // 最大録音時間セーフティ（Push-to-Talk・トグル共に120秒＝2分間。長文音声入力での強制切断を完全防止）
-            let maxDuration: TimeInterval = 120.0
-            maxRecordingTimer?.invalidate()
-            maxRecordingTimer = Timer.scheduledTimer(withTimeInterval: maxDuration, repeats: false) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    if self?.phase == .recording {
-                        NSLog("[VoiceIME] ⏱️ 最大録音時間（%.0f秒）に達したため自動停止して文字起こしへ移行", maxDuration)
-                        self?.stopRecordingAndTranscribe()
-                    }
-                }
-            }
-        } catch {
-            phase = .error(error.localizedDescription)
+        guard micStarted || recorderStarted else {
+            phase = .error("録音の開始に失敗しました。")
             statusMessage = "録音の開始に失敗しました。"
-            errorMessage = error.localizedDescription
-            NSLog("[VoiceIME] ❌ 録音開始失敗: %@", error.localizedDescription)
+            errorMessage = "マイク入力の初期化に失敗しました。"
+            SystemLogger.shared.logError("音声入力 録音開始失敗: マイク入力初期化エラー")
+            NSLog("[VoiceIME] ❌ 録音開始失敗")
+            return
+        }
+
+        PipelineLogger.shared.logSessionStart()
+        statusMessage = settings.triggerMode == .pushToTalk ? "録音中... (キーを離すと入力)" : "録音中... (もう一度キーを押して停止)"
+        errorMessage = nil
+        NSLog("[VoiceIME] 🎤 録音開始 (動作モード: %@, 即時キャプチャ完了)", settings.triggerMode.rawValue)
+
+        // 🌟 1. ストリーミングパイプラインの設定反映とマイクタップ認識の接続
+        let currentProvider = settings.selectedProvider
+        let currentConfig = settings.config(for: currentProvider)
+        let currentLLMConfig = settings.effectiveLLMConfig
+        let resolvedLLMProvider = settings.resolvedLLMProvider
+        let llmApiKey = keychain.loadAPIKey(for: resolvedLLMProvider)
+        let apiKey = keychain.loadAPIKey(for: currentProvider)
+
+        let effectiveLanguage = settings.language.isEmpty ? "ja" : settings.language
+        let isLLM = settings.isLLMRefinementActive
+        let prompt: String?
+        if let custom = settings.promptHint.isEmpty ? nil : settings.promptHint {
+            prompt = custom
+        } else if effectiveLanguage == "ja" {
+            // 主語や冒頭の語句がWhisperによって脱落するのを防ぐ自然な日本語文頭コンテキスト
+            prompt = isLLM ? (settings.refinementStyle == .casual ? "私は、本日の件についてお話しします。そうですね、承知いたしました。" : "本日は、本件についてご報告いたします。よろしくお願いいたします。") : "日本語の音声入力です。文頭の主語や言葉を正確にそのまま文字起こしします。"
+        } else {
+            prompt = nil
+        }
+
+        StreamingChunkPipelineService.shared.start(
+            whisperConfig: (baseURL: currentConfig.baseURL, apiKey: apiKey, model: currentConfig.modelName),
+            llmConfig: (baseURL: currentLLMConfig.baseURL, apiKey: llmApiKey, model: currentLLMConfig.modelName, isCustom: currentLLMConfig.isCustom),
+            style: settings.refinementStyle,
+            isLLMEnabled: isLLM,
+            whisperPrompt: prompt,
+            language: effectiveLanguage,
+            speechThresholdDB: settings.audioThresholdDB
+        )
+
+        // マイクタップ（LiveSpeechService）の認識タスクを接続
+        LiveSpeechService.shared.startLiveRecognition(
+            languageCode: settings.language,
+            contextualStrings: []
+        ) { _ in
+            // Apple Speech のフェイク推論は画面に出さず、Whisperから戻ってきた本物の結果のみを表示する
+        }
+
+        // 🌟 2. マイクが完全に回り出した後に、直前アプリ記録と UI（フローティングウィンドウ）表示を行う
+        FloatingPreviewController.shared.recordFrontmostApp()
+        if settings.floatingPreviewEnabled {
+            FloatingPreviewController.shared.showLiveRecording()
+        } else {
+            FloatingPreviewController.shared.hide()
+        }
+
+        // 最大録音時間セーフティ（Push-to-Talk・トグル共に120秒＝2分間。長文音声入力での強制切断を完全防止）
+        let maxDuration: TimeInterval = 120.0
+        maxRecordingTimer?.invalidate()
+        maxRecordingTimer = Timer.scheduledTimer(withTimeInterval: maxDuration, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                if self?.phase == .recording {
+                    NSLog("[VoiceIME] ⏱️ 最大録音時間（%.0f秒）に達したため自動停止して文字起こしへ移行", maxDuration)
+                    self?.stopRecordingAndTranscribe()
+                }
+            }
         }
     }
 
     /// 録音停止と文字起こし・AI推敲・自動ペースト処理
     public func stopRecordingAndTranscribe() {
+        isRecordingPaused = false
         maxRecordingTimer?.invalidate()
         maxRecordingTimer = nil
 
@@ -743,14 +939,17 @@ public final class AppState: ObservableObject {
         // リアルタイム音声取得を停止
         LiveSpeechService.shared.stopLiveRecognition()
 
-        // 画面のテキストは Whisper から戻ってきた本物の最新テキストを採用
-        let livePreviewText = StreamingChunkPipelineService.shared.latestRefinedText
-
         if settings.floatingPreviewEnabled {
             FloatingPreviewController.shared.setProcessing()
         }
 
-        guard let audioURL = recorder.stopRecording() else {
+        let recorderURL = recorder.stopRecording()
+        let pipelineWAVURL = StreamingChunkPipelineService.shared.exportFullAudioWAV()
+        if let _ = pipelineWAVURL, let recURL = recorderURL {
+            try? FileManager.default.removeItem(at: recURL)
+        }
+
+        guard let audioURL = pipelineWAVURL ?? recorderURL else {
             phase = .idle
             statusMessage = "録音データがありません。"
             if settings.floatingPreviewEnabled {
@@ -802,570 +1001,41 @@ public final class AppState: ObservableObject {
             if settings.audioTrimmingEnabled,
                let trimmedURL = AudioAnalysisService.shared.trimLeadingTrailingNoise(
                    audioFileURL: audioURL,
-                   thresholdDB: settings.audioThresholdDB
+                   thresholdDB: settings.audioThresholdDB,
+                   leadingMarginSeconds: 0.60
                ) {
                 try? FileManager.default.removeItem(at: audioURL)
                 targetAudioURL = trimmedURL
             }
         }
 
-        let mode = settings.apiMode
         phase = .transcribing
-        statusMessage = mode == .translations ? "英語翻訳中..." : "文字起こし中..."
+        statusMessage = settings.apiMode == .translations ? "英語翻訳中..." : "文字起こし中..."
 
-        let currentProvider = settings.selectedProvider
-        let currentConfig = settings.config(for: currentProvider)
-        let currentLLMConfig = settings.effectiveLLMConfig
-        let resolvedLLMProvider = settings.resolvedLLMProvider
-        let llmApiKey = keychain.loadAPIKey(for: resolvedLLMProvider)
-        let llmProviderDisplayName = settings.effectiveLLMProviderDisplayName
-        let apiKey = keychain.loadAPIKey(for: currentProvider)
-        let baseURL = currentConfig.baseURL
-        let model = currentConfig.modelName
-        let prompt = settings.promptHint.isEmpty ? nil : settings.promptHint
-        let language = settings.language.isEmpty ? "ja" : settings.language
-
-        let isLLMEnabled = settings.isLLMRefinementActive
-        let refinementStyle = settings.refinementStyle
-
-        // Whisper APIの初期プロンプト: 指定言語に応じた自然な句読点や語尾の脱落を防止
-        let effectiveWhisperPrompt: String?
-        if let customPrompt = prompt, !customPrompt.isEmpty {
-            effectiveWhisperPrompt = customPrompt
-        } else if language == "ja" {
-            if !isLLMEnabled {
-                // 推敲OFF時は、話者が発話した語尾（「〜でしょう」「〜ですね」「〜と思います」等）を1文字も変えずに忠実に書き起こすニュートラルなプロンプト
-                effectiveWhisperPrompt = "日本語の音声入力です。話された言葉や語尾を正確に、自然な句読点を含めてそのまま文字起こしします。"
-            } else {
-                effectiveWhisperPrompt = (refinementStyle == .casual)
-                    ? "こんにちは。そうですね、承知いたしました。〜ですね。〜ですよ。〜と言及した。"
-                    : "こんにちは。本件について報告いたします。〜と言及した。〜である。"
-            }
-        } else if language == "en" {
-            effectiveWhisperPrompt = "Hello. Yes, I understand. Thank you."
-        } else {
-            // 言語自動検出時は特定言語へのバイアスを避けるため nil
-            effectiveWhisperPrompt = nil
-        }
-
-        if !settings.batchTranscriptionEnabled {
-            // 分割逐次送信モード
-            StreamingChunkPipelineService.shared.finishAndFinalize { [weak self] pipelineText in
-                Task { @MainActor [weak self] in
-                    guard let self = self else {
-                        try? FileManager.default.removeItem(at: targetAudioURL)
-                        return
-                    }
-                    let clean = pipelineText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !clean.isEmpty {
-                        try? FileManager.default.removeItem(at: targetAudioURL)
-                        self.finalizeAndPaste(
-                            text: clean,
-                            livePreviewText: isLLMEnabled ? clean : livePreviewText,
-                            isJapanese: isJapanese,
-                            totalStartTime: CFAbsoluteTimeGetCurrent(),
-                            fallbackNotices: []
-                        )
-                        return
-                    }
-                    // パイプライン結果が空の場合は一括送信へフォールバック
-                    self.executeBatchTranscriptionTask(
-                        targetAudioURL: targetAudioURL,
-                        mode: mode,
-                        currentProvider: currentProvider,
-                        currentConfig: currentConfig,
-                        currentLLMConfig: currentLLMConfig,
-                        resolvedLLMProvider: resolvedLLMProvider,
-                        llmApiKey: llmApiKey,
-                        llmProviderDisplayName: llmProviderDisplayName,
-                        apiKey: apiKey,
-                        baseURL: baseURL,
-                        model: model,
-                        effectiveWhisperPrompt: effectiveWhisperPrompt,
-                        language: language,
-                        isLLMEnabled: isLLMEnabled,
-                        refinementStyle: refinementStyle,
-                        livePreviewText: livePreviewText,
-                        isJapanese: isJapanese
+        StreamingChunkPipelineService.shared.finishAndFinalize { [weak self] pipelineText in
+            Task { @MainActor [weak self] in
+                guard let self = self else {
+                    try? FileManager.default.removeItem(at: targetAudioURL)
+                    return
+                }
+                try? FileManager.default.removeItem(at: targetAudioURL)
+                let clean = pipelineText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !clean.isEmpty {
+                    self.finalizeAndPaste(
+                        text: clean,
+                        livePreviewText: clean,
+                        isJapanese: isJapanese,
+                        totalStartTime: CFAbsoluteTimeGetCurrent(),
+                        fallbackNotices: []
                     )
-                }
-            }
-            return
-        }
-
-        // 一括送信モード（推奨・文脈高精度）
-        executeBatchTranscriptionTask(
-            targetAudioURL: targetAudioURL,
-            mode: mode,
-            currentProvider: currentProvider,
-            currentConfig: currentConfig,
-            currentLLMConfig: currentLLMConfig,
-            resolvedLLMProvider: resolvedLLMProvider,
-            llmApiKey: llmApiKey,
-            llmProviderDisplayName: llmProviderDisplayName,
-            apiKey: apiKey,
-            baseURL: baseURL,
-            model: model,
-            effectiveWhisperPrompt: effectiveWhisperPrompt,
-            language: language,
-            isLLMEnabled: isLLMEnabled,
-            refinementStyle: refinementStyle,
-            livePreviewText: livePreviewText,
-            isJapanese: isJapanese
-        )
-    }
-
-    /// 録音された音声をまとめて一括送信して文字起こし・推敲を実行するメインパイプライン
-    private func executeBatchTranscriptionTask(
-        targetAudioURL: URL,
-        mode: SpeechAPIMode,
-        currentProvider: APIProvider,
-        currentConfig: (baseURL: String, modelName: String),
-        currentLLMConfig: (baseURL: String, modelName: String, isCustom: Bool),
-        resolvedLLMProvider: APIProvider,
-        llmApiKey: String?,
-        llmProviderDisplayName: String,
-        apiKey: String?,
-        baseURL: String,
-        model: String,
-        effectiveWhisperPrompt: String?,
-        language: String?,
-        isLLMEnabled: Bool,
-        refinementStyle: RefinementStyle,
-        livePreviewText: String,
-        isJapanese: Bool
-    ) {
-        processingTask?.cancel()
-        let taskToken = UUID()
-        processingTaskToken = taskToken
-        processingTask = Task { @MainActor [weak self] in
-            guard let self = self else {
-                try? FileManager.default.removeItem(at: targetAudioURL)
-                return
-            }
-            defer {
-                try? FileManager.default.removeItem(at: targetAudioURL)
-                if self.processingTaskToken == taskToken {
-                    self.processingTask = nil
-                    self.processingTaskToken = nil
-                }
-            }
-
-            let totalStartTime = CFAbsoluteTimeGetCurrent()
-            var whisperDuration: Double = 0.0
-            var llmDuration: Double = 0.0
-            let prompt = self.settings.promptHint.isEmpty ? nil : self.settings.promptHint
-
-            do {
-                // ==========================================
-                // 1. Whisper API にリクエスト送信（音声 ➔ テキスト）
-                // ==========================================
-                var rawText: String
-                var fallbackNotices: [String] = []
-
-                let whisperStart = CFAbsoluteTimeGetCurrent()
-                // バックアッププロバイダが存在するか確認
-                let backupProvider = self.settings.backupProvider
-                let backupKey = backupProvider.flatMap { self.keychain.loadAPIKey(for: $0) }
-
-                if let backup = backupProvider, let bKey = backupKey {
-                    // =========================================================
-                    // 🚀 ヘッジド・リクエスト (Hedged Requests / 時間差レーシング)
-                    // =========================================================
-                    // 1. まずメイン（Groq等）にリクエスト送信
-                    // 2. 1.8秒経過しても応答がない場合、バックアップ（OpenAI等）にも並列で投げる
-                    // 3. どちらか早く成功した方の結果を採用する
-                    let backupConfig = self.settings.config(for: backup)
-                    let hedgedDelayNanoseconds: UInt64 = 1_800_000_000 // 1.8秒
-
-                    enum TranscribeWinner {
-                        case primary(String)
-                        case backup(String, FallbackRecord, primaryError: Error?)
-                    }
-
-                    enum TaskResult {
-                        case success(TranscribeWinner)
-                        case failure(Error, isPrimary: Bool)
-                    }
-
-                    do {
-                        let winner = try await withThrowingTaskGroup(of: TaskResult.self) { group -> TranscribeWinner in
-                            // タスク1: メインプロバイダ
-                            group.addTask {
-                                do {
-                                    let res = try await self.api.transcribe(
-                                        audioFileURL: targetAudioURL,
-                                        baseURL: baseURL,
-                                        apiKey: apiKey,
-                                        model: model,
-                                        mode: mode,
-                                        prompt: effectiveWhisperPrompt,
-                                        language: language
-                                    )
-                                    return .success(.primary(res))
-                                } catch {
-                                    return .failure(error, isPrimary: true)
-                                }
-                            }
-
-                            // タスク2: 1.8秒ディレイ後にバックアップを発射（メインが早く終わればキャンセルされる）
-                            group.addTask {
-                                do {
-                                    try await Task.sleep(nanoseconds: hedgedDelayNanoseconds)
-                                    try Task.checkCancellation()
-
-                                    await MainActor.run {
-                                        self.statusMessage = "\(backup.displayName) で並列認識中 (応答遅延)..."
-                                    }
-                                    NSLog("[VoiceIME] ⚡️ メイン(%@)応答待ち1.8秒超過: バックアップ(%@)へ並行リクエスト発射", currentProvider.displayName, backup.displayName)
-
-                                    let res = try await self.api.transcribe(
-                                        audioFileURL: targetAudioURL,
-                                        baseURL: backupConfig.baseURL,
-                                        apiKey: bKey,
-                                        model: backupConfig.modelName,
-                                        mode: mode,
-                                        prompt: effectiveWhisperPrompt,
-                                        language: language
-                                    )
-
-                                    let record = FallbackRecord(
-                                        timestamp: Date(),
-                                        primaryProvider: currentProvider,
-                                        backupProvider: backup,
-                                        step: "音声認識",
-                                        reasonSummary: "応答遅延 (1.8秒超過)",
-                                        detail: "メインプロバイダの応答が1.8秒以内に返らなかったため、バックアップを並行実行し最速応答を採用しました。"
-                                    )
-                                    return .success(.backup(res, record, primaryError: nil))
-                                } catch {
-                                    return .failure(error, isPrimary: false)
-                                }
-                            }
-
-                            var primaryError: Error?
-                            var backupError: Error?
-
-                            for try await result in group {
-                                switch result {
-                                case .success(let win):
-                                    group.cancelAll()
-                                    if case .backup(let txt, let rec, _) = win, let pErr = primaryError {
-                                        return .backup(txt, rec, primaryError: pErr)
-                                    }
-                                    return win
-                                case .failure(let err, let isPrimary):
-                                    if isPrimary {
-                                        primaryError = err
-                                        let (summary, detail) = self.extractErrorSummary(err)
-                                        NSLog("[VoiceIME] ⚠️ メイン音声認識エラー (%@): %@ (%@)", currentProvider.displayName, summary, detail)
-                                    } else {
-                                        backupError = err
-                                        NSLog("[VoiceIME] ⚠️ バックアップ音声認識エラー: %@", err.localizedDescription)
-                                    }
-                                }
-                            }
-
-                            if let err = primaryError {
-                                throw err
-                            } else if let bErr = backupError {
-                                throw bErr
-                            } else {
-                                throw WhisperAPIService.APIError.invalidResponse
-                            }
-                        }
-
-                        whisperDuration = CFAbsoluteTimeGetCurrent() - whisperStart
-                        switch winner {
-                        case .primary(let text):
-                            rawText = text
-                            self.lastUsedWhisperProvider = currentProvider
-                            NSLog("[VoiceIME] 📝 メイン音声認識成功 (%.2f秒, %d文字)", whisperDuration, rawText.count)
-                        case .backup(let text, var record, let primErr):
-                            rawText = text
-                            self.lastUsedWhisperProvider = backup
-
-                            // メインが明示的エラー（429や接続切断等）で落ちていた場合は、その具体的なエラー理由を記録
-                            if let primErr = primErr {
-                                let (summary, detail) = self.extractErrorSummary(primErr)
-                                record = FallbackRecord(
-                                    timestamp: Date(),
-                                    primaryProvider: currentProvider,
-                                    backupProvider: backup,
-                                    step: "音声認識",
-                                    reasonSummary: summary,
-                                    detail: detail
-                                )
-                            }
-
-                            self.lastFallbackRecord = record
-                            fallbackNotices.append(record.displayNotice)
-                            NSLog("[VoiceIME] 📝 バックアップ音声認識が勝利 (%.2f秒, %d文字)", whisperDuration, rawText.count)
-                        }
-                    } catch {
-                        let (summary, detail) = self.extractErrorSummary(error)
-                        NSLog("[VoiceIME] ⚠️ ヘッジド音声認識両系失敗 (%@): %@ (%@)", currentProvider.displayName, summary, detail)
-                        throw error
-                    }
                 } else {
-                    // バックアップ未設定の場合は通常通りメインのみ実行
-                    do {
-                        rawText = try await self.api.transcribe(
-                            audioFileURL: targetAudioURL,
-                            baseURL: baseURL,
-                            apiKey: apiKey,
-                            model: model,
-                            mode: mode,
-                            prompt: effectiveWhisperPrompt,
-                            language: language
-                        )
-                        whisperDuration = CFAbsoluteTimeGetCurrent() - whisperStart
-                        self.lastUsedWhisperProvider = currentProvider
-                        NSLog("[VoiceIME] 📝 音声認識成功 (%.2f秒, %d文字)", whisperDuration, rawText.count)
-                    } catch {
-                        let (summary, detail) = self.extractErrorSummary(error)
-                        NSLog("[VoiceIME] ⚠️ 音声認識エラー (%@): %@ (%@)", currentProvider.displayName, summary, detail)
-                        throw error
-                    }
-                }
-
-                let trimmedText = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmedText.isEmpty else {
                     self.phase = .idle
-                    self.statusMessage = "音声が検出されませんでした。"
-                    NSLog("[VoiceIME] ⚠️ 音声認識テキストが空でした")
-                    return
-                }
-
-                self.lastTranscribedText = trimmedText
-                PipelineLogger.shared.logWhisperReceived(type: "一括送信認識", text: trimmedText)
-
-                // 音声認識テキストをLLMへ渡す前に、音声コマンド（改行・記号・括弧等）を事前解決する。
-                // これにより、LLMが「改行」や「びっくりマーク」を文字通りの日本語として
-                // 誤校正（「開業、次の行」「ビックリマーク！」等）するのを防止する。
-                let preprocessedText = PunctuationService.shared.format(
-                    text: trimmedText,
-                    isJapanese: isJapanese
-                )
-                var refinedText = preprocessedText
-
-                if isLLMEnabled && mode == .transcriptions {
-                    PipelineLogger.shared.logLLMInput(type: "一括送信推敲", text: preprocessedText)
-                    self.phase = .refining
-                    self.statusMessage = refinementStyle == .casual ? "AI推敲中(口語)..." : "AI推敲中(文章)..."
-                    NSLog("[VoiceIME] 🤖 AI推敲リクエスト送信 (%@, モデル: %@, スタイル: %@)", llmProviderDisplayName, currentLLMConfig.modelName, refinementStyle.rawValue)
-
-                    let llmStart = CFAbsoluteTimeGetCurrent()
-
-                    let llmBackupProvider: APIProvider?
-                    if !currentLLMConfig.isCustom && self.settings.autoFallbackEnabled {
-                        switch resolvedLLMProvider {
-                        case .groq:
-                            llmBackupProvider = self.keychain.hasAPIKey(for: .openai) ? .openai : nil
-                        case .openai:
-                            llmBackupProvider = self.keychain.hasAPIKey(for: .groq) ? .groq : nil
-                        case .sarashina, .custom:
-                            llmBackupProvider = nil
-                        }
-                    } else {
-                        llmBackupProvider = nil
+                    self.statusMessage = "音声が認識できませんでした。"
+                    if self.settings.floatingPreviewEnabled {
+                        FloatingPreviewController.shared.hide()
                     }
-
-                    if let backup = llmBackupProvider,
-                       let backupKey = self.keychain.loadAPIKey(for: backup) {
-                        // =========================================================
-                        // 🚀 LLM ヘッジド・リクエスト (Hedged Requests / 時間差レーシング)
-                        // =========================================================
-                        // 1. まずメイン（Groq等）に推敲リクエスト送信
-                        // 2. 1.5秒経過しても応答がない場合、バックアップ（OpenAI等）にも並列で投げる
-                        // 3. どちらか早く成功した方の推敲結果を採用する
-                        let backupLLMConfig = self.settings.llmConfig(for: backup)
-                        let hedgedDelayNanoseconds: UInt64 = 1_500_000_000 // 1.5秒
-
-                        enum RefineWinner {
-                            case primary(String)
-                            case backup(String, FallbackRecord, primaryError: Error?)
-                        }
-
-                        enum LLMTaskResult {
-                            case success(RefineWinner)
-                            case failure(Error, isPrimary: Bool)
-                        }
-
-                        do {
-                            let winner = try await withThrowingTaskGroup(of: LLMTaskResult.self) { group -> RefineWinner in
-                                // タスク1: メインLLM
-                                group.addTask {
-                                    do {
-                                        let res = try await self.llm.refine(
-                                            text: preprocessedText,
-                                            baseURL: currentLLMConfig.baseURL,
-                                            apiKey: llmApiKey,
-                                            model: currentLLMConfig.modelName,
-                                            promptHint: prompt,
-                                            style: refinementStyle,
-                                            livePreviewText: livePreviewText,
-                                            isCustom: false
-                                        )
-                                        return .success(.primary(res))
-                                    } catch {
-                                        return .failure(error, isPrimary: true)
-                                    }
-                                }
-
-                                // タスク2: 1.5秒ディレイ後にバックアップを発射
-                                group.addTask {
-                                    do {
-                                        try await Task.sleep(nanoseconds: hedgedDelayNanoseconds)
-                                        try Task.checkCancellation()
-
-                                        await MainActor.run {
-                                            self.statusMessage = "\(backup.displayName) で並列推敲中 (応答遅延)..."
-                                        }
-                                        NSLog("[VoiceIME] ⚡️ メインLLM(%@)応答待ち1.5秒超過: バックアップ(%@)へ並行リクエスト発射", resolvedLLMProvider.displayName, backup.displayName)
-
-                                        let res = try await self.llm.refine(
-                                            text: preprocessedText,
-                                            baseURL: backupLLMConfig.baseURL,
-                                            apiKey: backupKey,
-                                            model: backupLLMConfig.modelName,
-                                            promptHint: prompt,
-                                            style: refinementStyle,
-                                            livePreviewText: livePreviewText,
-                                            isCustom: false
-                                        )
-
-                                        let record = FallbackRecord(
-                                            timestamp: Date(),
-                                            primaryProvider: resolvedLLMProvider,
-                                            backupProvider: backup,
-                                            step: "AI推敲",
-                                            reasonSummary: "応答遅延 (1.5秒超過)",
-                                            detail: "メインプロバイダの推敲応答が1.5秒以内に返らなかったため、バックアップを並行実行し最速応答を採用しました。"
-                                        )
-                                        return .success(.backup(res, record, primaryError: nil))
-                                    } catch {
-                                        return .failure(error, isPrimary: false)
-                                    }
-                                }
-
-                                var primaryError: Error?
-                                var backupError: Error?
-
-                                for try await result in group {
-                                    switch result {
-                                    case .success(let win):
-                                        group.cancelAll()
-                                        if case .backup(let txt, let rec, _) = win, let pErr = primaryError {
-                                            return .backup(txt, rec, primaryError: pErr)
-                                        }
-                                        return win
-                                    case .failure(let err, let isPrimary):
-                                        if isPrimary {
-                                            primaryError = err
-                                            let (summary, detail) = self.extractErrorSummary(err)
-                                            NSLog("[VoiceIME] ⚠️ メインAI推敲エラー (%@): %@ (%@)", resolvedLLMProvider.displayName, summary, detail)
-                                        } else {
-                                            backupError = err
-                                            NSLog("[VoiceIME] ⚠️ バックアップAI推敲エラー: %@", err.localizedDescription)
-                                        }
-                                    }
-                                }
-
-                                if let err = primaryError {
-                                    throw err
-                                } else if let bErr = backupError {
-                                    throw bErr
-                                } else {
-                                    throw LLMService.LLMError.invalidResponse
-                                }
-                            }
-
-                            llmDuration = CFAbsoluteTimeGetCurrent() - llmStart
-                            switch winner {
-                            case .primary(let text):
-                                refinedText = text
-                                self.lastUsedLLMProvider = resolvedLLMProvider
-                                NSLog("[VoiceIME] ✨ メインAI推敲成功 (%.2f秒, %d文字)", llmDuration, refinedText.count)
-                            case .backup(let text, var record, let primErr):
-                                refinedText = text
-                                self.lastUsedLLMProvider = backup
-
-                                if let primErr = primErr {
-                                    let (summary, detail) = self.extractErrorSummary(primErr)
-                                    record = FallbackRecord(
-                                        timestamp: Date(),
-                                        primaryProvider: resolvedLLMProvider,
-                                        backupProvider: backup,
-                                        step: "AI推敲",
-                                        reasonSummary: summary,
-                                        detail: detail
-                                    )
-                                }
-
-                                self.lastFallbackRecord = record
-                                fallbackNotices.append(record.displayNotice)
-                                NSLog("[VoiceIME] ✨ バックアップAI推敲が勝利 (%.2f秒, %d文字)", llmDuration, refinedText.count)
-                            }
-                        } catch {
-                            NSLog("[VoiceIME] ⚠️ ヘッジドAI推敲両系失敗: %@。事前整形テキストを使用します", error.localizedDescription)
-                            refinedText = preprocessedText
-                            self.lastUsedLLMProvider = nil
-                        }
-                    } else {
-                        // バックアップ未設定、またはカスタムLLMの場合は単独で実行
-                        do {
-                            refinedText = try await self.llm.refine(
-                                text: preprocessedText,
-                                baseURL: currentLLMConfig.baseURL,
-                                apiKey: llmApiKey,
-                                model: currentLLMConfig.modelName,
-                                promptHint: prompt,
-                                style: refinementStyle,
-                                livePreviewText: livePreviewText,
-                                isCustom: currentLLMConfig.isCustom
-                            )
-                            llmDuration = CFAbsoluteTimeGetCurrent() - llmStart
-                            self.lastUsedLLMProvider = resolvedLLMProvider
-                            NSLog("[VoiceIME] ✨ AI推敲成功 (%.2f秒, %d文字)", llmDuration, refinedText.count)
-                        } catch {
-                            let (summary, detail) = self.extractErrorSummary(error)
-                            NSLog("[VoiceIME] ⚠️ AI推敲エラー (%@): %@ (%@)。事前整形テキストを使用します", llmProviderDisplayName, summary, detail)
-                            refinedText = preprocessedText
-                            self.lastUsedLLMProvider = nil
-                        }
-                    }
-                    PipelineLogger.shared.logLLMOutput(type: "一括送信推敲", text: refinedText)
-                } else {
-                    self.lastUsedLLMProvider = nil
+                    NSLog("[VoiceIME] ⚠️ 音声認識テキストが空のため入力をキャンセル")
                 }
-
-                // ==========================================
-                // 3. 確定テキストの最終整形（辞書適用・正規化）と対象アプリへのペースト
-                // ==========================================
-                PipelineLogger.shared.logSessionEnd(finalText: refinedText)
-                self.finalizeAndPaste(
-                    text: refinedText,
-                    livePreviewText: isLLMEnabled ? refinedText : livePreviewText,
-                    isJapanese: isJapanese,
-                    totalStartTime: totalStartTime,
-                    fallbackNotices: fallbackNotices
-                )
-                return
-
-
-            } catch {
-                // URLSession のキャンセルは URLError(.cancelled) としてラップされて届くため、
-                // エラー型ではなく Task のキャンセル状態で判定する
-                if Task.isCancelled {
-                    self.phase = .idle
-                    self.statusMessage = "処理をキャンセルしました。"
-                    return
-                }
-                self.phase = .error(error.localizedDescription)
-                self.statusMessage = "エラーが発生しました。"
-                self.errorMessage = error.localizedDescription
-                NSLog("[VoiceIME] ❌ 処理中断エラー: %@", error.localizedDescription)
             }
         }
     }
@@ -1383,6 +1053,7 @@ public final class AppState: ObservableObject {
         recorder.cancelRecording()
         StreamingChunkPipelineService.shared.cancel()
         isQuickAskActive = false
+        isRecordingPaused = false
         phase = .idle
         statusMessage = "録音をキャンセルしました。"
     }
@@ -1465,11 +1136,20 @@ VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を
         totalStartTime: CFAbsoluteTime,
         fallbackNotices: [String] = []
     ) {
-        let alignedText = PunctuationService.shared.alignPunctuation(
-            text: text,
-            referenceLiveText: livePreviewText,
-            isJapanese: isJapanese
-        )
+        let alignedText: String
+        if self.settings.isLLMRefinementActive {
+            // LLM推敲有効時は、LLMが文脈に基づいて配置した句読点や語尾表現を機械的な正規表現で再分割しないよう保護
+            alignedText = PunctuationService.shared.formatVoiceCommandsAndDictionaryOnly(
+                text: text,
+                isJapanese: isJapanese
+            )
+        } else {
+            alignedText = PunctuationService.shared.alignPunctuation(
+                text: text,
+                referenceLiveText: livePreviewText,
+                isJapanese: isJapanese
+            )
+        }
         let normalizedText = LLMService.normalizePunctuation(for: alignedText)
         let processedText = self.dictionary.apply(
             text: normalizedText,
@@ -1543,7 +1223,7 @@ VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を
                 FloatingPreviewController.shared.show(text: processedText, notice: "45秒間コピー有効: ⌘V または \(self.settings.pasteShortcutDisplayString)")
             }
             if self.settings.autoPasteEnabled {
-                NSLog("[VoiceIME] 🚀 判定微妙（\(role): \(detail)）のためペースト試行＋ウィンドウ保留: [%@]", processedText)
+                NSLog("[VoiceIME] 🚀 判定微妙（\(role): \(detail)）のためペースト試行＋ウィンドウ保留: %d文字", processedText.count)
                 performAutoPaste(text: processedText, completionMessage: completionMessage, autoHidePreview: false)
             } else {
                 self.phase = .idle
@@ -1575,8 +1255,11 @@ VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を
                         self.phase = .idle
                         self.statusMessage = completionMessage
                         if autoHidePreview && self.settings.floatingPreviewEnabled {
-                            FloatingPreviewController.shared.hideWithDelay(seconds: 0.35)
-                            NSLog("[VoiceIME] ✅ 入力完了・プレビューウィンドウ消去 (余韻0.35s)")
+                            // ウィンドウに表示された最終文字列（語尾まで含む）とペーストされた文字列が100%一致していることを
+                            // ユーザーがしっかり目視確認できるよう、自動ペースト完了後も2.5秒間ウィンドウを表示維持する
+                            FloatingPreviewController.shared.customNotice = "✅ 自動入力完了 (+で維持)"
+                            FloatingPreviewController.shared.hideWithDelay(seconds: 2.5)
+                            NSLog("[VoiceIME] ✅ 入力完了・プレビューウィンドウ消去予約 (目視確認余韻2.5s)")
                         } else {
                             NSLog("[VoiceIME] ✅ ペースト試行完了（ウィンドウは保留維持）")
                         }

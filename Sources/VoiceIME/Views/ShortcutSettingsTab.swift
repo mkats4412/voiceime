@@ -312,6 +312,41 @@ public struct ShortcutSettingsTab: View {
                                 .pickerStyle(.menu)
                                 .labelsHidden()
                             }
+
+                            Divider()
+
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("発話準備インジケーター色:")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                    Text("マイク準備完了（発話可能）時に点灯するカラー")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Spacer()
+
+                                HStack(spacing: 8) {
+                                    ForEach(RecordingIndicatorColor.allCases) { item in
+                                        Button(action: {
+                                            settings.recordingIndicatorColor = item
+                                        }) {
+                                            Circle()
+                                                .fill(item.color)
+                                                .frame(width: 18, height: 18)
+                                                .overlay(
+                                                    Circle()
+                                                        .stroke(Color.primary, lineWidth: settings.recordingIndicatorColor == item ? 2.0 : 0)
+                                                        .padding(-2.5)
+                                                )
+                                                .shadow(color: item.color.opacity(settings.recordingIndicatorColor == item ? 0.7 : 0.2), radius: 2.5)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .help(item.title)
+                                    }
+                                }
+                            }
                         }
                     }
                     .padding(14)
@@ -717,6 +752,9 @@ public struct ShortcutSettingsTab: View {
                 }
             }
             .padding(18)
+        }
+        .onAppear {
+            settings.reloadPreferencesFromDefaults()
         }
         .onDisappear {
             micTester.stopTesting()

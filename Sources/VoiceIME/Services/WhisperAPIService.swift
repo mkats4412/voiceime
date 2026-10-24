@@ -53,7 +53,7 @@ public final class WhisperAPIService {
             case .networkError(let error):
                 if let urlError = error as? URLError {
                     if urlError.code == .timedOut {
-                        return "タイムアウト (8秒超過)"
+                        return "タイムアウト (15秒超過)"
                     } else if urlError.code == .notConnectedToInternet {
                         return "オフライン"
                     } else if urlError.code == .cannotConnectToHost || urlError.code == .cannotFindHost {
@@ -62,7 +62,7 @@ public final class WhisperAPIService {
                 }
                 let nsError = error as NSError
                 if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut {
-                    return "タイムアウト (8秒超過)"
+                    return "タイムアウト (15秒超過)"
                 }
                 return "通信エラー (\(error.localizedDescription))"
             case .emptyAudioFile:
@@ -109,7 +109,7 @@ public final class WhisperAPIService {
         let boundary = "Boundary-\(UUID().uuidString)"
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"
-        request.timeoutInterval = 8.0
+        request.timeoutInterval = 15.0
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
         if let apiKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !apiKey.isEmpty {
@@ -128,11 +128,12 @@ public final class WhisperAPIService {
         // Amicalのwhisper-prompt設計を参考にした安全なプロンプト最適化
         let sanitizedPrompt = prompt.map { Self.sanitizeWhisperPrompt($0) }
 
+        let isWAV = audioFileURL.pathExtension.lowercased() == "wav"
         request.httpBody = createMultipartBody(
             boundary: boundary,
             audioData: audioData,
             fileName: audioFileURL.lastPathComponent,
-            mimeType: "audio/m4a",
+            mimeType: isWAV ? "audio/wav" : "audio/m4a",
             model: effectiveModel,
             mode: mode,
             prompt: sanitizedPrompt,

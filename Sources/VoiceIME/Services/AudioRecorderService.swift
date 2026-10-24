@@ -82,6 +82,23 @@ public final class AudioRecorderService: NSObject, AVAudioRecorderDelegate {
         return url
     }
 
+    /// 録音を一時停止（ファイルを閉じずにマイクを休止）
+    public func pauseRecording() {
+        audioRecorder?.pause()
+        isRecording = false
+    }
+
+    /// 一時停止中の録音を同一ファイルへ再開
+    @discardableResult
+    public func resumeRecording() -> Bool {
+        guard let recorder = audioRecorder else { return false }
+        if recorder.record() {
+            isRecording = true
+            return true
+        }
+        return false
+    }
+
     /// 録音を破棄して一時ファイルを削除
     public func cancelRecording() {
         // isRecording フラグに依存せず、保持している recorder は必ず停止・解放する

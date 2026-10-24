@@ -7,6 +7,7 @@ public final class LiveSpeechService: ObservableObject {
     public static let shared = LiveSpeechService()
 
     @Published public private(set) var isRunning: Bool = false
+    @Published public private(set) var hasReceivedFirstBuffer: Bool = false
     @Published public private(set) var partialText: String = ""
     @Published public private(set) var detectedLanguageIsJapanese: Bool = true
 
@@ -14,6 +15,18 @@ public final class LiveSpeechService: ObservableObject {
     private var speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+
+    // 事前キャッシュ済みの音声認識インスタンス（ホットキー押下時の初期化遅延を排除）
+    private lazy var jaRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "ja-JP"))
+    private lazy var enRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+
+    // オーディオレンダースレッドとメインスレッド間で安全に共有するロックと状態
+    private let tapLock = NSLock()
+    private var isTapCapturing: Bool = false
+    private var firstBufferNotified: Bool = false
+    private var activeRecognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var activeHelperStdinPipe: Pipe?
+    private var activeIsDualMode: Bool = false
 
     // 日英デュアル認識用の英語ヘルパープロセス
     private var helperProcess: Process?
@@ -42,13 +55,112 @@ public final class LiveSpeechService: ObservableObject {
         }
     }
 
+    /// ホットキー押下時（録音開始時のみ）に何よりも最優先でAVAudioEngineとマイクタップを起動する。
+    /// ※待機中（非録音時）はセキュリティ・プライバシー保護のためマイクを一切稼働させない。
+    @discardableResult
+    public func startImmediateCapture() -> Bool {
+        stopLiveRecognition()
+
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+
+        guard recordingFormat.sampleRate > 0 && recordingFormat.channelCount > 0 else {
+            NSLog("[VoiceIME] ⚠️ 無効なオーディオ入力フォーマット: %@", recordingFormat.description)
+            return false
+        }
+
+        let audioQueue = self.helperAudioQueue
+
+        tapLock.lock()
+        isTapCapturing = true
+        firstBufferNotified = false
+        activeRecognitionRequest = nil
+        activeIsDualMode = false
+        activeHelperStdinPipe = nil
+        tapLock.unlock()
+
+        self.isRunning = true
+        self.hasReceivedFirstBuffer = false
+
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+            guard let self = self else { return }
+
+            self.tapLock.lock()
+            let capturing = self.isTapCapturing
+            let shouldNotifyFirst = !self.firstBufferNotified
+            if shouldNotifyFirst && capturing {
+                self.firstBufferNotified = true
+            }
+            let req = self.activeRecognitionRequest
+            let dual = self.activeIsDualMode
+            let pipe = self.activeHelperStdinPipe
+            self.tapLock.unlock()
+
+            guard capturing else { return }
+
+            // 最初の音声バッファがマイクから届いた瞬間にUIインジケーターをグリーン（発話可能）に切り替え
+            if shouldNotifyFirst {
+                Task { @MainActor [weak self] in
+                    guard let self = self, self.isRunning else { return }
+                    self.hasReceivedFirstBuffer = true
+                    FloatingPreviewController.shared.setMicReady()
+                }
+            }
+
+            // 1. ストリーミングパイプラインおよび全体録音バッファへ最優先供給
+            StreamingChunkPipelineService.shared.appendAudioBuffer(buffer, isPreRoll: false)
+
+            // 2. 親プロセスの認識器へバッファ供給
+            req?.append(buffer)
+
+            // 3. 英語ヘルパープロセスの stdin へ PCM Float32 を非同期シリアルキューで送信
+            if dual, let pipe = pipe,
+               let channelData = buffer.floatChannelData, buffer.frameLength > 0 {
+                let byteCount = Int(buffer.frameLength) * MemoryLayout<Float>.size
+                let data = Data(bytes: channelData[0], count: byteCount)
+                audioQueue.async {
+                    try? pipe.fileHandleForWriting.write(contentsOf: data)
+                }
+            }
+        }
+
+        do {
+            try engine.start()
+            self.audioEngine = engine
+            PipelineLogger.shared.logDebug("🎙️ AVAudioEngine 正常起動完了 (マイクタップ開始)")
+            return true
+        } catch {
+            tapLock.lock()
+            isTapCapturing = false
+            tapLock.unlock()
+            self.isRunning = false
+            inputNode.removeTap(onBus: 0)
+            engine.stop()
+            self.audioEngine = nil
+            PipelineLogger.shared.logDebug("❌ AVAudioEngine 開始失敗: \(error.localizedDescription)")
+            NSLog("[VoiceIME] ⚠️ AVAudioEngine 開始失敗: %@", error.localizedDescription)
+            return false
+        }
+    }
+
     /// リアルタイム音声認識を開始
     public func startLiveRecognition(
         languageCode: String = "",
         contextualStrings: [String] = [],
         onUpdate: @escaping (String) -> Void
     ) {
-        stopLiveRecognition()
+        let alreadyCapturing: Bool = {
+            tapLock.lock()
+            defer { tapLock.unlock() }
+            return isTapCapturing && audioEngine != nil
+        }()
+
+        if !alreadyCapturing {
+            guard startImmediateCapture() else { return }
+        } else {
+            cleanupRecognitionTasksOnly()
+        }
 
         let trimmedLang = languageCode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let isAuto = trimmedLang.isEmpty || trimmedLang == "auto"
@@ -56,7 +168,8 @@ public final class LiveSpeechService: ObservableObject {
 
         // 英語明示時以外（自動判定または日本語指定）は日本語エンジン（ja-JP）を使用
         let localeIdentifier = isExplicitEnglish ? "en-US" : "ja-JP"
-        let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier))
+        let recognizer = (isExplicitEnglish ? enRecognizer : jaRecognizer)
+            ?? SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier))
 
         guard let recognizer = recognizer, recognizer.isAvailable else {
             NSLog("[VoiceIME] ⚠️ SFSpeechRecognizer が利用できません (言語: %@)", localeIdentifier)
@@ -71,14 +184,10 @@ public final class LiveSpeechService: ObservableObject {
         self.detectedLanguageIsJapanese = !isExplicitEnglish
         self.isDualMode = isAuto
 
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-
-        guard recordingFormat.sampleRate > 0 && recordingFormat.channelCount > 0 else {
-            NSLog("[VoiceIME] ⚠️ 無効なオーディオ入力フォーマット: %@", recordingFormat.description)
+        guard let engine = self.audioEngine, engine.isRunning else {
             return
         }
+        let recordingFormat = engine.inputNode.outputFormat(forBus: 0)
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -90,45 +199,14 @@ public final class LiveSpeechService: ObservableObject {
         }
 
         self.recognitionRequest = request
-        self.audioEngine = engine
+        self.isRunning = true
 
-        let audioQueue = self.helperAudioQueue
+        tapLock.lock()
+        self.activeRecognitionRequest = request
+        self.activeIsDualMode = isAuto
+        tapLock.unlock()
 
-        // 🌟 核心: 何よりも最優先でマイクタップの設置とAVAudioEngineの起動を直ちに実行！
-        // （別プロセス起動やタスク初期化による出だしの音声・主語の取りこぼしを完全防止）
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self, weak request] buffer, _ in
-            guard let self = self, self.isRunning else { return }
-
-            // 1. 親プロセスの認識器へバッファ供給（ゼロ遅延リアルタイム出力）
-            request?.append(buffer)
-
-            // 2. 英語ヘルパープロセスの stdin へ PCM Float32 を非同期シリアルキューで送信
-            if self.isDualMode, let pipe = self.helperStdinPipe,
-               let channelData = buffer.floatChannelData, buffer.frameLength > 0 {
-                let byteCount = Int(buffer.frameLength) * MemoryLayout<Float>.size
-                let data = Data(bytes: channelData[0], count: byteCount)
-                audioQueue.async {
-                    try? pipe.fileHandleForWriting.write(contentsOf: data)
-                }
-            }
-
-            // 3. 一括送信がOFFの場合、ストリーミングパイプラインへ供給
-            if !AppSettings.shared.batchTranscriptionEnabled {
-                StreamingChunkPipelineService.shared.appendAudioBuffer(buffer)
-            }
-        }
-
-        do {
-            try engine.start()
-            self.isRunning = true
-            PipelineLogger.shared.logDebug("🎙️ AVAudioEngine 正常起動完了 (マイクタップ開始)")
-            NSLog("[VoiceIME] 🎙️ リアルタイム音声認識エンジン開始 (%@, isAuto: %d)", localeIdentifier, isAuto ? 1 : 0)
-        } catch {
-            PipelineLogger.shared.logDebug("❌ AVAudioEngine 開始失敗: \(error.localizedDescription)")
-            NSLog("[VoiceIME] ⚠️ AVAudioEngine 開始失敗: %@", error.localizedDescription)
-            stopLiveRecognition()
-            return
-        }
+        NSLog("[VoiceIME] 🎙️ リアルタイム音声認識エンジン開始 (%@, isAuto: %d)", localeIdentifier, isAuto ? 1 : 0)
 
         // 親プロセスの音声認識タスク（マイク起動後に非同期で開始）
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
@@ -221,6 +299,9 @@ public final class LiveSpeechService: ObservableObject {
             self.helperProcess = process
             self.helperStdinPipe = inPipe
             self.helperStdoutPipe = outPipe
+            tapLock.lock()
+            self.activeHelperStdinPipe = inPipe
+            tapLock.unlock()
             NSLog("[VoiceIME] 🚀 英語認識ヘルパー子プロセス起動完了 (PID: %d)", process.processIdentifier)
         } catch {
             NSLog("[VoiceIME] ⚠️ 英語認識ヘルパー起動失敗: %@", error.localizedDescription)
@@ -230,6 +311,9 @@ public final class LiveSpeechService: ObservableObject {
             self.helperStdinPipe = nil
             self.helperStdoutPipe = nil
             self.helperProcess = nil
+            tapLock.lock()
+            self.activeHelperStdinPipe = nil
+            tapLock.unlock()
         }
     }
 
@@ -393,53 +477,74 @@ public final class LiveSpeechService: ObservableObject {
         return false
     }
 
-    /// リアルタイム音声認識を停止
+    /// 音声認識タスクとヘルパープロセスのみをクリーンアップ（AVAudioEngineのマイクタップは維持）
+    private func cleanupRecognitionTasksOnly() {
+        tapLock.lock()
+        activeRecognitionRequest = nil
+        activeIsDualMode = false
+        activeHelperStdinPipe = nil
+        tapLock.unlock()
+
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+
+        recognitionTask?.cancel()
+        recognitionTask = nil
+
+        speechRecognizer = nil
+
+        if let inPipe = helperStdinPipe {
+            helperStdinPipe = nil
+            helperAudioQueue.async {
+                try? inPipe.fileHandleForWriting.close()
+            }
+        }
+        if let outPipe = helperStdoutPipe {
+            outPipe.fileHandleForReading.readabilityHandler = nil
+            try? outPipe.fileHandleForReading.close()
+            helperStdoutPipe = nil
+        }
+        if let process = helperProcess {
+            helperProcess = nil
+            if process.isRunning {
+                process.terminate()
+                DispatchQueue.global(qos: .utility).async {
+                    process.waitUntilExit()
+                }
+            }
+        }
+    }
+
+    /// リアルタイム音声認識を停止（セキュリティ・プライバシー保護のためマイク入力を完全に停止・解放する）
     public func stopLiveRecognition() {
-        if isRunning || audioEngine != nil || helperProcess != nil {
-            // 1. オーディオ入力の停止とタップ解除
+        let wasCapturing: Bool = {
+            tapLock.lock()
+            defer { tapLock.unlock() }
+            let prev = isTapCapturing
+            isTapCapturing = false
+            firstBufferNotified = false
+            activeRecognitionRequest = nil
+            activeIsDualMode = false
+            activeHelperStdinPipe = nil
+            return prev
+        }()
+
+        if isRunning || wasCapturing || audioEngine != nil || recognitionRequest != nil || helperProcess != nil {
+            // 1. オーディオ入力の完全停止とタップ解除（非録音時はマイクを完全にOFFにする）
             audioEngine?.stop()
             audioEngine?.inputNode.removeTap(onBus: 0)
             audioEngine = nil
 
-            // 2. 音声認識リクエストの終了
-            recognitionRequest?.endAudio()
-            recognitionRequest = nil
-
-            recognitionTask?.cancel()
-            recognitionTask = nil
-
-            speechRecognizer = nil
-
-            // 3. 英語ヘルパープロセスの安全な終了とリソース解放
-            // helperAudioQueue 内の未処理 write とのデータ競合を防ぐため、同一シリアルキュー上で close する
-            if let inPipe = helperStdinPipe {
-                helperStdinPipe = nil
-                helperAudioQueue.async {
-                    try? inPipe.fileHandleForWriting.close()
-                }
-            }
-            if let outPipe = helperStdoutPipe {
-                outPipe.fileHandleForReading.readabilityHandler = nil
-                try? outPipe.fileHandleForReading.close()
-                helperStdoutPipe = nil
-            }
-            if let process = helperProcess {
-                helperProcess = nil
-                if process.isRunning {
-                    process.terminate()
-                    // ゾンビプロセス化を防ぐためバックグラウンドで回収待ち
-                    DispatchQueue.global(qos: .utility).async {
-                        process.waitUntilExit()
-                    }
-                }
-            }
+            // 2. 音声認識タスク・ヘルパープロセスの終了
+            cleanupRecognitionTasksOnly()
 
             isRunning = false
+            hasReceivedFirstBuffer = false
             isDualMode = false
             latestJaText = ""
             latestEnText = ""
             onTextUpdate = nil
-            NSLog("[VoiceIME] ⏹️ リアルタイム音声認識エンジン停止")
+            NSLog("[VoiceIME] ⏹️ リアルタイム音声認識エンジン完全停止 (マイク解放完了)")
         }
     }
 

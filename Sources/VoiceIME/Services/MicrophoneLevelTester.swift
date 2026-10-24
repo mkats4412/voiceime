@@ -25,7 +25,7 @@ public final class MicrophoneLevelTester: ObservableObject {
         }
 
         // 実際の音声入力録音が進行中の場合は競合を避けて開始しない
-        if AudioRecorderService.shared.isRecording {
+        if AudioRecorderService.shared.isRecording || LiveSpeechService.shared.isRunning {
             return
         }
 
