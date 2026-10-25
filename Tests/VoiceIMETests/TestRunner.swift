@@ -692,6 +692,12 @@ struct TestRunner {
         let xmlOutput2 = LLMService.extractFormattedText("AI思考プロセス...\n<formatted_text>\n会議の開始時間は15時です。\n</formatted_text>\n余計な注記")
         assert(xmlOutput2 == "会議の開始時間は15時です。", "XML wrapped multiline extraction failed: got '\(String(describing: xmlOutput2))'")
 
+        // 11B. 改行（\n）の維持・自動復元テスト（LLMが1行に繋げてしまった場合でも入力の改行を復元）
+        let multilineInput = "1. 総合バランス 初めて1台にするおすすめ\nXreal Air 2 Pro"
+        let flattenedLLMResponse = "1. 総合バランス、初めて1台にするおすすめ、Xreal Air 2 Pro。"
+        let restoredMultiline = llm.sanitizeLLMOutput(flattenedLLMResponse, originalInput: multilineInput, fallback: multilineInput)
+        assert(restoredMultiline.contains("\n"), "Should restore newline from originalInput when LLM flattens it: got '\(restoredMultiline)'")
+
         // 12. WhisperAPIService sanitizeWhisperPrompt のバイト数制限と空白正規化テスト
         let normalPrompt = WhisperAPIService.sanitizeWhisperPrompt("  こんにちは   世界 \n\n  テスト  ", maxBytes: 800)
         assert(normalPrompt == "こんにちは 世界 テスト", "Whisper prompt whitespace normalization failed: got '\(normalPrompt)'")

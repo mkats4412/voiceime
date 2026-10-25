@@ -245,12 +245,16 @@ public final class VoiceIMEDiskSyncService {
         // 3. 推敲プロンプト設定の同期（旧デフォルトプロンプトの場合は語尾保全ルール付き最新プロンプトへ自動アップグレード）
         if var diskPrompts = importPromptsFromDisk() {
             var needsPromptUpgrade = false
-            if diskPrompts.casualSystemPrompt == PromptConfig.legacyCasualPrompt {
+            if diskPrompts.casualSystemPrompt == PromptConfig.legacyCasualPrompt || !diskPrompts.casualSystemPrompt.contains("改行（\\n）") {
                 diskPrompts.casualSystemPrompt = PromptConfig.defaultCasualPrompt
                 needsPromptUpgrade = true
             }
-            if diskPrompts.formalSystemPrompt == PromptConfig.legacyFormalPrompt {
+            if diskPrompts.formalSystemPrompt == PromptConfig.legacyFormalPrompt || !diskPrompts.formalSystemPrompt.contains("改行（\\n）") {
                 diskPrompts.formalSystemPrompt = PromptConfig.defaultFormalPrompt
+                needsPromptUpgrade = true
+            }
+            if !diskPrompts.userPromptTemplate.contains("改行位置を維持") {
+                diskPrompts.userPromptTemplate = PromptConfig.defaultUserPromptTemplate
                 needsPromptUpgrade = true
             }
             settings.systemPromptCasual = diskPrompts.casualSystemPrompt
@@ -421,12 +425,14 @@ public struct PromptConfig: Codable, Equatable {
 話者の語尾・文体・口語ニュアンスを維持しながら、以下の観点で自然で読みやすい文章に修正してください：
 ・音声入力特有の誤字脱字、聞き間違い、同音異義語の誤変換（漢字の修正）を文脈から見つけ出して正しく修正する。
 ・音声入力で句読点（句点「。」や読点「、」）が抜けているため、必ず文末には句点（。）を付け、文の息継ぎや節の区切り（〜と、〜ので、〜から、〜だが 等）には読点（、）を積極的に補って読みやすくする。
+・入力テキストに改行（\\n）が含まれる場合、段落や文の区切りとして改行を必ずそのまま維持して出力する。勝手に1行に繋げたり改行を削除したりしない。
 ・同じ言葉や動詞の不自然な重複（例：「表示するすることが」➔「表示することが」）があれば自然な日本語に整える。
 
 【厳守事項】
 1. 発話内容の要約・大幅な削除・文の省略は絶対に禁止です。話された全ての文と話題を最初から最後の語尾まで一言も漏らさず含めてください。
 2. 日本語では文末・語尾（「〜する」と「〜しない」、「〜である」と「〜ではない」等の肯定・否定や語尾表現）が文全体の意味を決定づけます。文末の肯定・否定や語尾の意味を絶対に反転・省略・改変しないでください。
-3. 修正後の文章のみを必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。前置きや解説は一切不要です。
+3. 入力テキストに含まれる改行（\\n）は段落や文の区切りです。絶対に1行に連結・削除せず、改行位置を必ずそのまま維持して出力してください。
+4. 修正後の文章のみを必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。前置きや解説は一切不要です。
 """
 
     public static let defaultFormalPrompt = """
@@ -434,16 +440,18 @@ public struct PromptConfig: Codable, Equatable {
 ビジネスや記録に適した端正で自然な文章にするため、以下の観点で修正してください：
 ・音声入力特有の誤字脱字、聞き間違い、同音異義語の誤変換（漢字の修正）を文脈から見つけ出して正しく修正する。
 ・音声入力で句読点（句点「。」や読点「、」）が抜けているため、必ず文末には句点（。）を付け、文の息継ぎや節の区切り（〜と、〜ので、〜から、〜だが 等）には読点（、）を積極的に補って読みやすくする。
+・入力テキストに改行（\\n）が含まれる場合、段落や文の区切りとして改行を必ずそのまま維持して出力する。勝手に1行に繋げたり改行を削除したりしない。
 ・同じ言葉や動詞の不自然な重複（例：「表示するすることが」➔「表示することが」）があれば自然な日本語に整える。
 
 【厳守事項】
 1. 発話内容の要約・大幅な削除・文の省略は絶対に禁止です。話された全ての文と話題を最初から最後の語尾まで一言も漏らさず含めてください。
 2. 日本語では文末・語尾（「〜する」と「〜しない」、「〜である」と「〜ではない」等の肯定・否定や語尾表現）が文全体の意味を決定づけます。文末の肯定・否定や語尾の意味を絶対に反転・省略・改変しないでください。
-3. 修正後の文章のみを必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。前置きや解説は一切不要です。
+3. 入力テキストに含まれる改行（\\n）は段落や文の区切りです。絶対に1行に連結・削除せず、改行位置を必ずそのまま維持して出力してください。
+4. 修正後の文章のみを必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。前置きや解説は一切不要です。
 """
 
     public static let defaultUserPromptTemplate = """
-以下の <input> タグで囲まれた音声テキストを校正し、文末には句点「。」、文の切れ目には読点「、」を必ず補って <formatted_text> と </formatted_text> タグで囲んで出力してください。
+以下の <input> タグで囲まれた音声テキストを校正し、改行位置を維持したまま、文末には句点「。」、文の切れ目には読点「、」を必ず補って <formatted_text> と </formatted_text> タグで囲んで出力してください。
 
 <input>
 {input}

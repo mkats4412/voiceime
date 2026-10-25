@@ -472,6 +472,11 @@ public final class LLMService {
         // originalInput が渡されている場合、元の発話テキストに存在しない勝手な語尾補完（ハルシネーション）を抑制
         if let orig = originalInput, !orig.isEmpty {
             text = Self.suppressHallucinatedEndings(output: text, originalInput: orig)
+
+            // 🌟 改行ガード: 入力テキストに改行（\n）が存在するのに、LLMが改行を削除・結合してしまった場合、改行位置を確実に復元
+            if orig.contains("\n") && !text.contains("\n") {
+                text = PunctuationService.shared.restoreNewlines(in: text, from: orig)
+            }
         }
 
         // LLMによるサ変動詞の不自然な重複（「表示するすることが」➔「表示することが」等）を除去

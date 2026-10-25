@@ -715,7 +715,7 @@ public final class PunctuationService {
     }
 
     /// プレビュー文字列（reference）に含まれていた改行（\n）の位置を、確定テキスト（target）へ復元する
-    private func restoreNewlines(in target: String, from reference: String) -> String {
+    public func restoreNewlines(in target: String, from reference: String) -> String {
         let refLines = reference.components(separatedBy: "\n")
         guard refLines.count > 1 else { return target }
 

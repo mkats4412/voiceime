@@ -483,13 +483,13 @@ Push-to-Talk 方式において最も頻発する問題は、「話し始めの�
   - 音が出ない沈黙時（`newSpeechDuration == 0`）や無音放置時には絶対にリクエストを投げ続けない（無音時送信防止・無駄ループ完全排除）。
   - 末尾の微小な音（「〜ございます」等）の取りこぼしを防ぐため、`trimSilence` の語尾終了判定しきい値 `trailingFloorDB` は `min(speechThresholdDB - 8.0, -45.0)`、末尾マージン `trailingMargin` は `0.45秒` を維持し、小声の語尾フレーム（`quietTailFramesSinceLastTrigger`）も確実にキャッチアップ送信する。
 
+### 10.6 LLM推敲における改行（\n）の厳格維持と自動復元ルール
+- **システムプロンプトによる改行保護指示**:
+  - LLM推敲用プロンプト（`casualSystemPrompt`, `formalSystemPrompt`, `userPromptTemplate`）に「入力テキストに含まれる改行（\n）は段落や文の区切りであり、絶対に1行に連結・削除せず、改行位置を必ずそのまま維持して出力すること」を厳格に指定する。
+- **LLM出力からの改行自動復元ガード（フォールバック保護）**:
+  - 万が一、Sarashina 等の LLM が改行（\n）を削除して 1 行に繋げて返却した場合でも、`LLMService.sanitizeLLMOutput` において入力側の改行位置を検出し、`PunctuationService.shared.restorePunctuationAndSpacing` を用いて推敲後テキストへ正確に改行を自動復元する。これにより、音声コマンド「改行」「開業」によって挿入された改行が推敲によって消滅することを 100% 防止する。
 
-
-
-
-
-
-### 10.6 最終品質チェックで確定した不変制約（Quality Gate Invariants）
+### 10.7 最終品質チェックで確定した不変制約（Quality Gate Invariants）
 - **音声認識・推敲テキストのシステムログ出力禁止（Privacy by Default の徹底）**:
   - `NSLog` / `print` など macOS 統合ログ（`log show` で永続的に閲覧可能）へ、Whisper 認識結果・LLM 推敲結果・確定テキスト・辞書登録語・AI質問本文を**絶対に出力しない**（出力するのは文字数・件数・状態のみ）。本文を残してよいのは、ユーザーが明示的に ON にした `~/.voiceime/pipeline.log`（`PipelineLogger`）のみ。
 - **`pipeline.log` のファイル権限**: 音声認識テキストを含むため、ディレクトリ `0700`・ファイル `0600`（所有者のみ）で作成し、肥大化防止のため 5MB 超過時は古いログを破棄してから追記する。
