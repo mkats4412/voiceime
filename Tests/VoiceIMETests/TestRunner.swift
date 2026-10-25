@@ -96,6 +96,11 @@ struct TestRunner {
         let sanitized3 = WhisperAPIService.sanitizeWhisperOutput(hallucinatedInput3)
         assert(!sanitized3.contains("ご視聴ありがとうございました"), "Should strip inline ご視聴ありがとうございました: got '\(sanitized3)'")
 
+        // 7B. Whisperの異常反復ハルシネーション（"XXXX...", "ああああ..." 等）のサニタイズテスト
+        let repeatedInput = "現在のARグラス市場はXRXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+        let sanitizedRep = WhisperAPIService.sanitizeWhisperOutput(repeatedInput)
+        assert(sanitizedRep == "現在のARグラス市場はXRX", "Should reduce excessive repeating characters, got '\(sanitizedRep)'")
+
         // 8. PCM無音トリミング (VAD) テスト
         let sampleRate = 16000.0
         let silenceSampleCount = Int(sampleRate * 0.5) // 0.5秒の無音

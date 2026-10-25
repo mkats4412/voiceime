@@ -307,10 +307,19 @@ public final class WhisperAPIService {
         return String(data: subdata, encoding: .utf8) ?? collapsed
     }
 
-    /// Whisper APIの出力テキストから、無音・微小ノイズ特有の既知のハルシネーション（"Thank you.", "ご視聴ありがとうございました" 等）を文頭・文末・文中問わず完全除去
+    /// Whisper APIの出力テキストから、無音・微小ノイズ特有の既知のハルシネーション（"Thank you.", "ご視聴ありがとうございました" 等）
+    /// およびトークン反復ループ（"XXXX...", "ああああああ..." 等の4連続以上の異常反復）を完全除去
     public static func sanitizeWhisperOutput(_ text: String) -> String {
         var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !result.isEmpty else { return "" }
+
+        // 1. 同一文字の異常連続（4回以上の繰り返し: 例 "XXXX...", "・・・・", "！！！！" 等）をカット
+        // ※ 通常の日本語・英語会話で4回以上同一文字が連続することはなく、Whisperの自己回帰ループバグのため除去
+        if let repeatRegex = try? NSRegularExpression(pattern: "(.)\\1{3,}", options: []) {
+            let range = NSRange(result.startIndex..., in: result)
+            result = repeatRegex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1")
+            result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
 
         let hallucinationPatterns = [
             "(?i)[ \t]*(?:Thank you(?: very much)?|Thanks for watching|Subtitles by[^\n\r]*)[ \t\\.\\,\\!\\?]*",
