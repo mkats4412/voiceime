@@ -960,6 +960,8 @@ public final class AppState: ObservableObject {
         } else if effectiveLanguage == "ja" {
             // 主語や冒頭の語句がWhisperによって脱落するのを防ぐ自然な日本語文頭コンテキスト
             prompt = isLLM ? (settings.refinementStyle == .casual ? "私は、本日の件についてお話しします。そうですね、承知いたしました。" : "本日は、本件についてご報告いたします。よろしくお願いいたします。") : "日本語の音声入力です。文頭の主語や言葉を正確にそのまま文字起こしします。"
+        } else if effectiveLanguage.lowercased().starts(with: "en") {
+            prompt = "This is English speech-to-text. Transcribe accurately with proper English punctuation."
         } else {
             prompt = nil
         }

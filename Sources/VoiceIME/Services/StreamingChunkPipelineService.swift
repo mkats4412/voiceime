@@ -448,7 +448,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                 var previewToDisplay = ""
                 var hasNewUnrefinedDelta = true
                 self?.queue.sync {
-                    guard let self = self, self.isRunning else { return }
+                    guard let self = self, self.activeTaskID == taskID, !Task.isCancelled else { return }
                     if self.isLLMEnabled && !self.latestRefinedText.isEmpty && !self.lastWhisperBaseText.isEmpty {
                         if let delta = Self.extractDelta(newText: cleanTranscribed, baseText: self.lastWhisperBaseText) {
                             if delta.isEmpty {
@@ -699,6 +699,13 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                     NSLog("[VoiceIME] ⏳ 一時停止中/認識推敲中確定: 進行中のWhisper/LLMタスクの完了を待機して0msペーストへ移行します...")
                     let activeWhisper = self.currentProcessingTask
                     let activeLLM = self.currentLLMTask
+                    let isLLM = self.isLLMEnabled
+                    let llmConfig = self.currentLLMConfig
+                    let whisperPrompt = self.whisperPrompt
+                    let style = self.refinementStyle
+                    let isJapanese = self.isJapanese
+                    let language = self.language
+
                     Task.detached { [weak self] in
                         _ = await activeWhisper?.value
                         _ = await activeLLM?.value
@@ -706,24 +713,68 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                             completion("")
                             return
                         }
-                        var result = ""
+                        var targetText = ""
+                        var needsFinalLLM = false
                         self.queue.sync {
-                            result = self.latestRefinedText
-                            self.latestRefinedText = ""
-                            self.lastWhisperBaseText = ""
-                            self.preRollByteCount = 0
-                            self.hasPreStartedCapture = false
-                            self.isLatestTextRefinedByLLM = false
-                            self.lastRefinedSampleCount = 0
-                            self.lastAttemptedLLMInput = ""
-                            self.pcmDataBuffer.removeAll(keepingCapacity: false)
+                            targetText = self.latestRefinedText
+                            needsFinalLLM = isLLM && !self.isLatestTextRefinedByLLM
+                            if !needsFinalLLM {
+                                self.latestRefinedText = ""
+                                self.lastWhisperBaseText = ""
+                                self.preRollByteCount = 0
+                                self.hasPreStartedCapture = false
+                                self.isLatestTextRefinedByLLM = false
+                                self.lastRefinedSampleCount = 0
+                                self.lastAttemptedLLMInput = ""
+                                self.pcmDataBuffer.removeAll(keepingCapacity: false)
+                            }
                         }
-                        NSLog("[VoiceIME] ✅ 一時停止中タスク待機完了 ➔ 確定出力: %d文字", result.count)
+
+                        if needsFinalLLM, let llmCfg = llmConfig, !targetText.isEmpty, !llmCfg.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            let llmInputForRefine = Self.applyDictionaryRulesForLLMInput(to: targetText, isJapanese: isJapanese)
+                            var finalText = targetText
+                            do {
+                                let refined = try await LLMService.shared.refine(
+                                    text: llmInputForRefine,
+                                    baseURL: llmCfg.baseURL,
+                                    apiKey: llmCfg.apiKey,
+                                    model: llmCfg.model,
+                                    promptHint: whisperPrompt,
+                                    style: style,
+                                    isCustom: llmCfg.isCustom,
+                                    language: language
+                                )
+                                let cleanRefined = refined.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !cleanRefined.isEmpty {
+                                    finalText = Self.applyDictionaryRules(to: cleanRefined, isJapanese: isJapanese)
+                                }
+                            } catch {
+                                NSLog("[VoiceIME] ⚠️ 1B最終LLM推敲エラー: %@", error.localizedDescription)
+                            }
+                            self.queue.sync {
+                                self.latestRefinedText = ""
+                                self.lastWhisperBaseText = ""
+                                self.preRollByteCount = 0
+                                self.hasPreStartedCapture = false
+                                self.isLatestTextRefinedByLLM = false
+                                self.lastRefinedSampleCount = 0
+                                self.lastAttemptedLLMInput = ""
+                                self.pcmDataBuffer.removeAll(keepingCapacity: false)
+                            }
+                            Task { @MainActor in
+                                FloatingPreviewController.shared.updateConfirmedText(finalText)
+                            }
+                            PipelineLogger.shared.logSessionEnd(finalText: finalText)
+                            completion(finalText)
+                            return
+                        }
+
+                        NSLog("[VoiceIME] ✅ 一時停止中タスク待機完了 ➔ 確定出力: %d文字", targetText.count)
                         Task { @MainActor in
-                            FloatingPreviewController.shared.updateConfirmedText(result)
+                            FloatingPreviewController.shared.updateConfirmedText(targetText)
                         }
-                        PipelineLogger.shared.logSessionEnd(finalText: result)
-                        completion(result)
+                        PipelineLogger.shared.logSessionEnd(finalText: targetText)
+                        completion(targetText)
                     }
                     return
                 } else if !self.latestRefinedText.isEmpty {
@@ -1297,6 +1348,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             case "八", "８": return "8"
             case "九", "９": return "9"
             case "零", "〇", "０": return "0"
+            case "A"..."Z": return Character(c.lowercased())
             default: return c
             }
         }

@@ -73,6 +73,14 @@ struct TestRunner {
         let combinedEn = StreamingChunkPipelineService.combineRefinedWithDelta(refined: rEn1, delta: dEn2 ?? "")
         assert(combinedEn == "Hello, world! and good morning", "Expected combined English text, got '\(combinedEn)'")
 
+        // 3-b. 英語の文頭大文字・小文字ブレ（we ➔ We）に対する差分抽出テスト
+        let wEnCaseBase = "we are involved in the insurance"
+        let wEnCaseNew = "We are involved in the insurance industry"
+        let dEnCase = StreamingChunkPipelineService.extractDelta(newText: wEnCaseNew, baseText: wEnCaseBase)
+        assert(dEnCase == "industry", "Expected 'industry' despite We/we case difference, got '\(String(describing: dEnCase))'")
+        let combinedCase = StreamingChunkPipelineService.combineRefinedWithDelta(refined: wEnCaseBase, delta: dEnCase ?? "")
+        assert(combinedCase == "we are involved in the insurance industry", "Expected 'we are involved in the insurance industry', got '\(combinedCase)'")
+
         // 4. 初回（baseText が空）の場合
         let dInitial = StreamingChunkPipelineService.extractDelta(newText: "テスト発話", baseText: "")
         assert(dInitial == "テスト発話", "Expected initial text, got '\(String(describing: dInitial))'")

@@ -557,3 +557,19 @@ Push-to-Talk 方式において最も頻発する問題は、「話し始めの�
   - **辞書ルールの是正**: `AppSettings.defaultDictionaryRules` および `symbolDictionaryRules` において、`?` を全角 `？` に変換するルールは日本語文字直後（`(?<=[あ-んア-ン一-龥])`）のみを対象とし、アルファベット（`[a-zA-Z0-9]`）を対象外とする。
   - **英語モードにおける全角記号の自動半角化**: 英語モード時（`isJapanese == false`）は、確定直前およびプレビュー表示において全角記号（`？` ➔ `?`, `！` ➔ `!`, `。` ➔ `.`, `、` ➔ `,`）を決定論的に半角変換し、推敲が `[OFF]` の状態でも確実に半角 `?` を担保する。
   - **パイプライン言語伝播**: `StreamingChunkPipelineService` の `applyDictionaryRules` およびプレビュー処理に `isJapanese`（`language != "en"`）を確実に伝播させ、速報表示中も全角「？」がチラつかないようにする。
+
+### 10.11 キー解放時（Push-to-Talk 終了時）の進行中Whisperタスク保全と最後の単語欠落防止仕様
+- **発生メカニズムと根本原因**:
+  - ユーザーが発話終了（または最後の単語を発話した直後）にキーを解放した際、直前の途中息継ぎトリガー（`tailCatchUp` 等）によって Whisper API へ送信中（`isTranscribing == true`）の場合がある。
+  - `finishAndFinalize()` において `self.isRunning = false` が設定されるが、通信中の `currentProcessingTask` 内で `guard self.isRunning else { return }` のガードが存在したため、Whisper が末尾の単語（例: `industry`）を正常に認識して返却したにもかかわらず、`isRunning == false` によりタスク結果が丸ごと破棄されていた。
+  - その結果、`finishAndFinalize` は直前の古いプレビュー（最後の単語が欠けた状態）を確定テキストとして出力し、ユーザーの「最後の単語が入らない」という現象を引き起こしていた。
+- **仕様と是正策**:
+  1. **進行中Whisperタスクの受信保証**:
+     - `currentProcessingTask` の結果反映ガードを `guard self.activeTaskID == taskID, !Task.isCancelled else { return }` に改め、`isRunning == false`（キー解放後・確定待ち）であっても、通信中の正規タスク結果を破棄せず確実に `latestRefinedText` へ反映する。
+  2. **Case 1B における最新テキストへの最終推敲・確定パイプライン**:
+     - `finishAndFinalize()` の Case 1B（進行中タスク待機）において、`activeWhisper` 完了後に最新テキストを取り出し、推敲が有効な場合は最終テキストに対して確実に推敲を実行して確定出力する。
+  3. **英語大文字・小文字の表記ゆれに耐えうる差分抽出（`extractDelta`）**:
+     - Whisper が発話途中の小文字（`we`）から文頭大文字（`We`）へ認識を更新した場合でも、大文字・小文字（Case-insensitive）を吸収して安全に末尾差分（`industry`）を抽出・連結できるよう `normalizeCharForMatch` を強化する。
+  4. **英語Whisperプロンプトの初期化**:
+     - 英語モード時（`language == "en"`）に Whisper プロンプトが `nil` となるのを防ぎ、英語認識と文末判定を支援するコンテキスト（`"This is English speech-to-text. Transcribe accurately with proper English punctuation."`）を設定する。
+
