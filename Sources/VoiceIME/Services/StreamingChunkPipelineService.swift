@@ -35,6 +35,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
     private var totalSpeechFrameCount: Int = 0
     private var recentRMS: Float = 0.0
     private var silentFrameCount: Int = 0
+    private var isCapturePaused: Bool = false
     private var isTranscribing: Bool = false
     private var hasPendingRetry: Bool = false
     private var lastTriggerHadPause: Bool = true
@@ -150,6 +151,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             self.speechThresholdDB = speechThresholdDB
             // ユーザー設定の音声入力しきい値（settings.audioThresholdDB）に直接結びつけ
             self.silenceThresholdRMS = pow(10.0, speechThresholdDB / 20.0)
+            self.isCapturePaused = false
             self.isStreamingTriggerEnabled = true
             self.isRunning = true
             NSLog("[VoiceIME] 🎭 累積・紙芝居ストリーミングパイプラインを開始しました (音声しきい値: %.1f dB / RMS %.4f, 先行蓄積バイト数: %d)", speechThresholdDB, self.silenceThresholdRMS, self.pcmDataBuffer.count)
@@ -159,7 +161,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
     /// マイク入力バッファの受信と蓄積・息継ぎスキャン
     public func appendAudioBuffer(_ buffer: AVAudioPCMBuffer, isPreRoll: Bool = false) {
         queue.async { [weak self] in
-            guard let self = self, self.isRunning else { return }
+            guard let self = self, self.isRunning, !self.isCapturePaused else { return }
 
             let bufSampleRate = buffer.format.sampleRate
             if bufSampleRate > 0 && self.sampleRate != bufSampleRate {
@@ -603,6 +605,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                 return
             }
             self.isRunning = false
+            self.isCapturePaused = false
 
             let totalSamples = self.pcmDataBuffer.count / 2
             guard totalSamples > 0, let whisperConfig = self.currentWhisperConfig else {
@@ -883,23 +886,42 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         }
     }
 
-    /// 一時停止（思考中・マイク休止時）: バッファや最新テキストを保持したままキャプチャを一時休止
+    /// 一時停止（思考中・マイク休止時）:
+    /// 未送信の音声（直前トリガー以降の発話）があれば即座に Whisper API へ累積送信し、
+    /// プレビュー画面に現在までのすべての言葉を完全に表示させた上でキャプチャを一時休止する
     public func pauseCapture() {
         queue.async { [weak self] in
-            guard let self = self else { return }
-            self.isRunning = false
+            guard let self = self, self.isRunning else { return }
+            self.isCapturePaused = true
             self.silentFrameCount = 0
-            NSLog("[VoiceIME] ⏸️ StreamingChunkPipelineService: 一時停止 (データ・途中テキストを保持)")
+
+            let totalSamples = self.pcmDataBuffer.count / 2
+            let unsentSpeech = (self.speechFramesSinceLastTrigger > 0 || self.quietTailFramesSinceLastTrigger >= Int(self.sampleRate * 0.08))
+            let hasNewSamples = totalSamples > self.lastTriggerSampleCount && (totalSamples - self.lastTriggerSampleCount) >= Int(self.sampleRate * 0.15)
+
+            if (unsentSpeech || hasNewSamples) && self.currentWhisperConfig != nil {
+                let consumedSpeechFrames = self.speechFramesSinceLastTrigger
+                self.lastTriggerTime = CFAbsoluteTimeGetCurrent()
+                self.lastTriggerSampleCount = totalSamples
+                self.speechFramesSinceLastTrigger = 0
+                self.quietTailFramesSinceLastTrigger = 0
+                self.hasPendingRetry = false
+                NSLog("[VoiceIME] ⏸️ 一時停止突入: 未送信音声を即時Whisper送信してプレビューに全文字表示 (サンプル数: %d)", totalSamples)
+                self.processCumulativePaperTheater(to: totalSamples, consumedSpeechFrames: consumedSpeechFrames)
+            } else {
+                NSLog("[VoiceIME] ⏸️ StreamingChunkPipelineService: 一時停止 (データ・最新テキストを保持)")
+            }
         }
     }
 
-    /// 一時停止からの再開（Space再押下時）: 既存の音声バッファに続きを追記
+    /// 一時停止からの再開（メインキー再押下時）: 既存の音声バッファに続きを追記し、録音を再開
     public func resumeCapture() {
         queue.async { [weak self] in
-            guard let self = self else { return }
-            self.isRunning = true
+            guard let self = self, self.isRunning else { return }
+            self.isCapturePaused = false
             self.silentFrameCount = 0
-            NSLog("[VoiceIME] ▶️ StreamingChunkPipelineService: 録音再開 (既存バッファに追記)")
+            self.lastTriggerTime = CFAbsoluteTimeGetCurrent()
+            NSLog("[VoiceIME] ▶️ StreamingChunkPipelineService: 録音再開 (既存バッファ・最新テキストを保持して続きを追記)")
         }
     }
 
@@ -942,6 +964,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             self.currentLLMTask?.cancel()
             self.currentLLMTask = nil
             self.isRunning = false
+            self.isCapturePaused = false
             self.hasPreStartedCapture = false
             self.preRollByteCount = 0
             self.pcmDataBuffer.removeAll(keepingCapacity: false)

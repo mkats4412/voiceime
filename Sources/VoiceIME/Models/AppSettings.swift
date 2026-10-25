@@ -443,6 +443,20 @@ public final class AppSettings: ObservableObject {
         didSet { defaults.set(hotkeyDisplayString, forKey: Keys.hotkeyDisplayString) }
     }
 
+    /// 音声入力ホットキーの補助キー部分（⌃, ⌘, ⌥, ⇧）
+    public var hotkeyModifiersDisplayString: String {
+        let modChars: Set<Character> = ["⌃", "⌘", "⌥", "⇧"]
+        let mods = hotkeyDisplayString.filter { modChars.contains($0) }
+        return mods.isEmpty ? "修飾キー" : String(mods)
+    }
+
+    /// 音声入力ホットキーのメインキー部分（Space, Q 等）
+    public var hotkeyMainKeyDisplayString: String {
+        let modChars: Set<Character> = ["⌃", "⌘", "⌥", "⇧"]
+        let main = hotkeyDisplayString.filter { !modChars.contains($0) }
+        return main.isEmpty ? "キー" : String(main)
+    }
+
     // MARK: - AI クイック質問 (Quick Ask) ショートカット
     @Published public var quickAskHotkeyCode: UInt32 {
         didSet { defaults.set(quickAskHotkeyCode, forKey: Keys.quickAskHotkeyCode) }
@@ -454,6 +468,20 @@ public final class AppSettings: ObservableObject {
 
     @Published public var quickAskHotkeyDisplayString: String {
         didSet { defaults.set(quickAskHotkeyDisplayString, forKey: Keys.quickAskHotkeyDisplayString) }
+    }
+
+    /// AIクイック質問の補助キー部分
+    public var quickAskModifiersDisplayString: String {
+        let modChars: Set<Character> = ["⌃", "⌘", "⌥", "⇧"]
+        let mods = quickAskHotkeyDisplayString.filter { modChars.contains($0) }
+        return mods.isEmpty ? "修飾キー" : String(mods)
+    }
+
+    /// AIクイック質問のメインキー部分
+    public var quickAskMainKeyDisplayString: String {
+        let modChars: Set<Character> = ["⌃", "⌘", "⌥", "⇧"]
+        let main = quickAskHotkeyDisplayString.filter { !modChars.contains($0) }
+        return main.isEmpty ? "キー" : String(main)
     }
 
     @Published public var quickAskProviderMode: QuickAskProviderMode {

@@ -1531,6 +1531,21 @@ struct TestRunner {
         }
 
         pipeline.cancel()
+
+        // 6. 動的キー表示名（ユーザー設定追従）の検証
+        let settings = AppSettings.shared
+        settings.hotkeyDisplayString = "⌃Space"
+        assert(settings.hotkeyModifiersDisplayString == "⌃", "Modifiers display should be ⌃")
+        assert(settings.hotkeyMainKeyDisplayString == "Space", "Main key display should be Space")
+
+        settings.hotkeyDisplayString = "⌘⌥Space"
+        assert(settings.hotkeyModifiersDisplayString == "⌘⌥", "Modifiers display should be ⌘⌥")
+        assert(settings.hotkeyMainKeyDisplayString == "Space", "Main key display should be Space")
+
+        settings.hotkeyDisplayString = "⌃⇧Q"
+        assert(settings.hotkeyModifiersDisplayString == "⌃⇧", "Modifiers display should be ⌃⇧")
+        assert(settings.hotkeyMainKeyDisplayString == "Q", "Main key display should be Q")
+
         print("  -> Push-to-Talk Pause and Resume passed!")
     }
 }

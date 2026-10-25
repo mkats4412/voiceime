@@ -457,7 +457,7 @@ public final class AppState: ObservableObject {
 
     // MARK: - 一時停止・再開（思考サポート）
 
-    /// Push-to-Talkで修飾キー（Ctrl等）を押したままSpaceを離した際の一時停止処理
+    /// Push-to-Talkで修飾キーを押したままメインキーを離した際の一時停止処理
     public func pauseRecording() {
         guard phase == .recording, !isRecordingPaused else { return }
         isRecordingPaused = true
@@ -470,11 +470,13 @@ public final class AppState: ObservableObject {
         if settings.floatingPreviewEnabled {
             FloatingPreviewController.shared.setPaused(mode: .speechInput)
         }
-        statusMessage = "一時停止中 (Spaceで再開 / ⌃離して入力)"
-        NSLog("[VoiceIME] ⏸️ 音声入力 一時停止 (マイク停止中・思考待機)")
+        let mainKey = settings.hotkeyMainKeyDisplayString
+        let modKey = settings.hotkeyModifiersDisplayString
+        statusMessage = "一時停止中 (\(mainKey)で再開 / \(modKey)離して入力)"
+        NSLog("[VoiceIME] ⏸️ 音声入力 一時停止 (マイク停止中・未送信音声をWhisper同期・思考待機)")
     }
 
-    /// 一時停止中からSpaceを再度押した際の再開処理
+    /// 一時停止中からメインキーを再度押した際の再開処理
     public func resumeRecording() {
         guard phase == .recording, isRecordingPaused else { return }
         isRecordingPaused = false
@@ -492,7 +494,7 @@ public final class AppState: ObservableObject {
             FloatingPreviewController.shared.resumeLiveRecording(mode: .speechInput)
         }
         statusMessage = settings.triggerMode == .pushToTalk ? "録音中... (キーを離すと入力)" : "録音中... (もう一度キーを押して停止)"
-        NSLog("[VoiceIME] ▶️ 音声入力 再開 (マイクキャプチャ再開)")
+        NSLog("[VoiceIME] ▶️ 音声入力 再開 (マイクキャプチャ再開・続きを描画)")
     }
 
     /// AIクイック質問の一時停止処理
@@ -505,8 +507,10 @@ public final class AppState: ObservableObject {
         StreamingChunkPipelineService.shared.pauseCapture()
 
         FloatingPreviewController.shared.setPaused(mode: .quickAsk)
-        statusMessage = "一時停止中 (Spaceで再開 / ⌃⇧離して送信)"
-        NSLog("[VoiceIME] ⏸️ AIクイック質問 一時停止 (マイク停止中・思考待機)")
+        let mainKey = settings.quickAskMainKeyDisplayString
+        let modKey = settings.quickAskModifiersDisplayString
+        statusMessage = "一時停止中 (\(mainKey)で再開 / \(modKey)離して送信)"
+        NSLog("[VoiceIME] ⏸️ AIクイック質問 一時停止 (マイク停止中・未送信音声をWhisper同期・思考待機)")
     }
 
     /// AIクイック質問の再開処理
