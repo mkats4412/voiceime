@@ -14,35 +14,46 @@ public struct MenuBarView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // ステータスヘッダー
+        VStack(alignment: .leading, spacing: 9) {
+            // 1. ステータスヘッダー
             HStack(spacing: 6) {
                 statusIndicator
                 Text(appState.statusMessage)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
                 Spacer()
-            }
-            .padding(.horizontal, 4)
-            .padding(.top, 2)
 
-            // 録音トグルボタン
+                // プロバイダ状態バッジ
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(providerColor(for: settings.selectedProvider))
+                        .frame(width: 5, height: 5)
+                    Text(settings.selectedProvider.displayName)
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.horizontal, 2)
+            .padding(.top, 1)
+
+            // 2. 録音トグルボタン
             Button(action: {
                 appState.toggleRecording()
             }) {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Image(systemName: appState.phase == .recording ? "stop.circle.fill" : "mic.fill")
-                        .font(.system(size: 12))
+                        .font(.system(size: 13))
                     Text(appState.phase == .recording ? "録音を停止" : "音声入力を開始")
-                        .font(.system(size: 12))
+                        .font(.system(size: 12, weight: .medium))
                         .lineLimit(1)
-                    Spacer(minLength: 2)
+                    Spacer()
                     Text(settings.hotkeyDisplayString)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(appState.phase == .recording ? .white : .secondary)
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundColor(appState.phase == .recording ? .white.opacity(0.85) : .secondary)
                         .lineLimit(1)
                 }
-                .padding(.vertical, 4)
-                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 10)
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -58,18 +69,21 @@ public struct MenuBarView: View {
                 .padding(.horizontal, 4)
             }
 
-            // 入力マイク選択 & 状態表示 (ワイヤレスイヤホン等の選択・フォールバック検知)
-            VStack(alignment: .leading, spacing: 4) {
+            // 3. クイック設定カード（マイク・言語・推敲を美しくグルーピング）
+            VStack(spacing: 8) {
+                // A. マイク選択
                 HStack(spacing: 6) {
                     Image(systemName: audioDevices.isFallbackActive ? "exclamationmark.triangle.fill" : "mic.fill")
                         .foregroundColor(audioDevices.isFallbackActive ? .orange : .secondary)
                         .font(.system(size: 11))
+                        .frame(width: 14)
 
-                    Text("マイク:")
+                    Text("マイク")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
 
-                    // メニューバーからのマイク選択メニュー (言語・モード行と揃えた左寄せスタイル)
+                    Spacer()
+
                     Menu {
                         let defaultName = audioDevices.systemDefaultDevice?.name ?? "未検出"
                         Button(action: {
@@ -108,7 +122,7 @@ public struct MenuBarView: View {
                     } label: {
                         HStack(spacing: 4) {
                             Text(audioDevices.effectiveDeviceName)
-                                .font(.system(size: 11, weight: .medium))
+                                .font(.system(size: 10.5, weight: .medium))
                                 .foregroundColor(audioDevices.isFallbackActive ? .orange : .primary)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
@@ -117,19 +131,16 @@ public struct MenuBarView: View {
                                 .foregroundColor(.secondary)
                         }
                         .padding(.horizontal, 6)
-                        .padding(.vertical, 2.5)
+                        .padding(.vertical, 3)
                         .background(
-                            RoundedRectangle(cornerRadius: 4)
+                            RoundedRectangle(cornerRadius: 5)
                                 .fill(audioDevices.isFallbackActive ? Color.orange.opacity(0.15) : Color(NSColor.controlBackgroundColor))
                         )
                     }
                     .menuStyle(.borderlessButton)
                     .help("入力マイクを選択（クリックで切替）")
-
-                    Spacer()
                 }
 
-                // 選択したマイクが見つからずシステムデフォルトにフォールバック中の警告
                 if audioDevices.isFallbackActive {
                     HStack(spacing: 4) {
                         Image(systemName: "info.circle.fill")
@@ -141,210 +152,133 @@ public struct MenuBarView: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
-                    .padding(.horizontal, 2)
                 }
-            }
-            .padding(.horizontal, 4)
 
-            // 言語クイック切り替え
-            HStack(spacing: 4) {
-                Text("言語:")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
+                Divider().opacity(0.4)
 
-                Button("自動") {
-                    settings.language = ""
-                    settings.apiMode = .transcriptions
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11, weight: (settings.apiMode == .transcriptions && settings.language.isEmpty) ? .bold : .regular))
-                .foregroundColor((settings.apiMode == .transcriptions && settings.language.isEmpty) ? .accentColor : .primary)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill((settings.apiMode == .transcriptions && settings.language.isEmpty) ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
-                )
+                // B. 言語切替
+                HStack(spacing: 6) {
+                    Image(systemName: "globe")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 11))
+                        .frame(width: 14)
 
-                Button("日本語") {
-                    settings.language = "ja"
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11, weight: settings.language == "ja" ? .bold : .regular))
-                .foregroundColor(settings.language == "ja" ? .accentColor : .primary)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(settings.language == "ja" ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
-                )
-
-                Button("英語") {
-                    settings.language = "en"
-                    settings.apiMode = .transcriptions
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11, weight: (settings.apiMode == .transcriptions && settings.language == "en") ? .bold : .regular))
-                .foregroundColor((settings.apiMode == .transcriptions && settings.language == "en") ? .accentColor : .primary)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill((settings.apiMode == .transcriptions && settings.language == "en") ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
-                )
-
-                Spacer()
-            }
-            .padding(.horizontal, 4)
-
-            // 入力モード切替（日本語選択時に通常入力と英文翻訳を選択可能）
-            if settings.language == "ja" {
-                HStack(spacing: 5) {
-                    Text("モード:")
+                    Text("言語")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
 
-                    Button("通常") {
-                        settings.apiMode = .transcriptions
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: settings.apiMode == .transcriptions ? .bold : .regular))
-                    .foregroundColor(settings.apiMode == .transcriptions ? .accentColor : .primary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(settings.apiMode == .transcriptions ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
-                    )
-
-                    Button("英文翻訳") {
-                        settings.apiMode = .translations
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: settings.apiMode == .translations ? .bold : .regular))
-                    .foregroundColor(settings.apiMode == .translations ? .accentColor : .primary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(settings.apiMode == .translations ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
-                    )
-
                     Spacer()
-                }
-                .padding(.horizontal, 4)
-            }
 
-            // AI推敲 ON/OFF（チェックボックス）および スタイル切替
-            if settings.apiMode == .transcriptions {
-                HStack(spacing: 5) {
-                    Toggle("推敲:", isOn: $settings.llmRefinementEnabled)
-                        .toggleStyle(.checkbox)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-
-                    if settings.isLLMRefinementActive {
-                        Button("口語") {
-                            settings.refinementStyle = .casual
+                    HStack(spacing: 3) {
+                        pillButton(title: "自動", isSelected: settings.language.isEmpty) {
+                            settings.language = ""
+                            settings.apiMode = .transcriptions
                         }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11, weight: settings.refinementStyle == .casual ? .bold : .regular))
-                        .foregroundColor(settings.refinementStyle == .casual ? .accentColor : .primary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(settings.refinementStyle == .casual ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
-                        )
-                        .help("語尾や口語ニュアンスをそのまま維持（チャット・会話向け）\n推敲モデル: \(settings.effectiveLLMConfig.modelName)")
-
-                        Button("文章") {
-                            settings.refinementStyle = .formal
+                        pillButton(title: "日本語", isSelected: settings.language == "ja") {
+                            settings.language = "ja"
                         }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11, weight: settings.refinementStyle == .formal ? .bold : .regular))
-                        .foregroundColor(settings.refinementStyle == .formal ? .accentColor : .primary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(settings.refinementStyle == .formal ? Color.accentColor.opacity(0.15) : Color(NSColor.controlBackgroundColor))
-                        )
-                        .help("整った標準的な書き言葉に推敲（メール・報告書向け）\n推敲モデル: \(settings.effectiveLLMConfig.modelName)")
-
-                        Text(settings.effectiveLLMConfig.modelName)
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .help("推敲モデル: \(settings.effectiveLLMConfig.modelName) (\(settings.resolvedLLMProvider.displayName))")
-
-                        Circle()
-                            .fill(providerColor(for: settings.resolvedLLMProvider))
-                            .frame(width: 5, height: 5)
-                            .help("推敲モデル: \(settings.effectiveLLMConfig.modelName)")
-                    } else {
-                        Text(settings.llmRefinementEnabled ? "OFF (未指定)" : "OFF")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
+                        pillButton(title: "英語", isSelected: settings.language == "en") {
+                            settings.language = "en"
+                            settings.apiMode = .transcriptions
+                        }
                     }
-
-                    Spacer()
                 }
-                .padding(.horizontal, 4)
 
-                // STT & LLM プロバイダ状態の明示
-                HStack(spacing: 4) {
-                    Text("構成:")
-                        .font(.system(size: 9.5))
-                        .foregroundColor(.secondary)
-                    Text("STT: \(settings.selectedProvider.displayName)")
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .foregroundColor(.primary)
-                    Text("|")
-                        .font(.system(size: 8))
-                        .foregroundColor(.secondary.opacity(0.5))
-                    Text(settings.isLLMRefinementActive ? "LLM: \(settings.resolvedLLMProvider.displayName) (\(settings.effectiveLLMConfig.modelName))" : "LLM: OFF")
-                        .font(.system(size: 9.5, weight: settings.isLLMRefinementActive ? .semibold : .regular))
-                        .foregroundColor(settings.isLLMRefinementActive ? .accentColor : .secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Text("|")
-                        .font(.system(size: 8))
-                        .foregroundColor(.secondary.opacity(0.5))
-                    Text(settings.mcpAgentEditingEnabled ? "MCP: ON" : "MCP: OFF")
-                        .font(.system(size: 9.5, weight: settings.mcpAgentEditingEnabled ? .semibold : .regular))
-                        .foregroundColor(settings.mcpAgentEditingEnabled ? .accentColor : .secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 4)
-            }
-
-            // 直前の書き起こしプレビュー（存在する場合のみコンパクトに表示）
-            if !appState.lastProcessedText.isEmpty {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .center, spacing: 6) {
-                        Text("直前の入力:")
+                // 日本語選択時のみ通常/英文翻訳モードを表示
+                if settings.language == "ja" {
+                    HStack(spacing: 6) {
+                        Text("翻訳")
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
+                            .padding(.leading, 20)
 
-                        // どちらのLLM/音声認識プロバイダで認識・出力されたかを示すバッジ
+                        Spacer()
+
+                        HStack(spacing: 3) {
+                            pillButton(title: "通常入力", isSelected: settings.apiMode == .transcriptions) {
+                                settings.apiMode = .transcriptions
+                            }
+                            pillButton(title: "英語翻訳", isSelected: settings.apiMode == .translations) {
+                                settings.apiMode = .translations
+                            }
+                        }
+                    }
+                }
+
+                Divider().opacity(0.4)
+
+                // C. AI推敲切替（OFF / 口語 / 文章 のすっきり3択ピッカー）
+                VStack(spacing: 4) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sparkles")
+                            .foregroundColor(settings.isLLMRefinementActive ? .accentColor : .secondary)
+                            .font(.system(size: 11))
+                            .frame(width: 14)
+
+                        Text("推敲")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+
+                        Spacer()
+
+                        HStack(spacing: 3) {
+                            pillButton(title: "OFF", isSelected: !settings.llmRefinementEnabled) {
+                                settings.llmRefinementEnabled = false
+                            }
+                            pillButton(title: "口語", isSelected: settings.llmRefinementEnabled && settings.refinementStyle == .casual) {
+                                settings.llmRefinementEnabled = true
+                                settings.refinementStyle = .casual
+                            }
+                            pillButton(title: "文章", isSelected: settings.llmRefinementEnabled && settings.refinementStyle == .formal) {
+                                settings.llmRefinementEnabled = true
+                                settings.refinementStyle = .formal
+                            }
+                        }
+                    }
+
+                    if settings.isLLMRefinementActive {
+                        HStack(spacing: 4) {
+                            Spacer()
+                            Circle()
+                                .fill(providerColor(for: settings.resolvedLLMProvider))
+                                .frame(width: 4.5, height: 4.5)
+                            Text("\(settings.resolvedLLMProvider.displayName): \(settings.effectiveLLMConfig.modelName)")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        .padding(.top, 1)
+                    }
+                }
+            }
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(NSColor.controlBackgroundColor).opacity(0.6))
+            )
+
+            // 4. 直前の書き起こしプレビューカード（存在時のみスマートに表示）
+            if !appState.lastProcessedText.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                        Text("直前の入力")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundColor(.secondary)
+
                         if let provider = appState.lastEffectiveProvider {
                             let pColor = providerColor(for: provider)
-                            HStack(spacing: 3) {
-                                Circle()
-                                    .fill(pColor)
-                                    .frame(width: 5, height: 5)
-                                Text("認識: \(provider.displayName)")
-                                    .font(.system(size: 9.5, weight: .bold))
-                                    .foregroundColor(pColor)
-                            }
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1.5)
-                            .background(
-                                RoundedRectangle(cornerRadius: 3)
-                                    .fill(pColor.opacity(0.12))
-                            )
+                            Text(provider.displayName)
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(pColor)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(
+                                    Capsule().fill(pColor.opacity(0.12))
+                                )
                         }
 
                         Spacer()
@@ -359,11 +293,11 @@ public struct MenuBarView: View {
                                     .font(.system(size: 8.5, weight: .medium))
                             }
                             .foregroundColor(appState.isRecentTextCopied ? .green : .accentColor)
-                            .padding(.horizontal, 4)
+                            .padding(.horizontal, 5)
                             .padding(.vertical, 1.5)
                             .background(
-                                RoundedRectangle(cornerRadius: 3)
-                                    .fill(appState.isRecentTextCopied ? Color.green.opacity(0.15) : Color.accentColor.opacity(0.12))
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(appState.isRecentTextCopied ? Color.green.opacity(0.15) : Color.accentColor.opacity(0.10))
                             )
                         }
                         .buttonStyle(.plain)
@@ -375,23 +309,28 @@ public struct MenuBarView: View {
                     }) {
                         Text(appState.lastProcessedText)
                             .font(.system(size: 11))
+                            .foregroundColor(.primary)
                             .lineLimit(3)
-                            .padding(5)
+                            .padding(6)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(Color.secondary.opacity(0.08))
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color(NSColor.textBackgroundColor).opacity(0.35))
                             )
                     }
                     .buttonStyle(.plain)
                     .help("クリックでクリップボードにコピー")
                 }
-                .padding(.horizontal, 2)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(NSColor.controlBackgroundColor).opacity(0.6))
+                )
             }
 
-            // 直近の障害回避・フォールバック警告（Groq等の失敗理由を可視化）
+            // 5. 直近の障害回避・フォールバック警告（Groq等の失敗理由を可視化）
             if let fallback = appState.lastFallbackRecord {
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 5) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundColor(.orange)
@@ -411,14 +350,8 @@ public struct MenuBarView: View {
                     }
 
                     Text("理由: \(fallback.reasonSummary)")
-                        .font(.system(size: 10.5, weight: .medium))
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.primary)
-
-                    Text(fallback.detail)
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
 
                     Text("➔ \(fallback.backupProvider.displayName) で自動継続しました")
                         .font(.system(size: 9.5))
@@ -433,16 +366,14 @@ public struct MenuBarView: View {
                     RoundedRectangle(cornerRadius: 6)
                         .stroke(Color.orange.opacity(0.3), lineWidth: 1)
                 )
-                .padding(.horizontal, 2)
             }
 
             if let error = appState.errorMessage {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 5) {
                     Text(error)
                         .font(.system(size: 10))
                         .foregroundColor(.red)
-                        .lineLimit(4)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(3)
 
                     HStack {
                         Spacer()
@@ -456,13 +387,12 @@ public struct MenuBarView: View {
                 .padding(6)
                 .background(Color.red.opacity(0.08))
                 .cornerRadius(6)
-                .padding(.horizontal, 2)
             }
 
             Divider()
-                .padding(.vertical, 2)
+                .padding(.vertical, 1)
 
-            // 設定・終了（上が「設定...」、下が「終了」の縦並び）
+            // 6. 設定・終了
             VStack(spacing: 2) {
                 Button(action: {
                     openSettingsAction()
@@ -498,7 +428,23 @@ public struct MenuBarView: View {
             }
         }
         .padding(10)
-        .frame(width: 190)
+        .frame(width: 248)
+    }
+
+    /// クイック設定用のピル型ボタン
+    private func pillButton(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10.5, weight: isSelected ? .bold : .regular))
+                .foregroundColor(isSelected ? .white : .primary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2.5)
+                .background(
+                    RoundedRectangle(cornerRadius: 4.5)
+                        .fill(isSelected ? Color.accentColor : Color(NSColor.controlBackgroundColor))
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     private func providerColor(for provider: APIProvider) -> Color {
