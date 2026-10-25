@@ -162,6 +162,20 @@ struct TestRunner {
         )
         assert(transcribingBlocked == false, "Should not trigger while transcribing")
 
+        // E. 5.0秒言い終わり待機フラッシュ / 語尾キャッチアップ（needsTailCatchUp == true）時は確実にトリガー成立
+        let waitingFlushTrigger = StreamingChunkPipelineService.evaluateTrigger(
+            isFirstTrigger: false,
+            totalSpeechDuration: 3.0,
+            newSpeechDuration: 0.0,
+            silentDuration: 5.0,
+            timeSinceLastTrigger: 5.0,
+            minIntervalSeconds: 1.5,
+            minSilenceDuration: 0.12,
+            isTranscribing: false,
+            needsTailCatchUp: true
+        )
+        assert(waitingFlushTrigger == true, "5.0s waiting flush with needsTailCatchUp should trigger")
+
         print("  -> Progressive Refinement Preview passed!")
     }
 

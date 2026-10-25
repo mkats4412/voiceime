@@ -205,14 +205,16 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                 self.quietTailCatchUpCount = 0
                 self.speechFramesSinceLastTrigger += frameLength
                 self.totalSpeechFrameCount += frameLength
+            } else if isTrailingSpeech {
+                self.silentFrameCount = 0
+                self.speechFramesSinceLastTrigger += frameLength
+                self.totalSpeechFrameCount += frameLength
+            } else if isQuietTailSpeech {
+                self.silentFrameCount = 0
+                self.quietTailCatchUpCount = 0
+                self.quietTailFramesSinceLastTrigger += frameLength
             } else {
                 self.silentFrameCount += frameLength
-                if isTrailingSpeech {
-                    self.speechFramesSinceLastTrigger += frameLength
-                    self.totalSpeechFrameCount += frameLength
-                } else if isQuietTailSpeech {
-                    self.quietTailFramesSinceLastTrigger += frameLength
-                }
             }
 
             guard self.isStreamingTriggerEnabled, self.currentWhisperConfig != nil else { return }
@@ -228,9 +230,16 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             let timeSinceLastTrigger = now - self.lastTriggerTime
 
             // 前回トリガーが語中（息継ぎなし: silent < 0.18s）で発火した後に話し終えて小休止（silent >= 0.25s）に入った場合、
-            // または前回トリガー後に小声の語尾（quietTailDuration >= 0.12s）が発声されて小休止（silent >= 0.25s）に入った場合の語尾キャッチアップ判定
-            let needsQuietTailCatchUp = (quietTailDuration >= 0.12 && silentDuration >= 0.25 && self.quietTailCatchUpCount < 1)
-            let needsTailCatchUp = ((!self.lastTriggerHadPause && silentDuration >= 0.25) || needsQuietTailCatchUp)
+            // または前回トリガー後に小声の語尾（quietTailDuration >= 0.08s）が発声されて小休止（silent >= 0.25s）に入った場合の語尾キャッチアップ判定
+            let needsQuietTailCatchUp = (quietTailDuration >= 0.08 && silentDuration >= 0.25 && self.quietTailCatchUpCount < 1)
+            let needsNormalTailCatchUp = (!self.lastTriggerHadPause && silentDuration >= 0.25)
+
+            // 🌟 5.0秒言い終わり待機フラッシュ（Flush Trigger）:
+            // 通常の会話中の句読点や思考の間（数秒程度）で誤判定することを防ぎつつ、
+            // 話し終えてキーを押したまま 5.0秒 待機した場合、未送信音声があれば言い終わりと判定して Whisper へ累積送信！
+            let hasUnsentAudioSinceLast = (newSpeechDuration > 0 || quietTailDuration >= 0.08)
+            let needsWaitingFlush = (hasUnsentAudioSinceLast && silentDuration >= 5.0 && timeSinceLastTrigger >= self.minIntervalSeconds)
+            let needsTailCatchUp = (needsNormalTailCatchUp || needsQuietTailCatchUp || needsWaitingFlush)
 
             let isFirstTrigger = (self.lastTriggerSampleCount == 0)
             let shouldTrigger = Self.evaluateTrigger(
@@ -253,13 +262,13 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                 self.lastTriggerSampleCount = totalSamples
                 self.speechFramesSinceLastTrigger = 0
                 self.quietTailFramesSinceLastTrigger = 0
-                if needsQuietTailCatchUp { self.quietTailCatchUpCount += 1 }
+                if needsQuietTailCatchUp || needsWaitingFlush { self.quietTailCatchUpCount += 1 }
                 self.hasPendingRetry = false
                 self.lastTriggerHadPause = hadPause
                 PipelineLogger.shared.logDebug("⚡ 紙芝居トリガー成立! (totalAudio: \(String(format: "%.2f", totalAudioDuration))s, totalSpeech: \(String(format: "%.2f", totalSpeechDuration))s, newSpeech: \(String(format: "%.2f", newSpeechDuration))s, quietTail: \(String(format: "%.2f", quietTailDuration))s, silent: \(String(format: "%.2f", silentDuration))s, isFirst: \(isFirstTrigger), tailCatchUp: \(needsTailCatchUp))")
                 self.processCumulativePaperTheater(to: totalSamples, consumedSpeechFrames: consumedSpeechFrames)
-            } else if !self.isTranscribing && !self.isRefiningLLM && !self.isLatestTextRefinedByLLM && self.speechFramesSinceLastTrigger == 0 && quietTailDuration < 0.12 && silentDuration >= 0.45 && !self.latestRefinedText.isEmpty {
-                // 話し終えて0.45秒以上ホールドしたまま小休止に入った時点で、未推敲のテキストがあれば最終LLM推敲を走らせ、ホールド中に最終文字列まで整える
+            } else if !self.isTranscribing && !self.isRefiningLLM && !self.isLatestTextRefinedByLLM && self.speechFramesSinceLastTrigger == 0 && quietTailDuration < 0.08 && silentDuration >= 5.0 && !self.latestRefinedText.isEmpty {
+                // 話し終えて5.0秒以上ホールドしたまま落ち着いた時点で、未推敲のテキストがあれば最終LLM推敲を走らせ、ホールド中に最終文字列まで整える
                 self.startHoldTimeLLMRefinementIfNeeded(
                     whisperSnapshot: self.lastWhisperBaseText,
                     textToRefine: self.latestRefinedText,
@@ -477,7 +486,8 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             let now = CFAbsoluteTimeGetCurrent()
             let timeSinceLastLLM = now - self.lastLLMRefineTime
             let silentDuration = Double(self.silentFrameCount) / self.sampleRate
-            let isUserPausedAtEnd = (silentDuration >= 0.40 && self.speechFramesSinceLastTrigger == 0 && !self.isTranscribing)
+            // 🌟 5.0秒言い終わり待機判定: 通常会話の句読点や思考の間（数秒程度）で早漏推敲が走るのを防止し、じっくり5秒間空いた時点で1回だけ最終推敲
+            let isUserPausedAtEnd = (silentDuration >= 5.0 && self.speechFramesSinceLastTrigger == 0 && !self.isTranscribing)
 
             // モデルに応じた最適インターバル判定:
             // 1) sarashina3-nano (60 RPM) や Groq 等: 最低1.2秒間隔で息継ぎ・Whisper受信ごとに即時nano推敲を実行
@@ -600,10 +610,10 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                 return
             }
 
-            // 🌟 ケース1: Ctrl+Space ホールド中に最後の発話までWhisper認識が完了している場合（未送信の有声フレームが0かつ未送信の小声語尾が0.12秒未満）
+            // 🌟 ケース1: Ctrl+Space ホールド中に最後の発話までWhisper認識が完了している場合（未送信の有声フレームが0かつ未送信の小声語尾が0.08秒未満）
             // 前回トリガー後に有声フレーム・小声語尾が残っている場合のみケース2へ進み、最終音声をWhisperへ送信する。
             // ※ 単なる経過サンプル数（無音の蓄積）は「未送信の発話」と見なさない（無音ホールド後のリリースで冗長な再送信を防ぐ）
-            let hasUnsentAudioActivity = (self.speechFramesSinceLastTrigger > 0 || self.quietTailFramesSinceLastTrigger >= Int(self.sampleRate * 0.12))
+            let hasUnsentAudioActivity = (self.speechFramesSinceLastTrigger > 0 || self.quietTailFramesSinceLastTrigger >= Int(self.sampleRate * 0.08))
 
             if !hasUnsentAudioActivity && !self.hasPendingRetry && !self.isTranscribing && !self.latestRefinedText.isEmpty {
                 if (self.isLatestTextRefinedByLLM || !self.isLLMEnabled) && !self.isRefiningLLM {
