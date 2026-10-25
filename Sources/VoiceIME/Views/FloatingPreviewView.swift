@@ -109,7 +109,10 @@ public struct FloatingPreviewView: View {
 
                     Spacer()
 
-                    let pauseHint = controller.mode == .quickAsk ? "Spaceで再開 / ⌃⇧離して送信" : "Spaceで再開 / ⌃離して入力"
+                    let mainKey = controller.mode == .quickAsk ? AppSettings.shared.quickAskMainKeyDisplayString : AppSettings.shared.hotkeyMainKeyDisplayString
+                    let modKey = controller.mode == .quickAsk ? AppSettings.shared.quickAskModifiersDisplayString : AppSettings.shared.hotkeyModifiersDisplayString
+                    let actionText = controller.mode == .quickAsk ? "送信" : "入力"
+                    let pauseHint = "\(mainKey)で再開 / \(modKey)離して\(actionText)"
                     Text(pauseHint)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.orange)
@@ -123,7 +126,7 @@ public struct FloatingPreviewView: View {
                 case .processing:
                     ProgressView()
                         .controlSize(.small)
-                    Text(controller.mode == .quickAsk ? "AI回答取得中..." : (AppSettings.shared.isLLMRefinementActive ? "AI推敲中..." : "文字起こし中..."))
+                    Text(controller.mode == .quickAsk ? "AI回答取得中..." : (AppSettings.shared.isLLMRefinementActive ? "推敲準備中..." : "文字起こし中..."))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.primary)
 

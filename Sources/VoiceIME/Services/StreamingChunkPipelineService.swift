@@ -36,14 +36,39 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
     private var recentRMS: Float = 0.0
     private var silentFrameCount: Int = 0
     private var isCapturePaused: Bool = false
-    private var isTranscribing: Bool = false
+    private var isTranscribing: Bool = false {
+        didSet {
+            let val = isTranscribing
+            DispatchQueue.main.async { [weak self] in
+                self?.onTranscriptionStateChanged?(val)
+            }
+        }
+    }
+    public var onTranscriptionStateChanged: ((Bool) -> Void)?
+
     private var hasPendingRetry: Bool = false
     private var lastTriggerHadPause: Bool = true
     private var activeTaskID: UUID = UUID()
     private var currentProcessingTask: Task<Void, Never>?
     private var currentLLMTask: Task<Void, Never>?
     private var quietTailCatchUpCount: Int = 0 // 実発話を挟まない小声語尾キャッチアップの連続回数（環境ノイズ暴走防止）
-    private var isRefiningLLM: Bool = false
+    private var isRefiningLLM: Bool = false {
+        didSet {
+            let val = isRefiningLLM
+            DispatchQueue.main.async { [weak self] in
+                self?.onRefinementStateChanged?(val)
+            }
+        }
+    }
+    public var onRefinementStateChanged: ((Bool) -> Void)?
+
+    public var isRefining: Bool {
+        return queue.sync { isRefiningLLM }
+    }
+
+    public var isTranscribingAudio: Bool {
+        return queue.sync { isTranscribing }
+    }
     private var isLatestTextRefinedByLLM: Bool = false
     private var lastRefinedSampleCount: Int = 0
     private var lastAttemptedLLMInput: String = ""
@@ -287,6 +312,10 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             PipelineLogger.shared.logDebug("⚠️ currentWhisperConfig が nil のためスキップ")
             return
         }
+        guard !isTranscribing else {
+            PipelineLogger.shared.logDebug("⏳ 直前のWhisperリクエストが送信中のため完了を待機 (キャンセル防止)")
+            return
+        }
 
         let endByte = min(endSample * 2, pcmDataBuffer.count)
         guard endByte > 0 else { return }
@@ -329,7 +358,6 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         PipelineLogger.shared.logDebug("🚀 Whisper API へ累積送信開始! (長さ: \(String(format: "%.2f", totalDuration))s)")
         NSLog("[VoiceIME] 🎭 紙芝居トリガー (0〜%.2f秒, 息継ぎ検知) ➔ Whisper累積送信開始", totalDuration)
 
-        self.currentProcessingTask?.cancel()
         self.currentProcessingTask = Task.detached { [weak self] in
             defer {
                 try? FileManager.default.removeItem(at: tempFile)
@@ -447,11 +475,12 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                 // Whisperタスクとは独立した currentLLMTask で実行し、次の息継ぎWhisperトリガーによってキャンセルされないようにする。
                 // また、小休止中（話し終えて画面を見ている時）は即座に推敲を走らせ、Ctrl+Spaceを離す前に最終文字列まで整える。
                 if hasNewUnrefinedDelta {
+                    let shouldForce = self?.isCapturePaused == true
                     self?.startHoldTimeLLMRefinementIfNeeded(
                         whisperSnapshot: cleanTranscribed,
                         textToRefine: textToRefine,
                         endSample: endSample,
-                        forceImmediate: false
+                        forceImmediate: shouldForce
                     )
                 }
             } catch {
@@ -501,8 +530,8 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                 shouldRun = !self.isLatestTextRefinedByLLM && (timeSinceLastLLM >= 1.2 || self.lastLLMRefineTime == 0.0)
             } else if forceImmediate || isUserPausedAtEnd {
                 // sarashina3-mini 等の 6 RPM モデル:
-                // 発話途中では貴重なクォータを温存し、話し終えて小休止に入った瞬間に1回だけ確実に最終推敲を実行！
-                shouldRun = !self.isLatestTextRefinedByLLM && (timeSinceLastLLM >= 3.5 || self.lastLLMRefineTime == 0.0)
+                // 発話途中では貴重なクォータを温存し、話し終えて小休止に入った瞬間または一時停止時に1回だけ確実に最終推敲を実行！
+                shouldRun = !self.isLatestTextRefinedByLLM && (forceImmediate || timeSinceLastLLM >= 3.5 || self.lastLLMRefineTime == 0.0)
             } else {
                 // 15文字以上かつ10.5秒以上の間隔が空いている場合のみ、長文中間推敲を許可
                 shouldRun = !self.isLatestTextRefinedByLLM && llmInputBase.count >= 20 && timeSinceLastLLM >= self.minLLMRefineIntervalSeconds && self.lastLLMRefineTime > 0.0
@@ -532,7 +561,9 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                     )
                     let cleanRefined = refined.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !cleanRefined.isEmpty, !Task.isCancelled else {
-                        self?.queue.async { self?.isRefiningLLM = false }
+                        self?.queue.async {
+                            self?.isRefiningLLM = false
+                        }
                         return
                     }
 
@@ -618,32 +649,19 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             // ※ 単なる経過サンプル数（無音の蓄積）は「未送信の発話」と見なさない（無音ホールド後のリリースで冗長な再送信を防ぐ）
             let hasUnsentAudioActivity = (self.speechFramesSinceLastTrigger > 0 || self.quietTailFramesSinceLastTrigger >= Int(self.sampleRate * 0.08))
 
-            if !hasUnsentAudioActivity && !self.hasPendingRetry && !self.isTranscribing && !self.latestRefinedText.isEmpty {
-                if (self.isLatestTextRefinedByLLM || !self.isLLMEnabled) && !self.isRefiningLLM {
-                    // 1A: ホールド中にLLM推敲まで完了済み ➔ 0msでそのまま確定！
-                    let result = self.latestRefinedText
-                    self.latestRefinedText = ""
-                    self.lastWhisperBaseText = ""
-                    self.preRollByteCount = 0
-                    self.hasPreStartedCapture = false
-                    self.isLatestTextRefinedByLLM = false
-                    self.lastRefinedSampleCount = 0
-                    self.lastAttemptedLLMInput = ""
-                    self.pcmDataBuffer.removeAll(keepingCapacity: false)
-                    NSLog("[VoiceIME] ⚡ ホールド中に最終推敲まで完了済み！リリース後の再通信なしでウィンドウ表示文字列をそのまま即時確定: %d文字", result.count)
-                    PipelineLogger.shared.logDebug("⚡ ホールド中に最終推敲まで完了済みのため即時確定 (リリース後の文字変化なし)")
-                    Task { @MainActor in
-                        FloatingPreviewController.shared.updateConfirmedText(result)
-                    }
-                    PipelineLogger.shared.logSessionEnd(finalText: result)
-                    completion(result)
-                    return
-                } else if self.isRefiningLLM, let activeLLMTask = self.currentLLMTask {
-                    // 1B: ホールド中に開始された最後のLLM推敲が通信中の場合は、それをキャンセルせず完了を待ってそのまま確定する
-                    NSLog("[VoiceIME] ⏳ ホールド中に開始された最終LLM推敲の完了を待機して確定します...")
+            if self.isCapturePaused || (!hasUnsentAudioActivity && !self.hasPendingRetry) {
+                if self.isTranscribing || self.isRefiningLLM {
+                    // 1B: ホールド中または一時停止中に開始されたWhisper/LLM推敲が通信中の場合は、それをキャンセルせず完了を待ってそのまま確定する
+                    NSLog("[VoiceIME] ⏳ 一時停止中/認識推敲中確定: 進行中のWhisper/LLMタスクの完了を待機して0msペーストへ移行します...")
+                    let activeWhisper = self.currentProcessingTask
+                    let activeLLM = self.currentLLMTask
                     Task.detached { [weak self] in
-                        await activeLLMTask.value
-                        guard let self = self else { return }
+                        _ = await activeWhisper?.value
+                        _ = await activeLLM?.value
+                        guard let self = self else {
+                            completion("")
+                            return
+                        }
                         var result = ""
                         self.queue.sync {
                             result = self.latestRefinedText
@@ -656,7 +674,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                             self.lastAttemptedLLMInput = ""
                             self.pcmDataBuffer.removeAll(keepingCapacity: false)
                         }
-                        NSLog("[VoiceIME] ✅ ホールド中LLM推敲が完了・確定しました: %d文字", result.count)
+                        NSLog("[VoiceIME] ✅ 一時停止中タスク待機完了 ➔ 確定出力: %d文字", result.count)
                         Task { @MainActor in
                             FloatingPreviewController.shared.updateConfirmedText(result)
                         }
@@ -664,8 +682,28 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                         completion(result)
                     }
                     return
-                } else {
-                    // 1C: Whisper認識はホールド中に完了しているが、話し終えて0.6秒未満でキーを離したため最終LLM推敲のみ未実行の場合
+                } else if !self.latestRefinedText.isEmpty {
+                    if self.isLatestTextRefinedByLLM || !self.isLLMEnabled {
+                        // 1A: ホールド中にLLM推敲まで完了済み ➔ 0msでそのまま確定！
+                        let result = self.latestRefinedText
+                        self.latestRefinedText = ""
+                        self.lastWhisperBaseText = ""
+                        self.preRollByteCount = 0
+                        self.hasPreStartedCapture = false
+                        self.isLatestTextRefinedByLLM = false
+                        self.lastRefinedSampleCount = 0
+                        self.lastAttemptedLLMInput = ""
+                        self.pcmDataBuffer.removeAll(keepingCapacity: false)
+                        NSLog("[VoiceIME] ⚡ ホールド中に最終推敲まで完了済み！リリース後の再通信なしでウィンドウ表示文字列をそのまま即時確定: %d文字", result.count)
+                        PipelineLogger.shared.logDebug("⚡ ホールド中に最終推敲まで完了済みのため即時確定 (リリース後の文字変化なし)")
+                        Task { @MainActor in
+                            FloatingPreviewController.shared.updateConfirmedText(result)
+                        }
+                        PipelineLogger.shared.logSessionEnd(finalText: result)
+                        completion(result)
+                        return
+                    } else {
+                        // 1C: Whisper認識はホールド中に完了しているが、話し終えて0.6秒未満でキーを離したため最終LLM推敲のみ未実行の場合
                     // Whisper再送信はスキップし、ホールド中の認識テキストに対して最終LLM推敲のみを1回実行する（ただし直前に同一文で429等になっていればスキップ）
                     let capturedText = self.latestRefinedText
                     let llmInputForRefine = Self.applyDictionaryRulesForLLMInput(to: capturedText)
@@ -723,6 +761,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                     return
                 }
             }
+        }
 
             // 🌟 ケース2: 発話の真っ最中に即座にキーを離した場合（未送信の発話フレームが残っている場合）
             // 0秒からキー解放の瞬間までの完全な累積音声を取り出し、前後の無音を確実にカット！
@@ -910,18 +949,53 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                 self.processCumulativePaperTheater(to: totalSamples, consumedSpeechFrames: consumedSpeechFrames)
             } else {
                 NSLog("[VoiceIME] ⏸️ StreamingChunkPipelineService: 一時停止 (データ・最新テキストを保持)")
+                if !self.isLatestTextRefinedByLLM && !self.latestRefinedText.isEmpty {
+                    self.startHoldTimeLLMRefinementIfNeeded(
+                        whisperSnapshot: self.lastWhisperBaseText,
+                        textToRefine: self.latestRefinedText,
+                        endSample: totalSamples,
+                        forceImmediate: true
+                    )
+                }
             }
         }
     }
 
     /// 一時停止からの再開（メインキー再押下時）: 既存の音声バッファに続きを追記し、録音を再開
-    public func resumeCapture() {
+    /// ※ 推敲中または認識中の場合は完了を待機し、整ったテキストを安全に確定させてから再開する（競合・巻き戻り防止）
+    public func resumeCapture(completion: @escaping () -> Void = {}) {
         queue.async { [weak self] in
-            guard let self = self, self.isRunning else { return }
+            guard let self = self, self.isRunning else {
+                DispatchQueue.main.async { completion() }
+                return
+            }
             self.isCapturePaused = false
             self.silentFrameCount = 0
             self.lastTriggerTime = CFAbsoluteTimeGetCurrent()
-            NSLog("[VoiceIME] ▶️ StreamingChunkPipelineService: 録音再開 (既存バッファ・最新テキストを保持して続きを追記)")
+
+            let activeWhisperTask = self.currentProcessingTask
+            let activeLLMTask = self.currentLLMTask
+            let isBusy = self.isRefiningLLM || self.isTranscribing
+
+            if isBusy {
+                NSLog("[VoiceIME] ⏳ resumeCapture: 推敲・認識処理中のため完了を待機...")
+                Task.detached { [weak self] in
+                    _ = await activeWhisperTask?.value
+                    _ = await activeLLMTask?.value
+
+                    self?.queue.async {
+                        guard let self = self, self.isRunning else {
+                            DispatchQueue.main.async { completion() }
+                            return
+                        }
+                        NSLog("[VoiceIME] ▶️ resumeCapture: 推敲完了後に録音再開 (最新テキスト保持・続き追記)")
+                        DispatchQueue.main.async { completion() }
+                    }
+                }
+            } else {
+                NSLog("[VoiceIME] ▶️ StreamingChunkPipelineService: 録音再開 (既存バッファ・最新テキストを保持して続きを追記)")
+                DispatchQueue.main.async { completion() }
+            }
         }
     }
 

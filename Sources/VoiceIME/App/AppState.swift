@@ -91,11 +91,15 @@ public final class AppState: ObservableObject {
 
     // MARK: - 一時停止 (Push-to-Talk 思考サポート) 状態管理
     @Published public private(set) var isRecordingPaused: Bool = false
+    private var isPipelineRefining: Bool = false
+    private var isPipelineTranscribing: Bool = false
+    private var isHotKeyMainKeyDown: Bool = false
 
     private init() {
         setupHotkey()
         setupModifierKeyMonitors()
         setupKeyUpMonitors()
+        setupPipelineMonitors()
         logSystemStartupConfiguration()
         // アプリ起動とAppKitランループの開始完了後に、Keychainアクセスの事前案内とウォームアップ、
         // ならびにフローティングパネルの事前描画準備を実行（※マイクは録音開始時のみ完全オンデマンドで起動）
@@ -104,6 +108,19 @@ public final class AppState: ObservableObject {
             self.promptKeychainWarmupIfNeeded()
             FloatingPreviewController.shared.warmUpPanelIfNeeded()
             self.permissions.checkPermissions()
+        }
+    }
+
+    private func setupPipelineMonitors() {
+        StreamingChunkPipelineService.shared.onRefinementStateChanged = { [weak self] isRefining in
+            guard let self = self else { return }
+            self.isPipelineRefining = isRefining
+            self.updatePauseUIIfNeeded()
+        }
+        StreamingChunkPipelineService.shared.onTranscriptionStateChanged = { [weak self] isTranscribing in
+            guard let self = self else { return }
+            self.isPipelineTranscribing = isTranscribing
+            self.updatePauseUIIfNeeded()
         }
     }
 
@@ -208,6 +225,7 @@ public final class AppState: ObservableObject {
             // 通常のPush-to-Talkの場合
             if self.settings.triggerMode == .pushToTalk {
                 if keyCode == self.settings.hotkeyCode {
+                    self.isHotKeyMainKeyDown = false
                     NSLog("[VoiceIME] 🛡️ keyUp: Push-to-Talkキー (%d) の離脱を検知 ➔ handleHotKeyUp", keyCode)
                     self.handleHotKeyUp()
                 }
@@ -300,6 +318,7 @@ public final class AppState: ObservableObject {
 
     /// ホットキーが押されたときのハンドラ
     public func handleHotKeyDown() {
+        isHotKeyMainKeyDown = true
         if settings.triggerMode == .pushToTalk {
             if phase == .recording && isRecordingPaused && !isQuickAskActive {
                 // 一時停止からの再開！
@@ -319,6 +338,7 @@ public final class AppState: ObservableObject {
 
     /// ホットキーが離されたときのハンドラ
     public func handleHotKeyUp() {
+        isHotKeyMainKeyDown = false
         if settings.triggerMode == .pushToTalk {
             if phase == .recording && !isQuickAskActive {
                 // すでに一時停止中の場合、SpaceのKeyUpは無視（修飾キーの離脱で確定する）
@@ -457,6 +477,24 @@ public final class AppState: ObservableObject {
 
     // MARK: - 一時停止・再開（思考サポート）
 
+    private func updatePauseUIIfNeeded() {
+        guard phase == .recording, isRecordingPaused, !isQuickAskActive else { return }
+        let mainKey = settings.hotkeyMainKeyDisplayString
+        let modKey = settings.hotkeyModifiersDisplayString
+        let isBusy = isPipelineRefining || isPipelineTranscribing
+        if isBusy {
+            statusMessage = "推敲準備中..."
+            if settings.floatingPreviewEnabled {
+                FloatingPreviewController.shared.setProcessing(mode: .speechInput)
+            }
+        } else {
+            statusMessage = "一時停止中 (\(mainKey)で再開 / \(modKey)離して入力)"
+            if settings.floatingPreviewEnabled {
+                FloatingPreviewController.shared.setPaused(mode: .speechInput)
+            }
+        }
+    }
+
     /// Push-to-Talkで修飾キーを押したままメインキーを離した際の一時停止処理
     public func pauseRecording() {
         guard phase == .recording, !isRecordingPaused else { return }
@@ -467,34 +505,46 @@ public final class AppState: ObservableObject {
         recorder.pauseRecording()
         StreamingChunkPipelineService.shared.pauseCapture()
 
-        if settings.floatingPreviewEnabled {
-            FloatingPreviewController.shared.setPaused(mode: .speechInput)
-        }
-        let mainKey = settings.hotkeyMainKeyDisplayString
-        let modKey = settings.hotkeyModifiersDisplayString
-        statusMessage = "一時停止中 (\(mainKey)で再開 / \(modKey)離して入力)"
+        updatePauseUIIfNeeded()
         NSLog("[VoiceIME] ⏸️ 音声入力 一時停止 (マイク停止中・未送信音声をWhisper同期・思考待機)")
     }
 
     /// 一時停止中からメインキーを再度押した際の再開処理
     public func resumeRecording() {
         guard phase == .recording, isRecordingPaused else { return }
-        isRecordingPaused = false
+        isHotKeyMainKeyDown = true
 
-        // キャプチャの再開
-        recorder.resumeRecording()
-        StreamingChunkPipelineService.shared.resumeCapture()
-        _ = LiveSpeechService.shared.startImmediateCapture()
-        LiveSpeechService.shared.startLiveRecognition(
-            languageCode: settings.language,
-            contextualStrings: []
-        ) { _ in }
-
-        if settings.floatingPreviewEnabled {
-            FloatingPreviewController.shared.resumeLiveRecording(mode: .speechInput)
+        let isPipelineBusy = isPipelineRefining || isPipelineTranscribing || StreamingChunkPipelineService.shared.isRefining || StreamingChunkPipelineService.shared.isTranscribingAudio
+        if isPipelineBusy {
+            statusMessage = "推敲準備中... (完了次第、自動再開)"
+            if settings.floatingPreviewEnabled {
+                FloatingPreviewController.shared.setProcessing(mode: .speechInput)
+            }
+            NSLog("[VoiceIME] ⏳ resumeRecording: 推敲処理中のため完了待機 (UI: 推敲準備中...)")
         }
-        statusMessage = settings.triggerMode == .pushToTalk ? "録音中... (キーを離すと入力)" : "録音中... (もう一度キーを押して停止)"
-        NSLog("[VoiceIME] ▶️ 音声入力 再開 (マイクキャプチャ再開・続きを描画)")
+
+        StreamingChunkPipelineService.shared.resumeCapture { [weak self] in
+            guard let self = self, self.phase == .recording, self.isRecordingPaused else { return }
+            guard self.isHotKeyMainKeyDown else {
+                self.updatePauseUIIfNeeded()
+                return
+            }
+            self.isRecordingPaused = false
+
+            // キャプチャの再開
+            self.recorder.resumeRecording()
+            _ = LiveSpeechService.shared.startImmediateCapture()
+            LiveSpeechService.shared.startLiveRecognition(
+                languageCode: self.settings.language,
+                contextualStrings: []
+            ) { _ in }
+
+            if self.settings.floatingPreviewEnabled {
+                FloatingPreviewController.shared.resumeLiveRecording(mode: .speechInput)
+            }
+            self.statusMessage = self.settings.triggerMode == .pushToTalk ? "録音中... (キーを離すと入力)" : "録音中... (もう一度キーを押して停止)"
+            NSLog("[VoiceIME] ▶️ 音声入力 再開 (マイクキャプチャ再開・続きを描画)")
+        }
     }
 
     /// AIクイック質問の一時停止処理
@@ -516,16 +566,21 @@ public final class AppState: ObservableObject {
     /// AIクイック質問の再開処理
     public func resumeQuickAskRecording() {
         guard isQuickAskActive, phase == .recording, isRecordingPaused else { return }
-        isRecordingPaused = false
 
-        recorder.resumeRecording()
-        StreamingChunkPipelineService.shared.resumeCapture()
-        _ = LiveSpeechService.shared.startImmediateCapture()
-        LiveSpeechService.shared.startLiveRecognition(languageCode: settings.language) { _ in }
+        StreamingChunkPipelineService.shared.resumeCapture { [weak self] in
+            guard let self = self, self.isQuickAskActive, self.phase == .recording, self.isRecordingPaused else { return }
+            self.isRecordingPaused = false
 
-        FloatingPreviewController.shared.resumeLiveRecording(mode: .quickAsk)
-        statusMessage = "AI質問中... (キーを離すと回答)"
-        NSLog("[VoiceIME] ▶️ AIクイック質問 再開 (マイクキャプチャ再開)")
+            self.recorder.resumeRecording()
+            _ = LiveSpeechService.shared.startImmediateCapture()
+            LiveSpeechService.shared.startLiveRecognition(languageCode: self.settings.language) { _ in }
+
+            if self.settings.floatingPreviewEnabled {
+                FloatingPreviewController.shared.resumeLiveRecording(mode: .quickAsk)
+            }
+            self.statusMessage = "AI質問中... (キーを離すと回答)"
+            NSLog("[VoiceIME] ▶️ AIクイック質問 再開 (マイクキャプチャ再開)")
+        }
     }
 
     // MARK: - AI クイック質問 (Quick Ask) 録音・処理フロー
@@ -825,6 +880,7 @@ public final class AppState: ObservableObject {
         // 通常の音声入力開始時は確実にクイック質問フラグおよび一時停止フラグを解除
         self.isQuickAskActive = false
         self.isRecordingPaused = false
+        self.isHotKeyMainKeyDown = true
 
         // マイクレベルテストが実行中の場合は停止して競合を防止
         if MicrophoneLevelTester.shared.isTesting {
