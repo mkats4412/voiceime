@@ -96,6 +96,15 @@ struct TestRunner {
         let sanitized3 = WhisperAPIService.sanitizeWhisperOutput(hallucinatedInput3)
         assert(!sanitized3.contains("ご視聴ありがとうございました"), "Should strip inline ご視聴ありがとうございました: got '\(sanitized3)'")
 
+        // 7-EN: 英語モード時の "Thank you" 正常発話保全テスト
+        let enThankYou = "Thank you for coming on such short notice today."
+        let sanitizedEn = WhisperAPIService.sanitizeWhisperOutput(enThankYou, language: "en")
+        assert(sanitizedEn == enThankYou, "Should preserve 'Thank you' in English mode, got '\(sanitizedEn)'")
+
+        let enShortThankYou = "Thank you very much."
+        let sanitizedEnShort = WhisperAPIService.sanitizeWhisperOutput(enShortThankYou, language: "en")
+        assert(sanitizedEnShort == enShortThankYou, "Should preserve 'Thank you very much.' in English mode, got '\(sanitizedEnShort)'")
+
         // 7B. Whisperの異常反復ハルシネーション（"XXXX...", "ああああ..." 等）のサニタイズテスト
         let repeatedInput = "現在のARグラス市場はXRXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
         let sanitizedRep = WhisperAPIService.sanitizeWhisperOutput(repeatedInput)

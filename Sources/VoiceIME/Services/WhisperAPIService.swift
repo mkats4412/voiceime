@@ -215,7 +215,7 @@ public final class WhisperAPIService {
                 let text: String
             }
             let decoded = try JSONDecoder().decode(TranscriptionResponse.self, from: data)
-            return Self.sanitizeWhisperOutput(decoded.text)
+            return Self.sanitizeWhisperOutput(decoded.text, language: language)
         } catch {
             throw APIError.parsingError(error)
         }
@@ -492,13 +492,16 @@ public final class WhisperAPIService {
 
     /// Whisper APIの出力テキストから、無音・微小ノイズ特有の既知のハルシネーション（"Thank you.", "ご視聴ありがとうございました" 等）
     /// およびトークン・フレーズ反復ループ（"XXXX...", "ああああああ...", 同一単語列の反復ループ等）を完全除去
-    public static func sanitizeWhisperOutput(_ text: String) -> String {
+    /// ※ 英語入力モード（language == "en"）の場合、"Thank you" は正当な日常会話であるため絶対に削除しない
+    public static func sanitizeWhisperOutput(_ text: String, language: String? = nil) -> String {
         var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !result.isEmpty else { return "" }
 
+        let isEnglish = (language == "en")
+
         // 1. 同一文字の異常連続（4回以上の繰り返し: 例 "XXXX...", "・・・・", "！！！！" 等）を1文字に圧縮
         // ※ 通常の日本語・英語会話で4回以上同一文字が連続することはなく、Whisperの自己回帰トークン反復バグのため除去
-        if let repeatRegex = try? NSRegularExpression(pattern: "(.)\\1{3,}", options: []) {
+        if let repeatRegex = try? NSRegularExpression(pattern: "([^\\s\\d])\\1{3,}", options: []) {
             let range = NSRange(result.startIndex..., in: result)
             result = repeatRegex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1")
             result = result.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -526,14 +529,56 @@ public final class WhisperAPIService {
             result = result.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        let hallucinationPatterns = [
-            "(?i)[ \t]*(?:Thank you(?: very much)?|Thanks for watching|Subtitles by[^\n\r]*)[ \t\\.\\,\\!\\?]*",
+        // 5. 日本語字幕特有の定型ノイズ（「ご視聴ありがとうございました」等）は言語を問わず除去
+        let jpSubtitleNoise = [
             "[ \t]*(?:ご視聴ありがとうございました|ご視聴ありがとうござい[ました]*|視聴ありがとうございました|チャンネル登録(?:よろしく[お願いたし]*|お願い[いたし]*)*)[ \t。、！？\\.]*"
         ]
-        for pattern in hallucinationPatterns {
+        for pattern in jpSubtitleNoise {
             if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
                 let range = NSRange(result.startIndex..., in: result)
                 result = regex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "")
+                result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        // 6. 英語ハルシネーションの除去（言語コンテキストを考慮）:
+        if isEnglish {
+            // 英語入力モード時は "Thank you" は正当な日常会話・感謝の言葉であるため絶対に削除しない！
+            // 動画字幕特有の純粋なノイズトークン（"Thanks for watching", "Subtitles by..."）のみを除去
+            let enSubtitleNoise = [
+                "(?i)[ \t]*(?:Thanks for watching|Subtitles by[^\n\r]*|Please (?:like and )?subscribe[^\n\r]*)[ \t\\.\\,\\!\\?]*"
+            ]
+            for pattern in enSubtitleNoise {
+                if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
+                    let range = NSRange(result.startIndex..., in: result)
+                    result = regex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "")
+                    result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        } else {
+            // 日本語 / 自動入力モード時:
+            // a) 出力全体が単なる無音ハルシネーション（"Thank you.", "Thank you very much." のみ）の場合は空文字化
+            let standalonePattern = "^(?i)[ \t]*(?:Thank you(?: very much)?|Thanks for watching|Subtitles by[^\n\r]*)[ \t\\.\\,\\!\\?]*$"
+            if let standaloneRegex = try? NSRegularExpression(pattern: standalonePattern, options: []) {
+                let range = NSRange(result.startIndex..., in: result)
+                if standaloneRegex.firstMatch(in: result, options: [], range: range) != nil {
+                    return ""
+                }
+            }
+
+            // b) 日本語テキストの直前または直後にくっついた英語ハルシネーション（例: "Thank you.海賊対策について報告します。"）のみを除去
+            let jpChar = "[\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FAF]"
+            let leadingPattern = "(?i)^[ \t]*(?:Thank you(?: very much)?|Thanks for watching|Subtitles by[^\n\r]*)[ \t\\.\\,\\!\\?]+(?=\(jpChar))"
+            if let leadingRegex = try? NSRegularExpression(pattern: leadingPattern, options: []) {
+                let range = NSRange(result.startIndex..., in: result)
+                result = leadingRegex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "")
+                result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            let trailingPattern = "(?<=\(jpChar))[ \t\\.\\,\\!\\?]+(?i)(?:Thank you(?: very much)?|Thanks for watching)[ \t\\.\\,\\!\\?]*$"
+            if let trailingRegex = try? NSRegularExpression(pattern: trailingPattern, options: []) {
+                let range = NSRange(result.startIndex..., in: result)
+                result = trailingRegex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "")
                 result = result.trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
