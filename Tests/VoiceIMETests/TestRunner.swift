@@ -101,6 +101,23 @@ struct TestRunner {
         let sanitizedRep = WhisperAPIService.sanitizeWhisperOutput(repeatedInput)
         assert(sanitizedRep == "現在のARグラス市場はXRX", "Should reduce excessive repeating characters, got '\(sanitizedRep)'")
 
+        // 7C. Whisperのフレーズ反復ハルシネーション（"Xreal Air 2 Pro Xreal Air 2 Pro Xreal Air 2 Pro" 等）のサニタイズテスト
+        let repeatedPhrase3x = "1.総合バランス 初めて1台にするおすすめ開業 Xreal Air 2 Pro Xreal Air 2 Pro Xreal Air 2 Pro"
+        let sanitizedPhrase3x = WhisperAPIService.sanitizeWhisperOutput(repeatedPhrase3x)
+        assert(sanitizedPhrase3x == "1.総合バランス 初めて1台にするおすすめ開業 Xreal Air 2 Pro", "Should reduce 3x phrase repetition, got '\(sanitizedPhrase3x)'")
+
+        let repeatedWords2x = "Xreal Air 2 Pro Xreal Air 2 Pro"
+        let sanitizedWords2x = WhisperAPIService.sanitizeWhisperOutput(repeatedWords2x)
+        assert(sanitizedWords2x == "Xreal Air 2 Pro", "Should reduce 2x multi-word phrase repetition, got '\(sanitizedWords2x)'")
+
+        let repeatedLongJp2x = "今日もいい天気ですね 今日もいい天気ですね"
+        let sanitizedLongJp2x = WhisperAPIService.sanitizeWhisperOutput(repeatedLongJp2x)
+        assert(sanitizedLongJp2x == "今日もいい天気ですね", "Should reduce 2x long Japanese phrase repetition, got '\(sanitizedLongJp2x)'")
+
+        let naturalRepeats = "はいはい、そうそう、だんだん、いろいろ"
+        let sanitizedNatural = WhisperAPIService.sanitizeWhisperOutput(naturalRepeats)
+        assert(sanitizedNatural == naturalRepeats, "Should preserve natural Japanese repeats like はいはい, got '\(sanitizedNatural)'")
+
         // 8. PCM無音トリミング (VAD) テスト
         let sampleRate = 16000.0
         let silenceSampleCount = Int(sampleRate * 0.5) // 0.5秒の無音

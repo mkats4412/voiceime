@@ -308,16 +308,38 @@ public final class WhisperAPIService {
     }
 
     /// Whisper APIの出力テキストから、無音・微小ノイズ特有の既知のハルシネーション（"Thank you.", "ご視聴ありがとうございました" 等）
-    /// およびトークン反復ループ（"XXXX...", "ああああああ..." 等の4連続以上の異常反復）を完全除去
+    /// およびトークン・フレーズ反復ループ（"XXXX...", "ああああああ...", 同一単語列の反復ループ等）を完全除去
     public static func sanitizeWhisperOutput(_ text: String) -> String {
         var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !result.isEmpty else { return "" }
 
-        // 1. 同一文字の異常連続（4回以上の繰り返し: 例 "XXXX...", "・・・・", "！！！！" 等）をカット
-        // ※ 通常の日本語・英語会話で4回以上同一文字が連続することはなく、Whisperの自己回帰ループバグのため除去
+        // 1. 同一文字の異常連続（4回以上の繰り返し: 例 "XXXX...", "・・・・", "！！！！" 等）を1文字に圧縮
+        // ※ 通常の日本語・英語会話で4回以上同一文字が連続することはなく、Whisperの自己回帰トークン反復バグのため除去
         if let repeatRegex = try? NSRegularExpression(pattern: "(.)\\1{3,}", options: []) {
             let range = NSRange(result.startIndex..., in: result)
             result = repeatRegex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1")
+            result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // 2. 3文字以上のフレーズが3回以上連続して反復するパターンの圧縮 (例: "Xreal Air 2 Pro Xreal Air 2 Pro Xreal Air 2 Pro" ➔ "Xreal Air 2 Pro")
+        if let phrase3xRegex = try? NSRegularExpression(pattern: "(.{3,40}?)(?:[\\s、。，．!?！？]*\\1){2,}", options: []) {
+            let range = NSRange(result.startIndex..., in: result)
+            result = phrase3xRegex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1")
+            result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // 3. 2単語以上の英数字フレーズが2回以上連続して反復するパターンの圧縮 (例: "Xreal Air 2 Pro Xreal Air 2 Pro" ➔ "Xreal Air 2 Pro")
+        if let words2xRegex = try? NSRegularExpression(pattern: "(?i)(\\b[A-Za-z0-9_\\-]{2,}(?:\\s+[A-Za-z0-9_\\-]+)+)(?:\\s+\\1)+\\b", options: []) {
+            let range = NSRange(result.startIndex..., in: result)
+            result = words2xRegex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1")
+            result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // 4. 6文字以上の長文フレーズが2回以上連続して反復するパターンの圧縮 (例: "本日のおすすめメニュー 本日のおすすめメニュー")
+        // ※ 「はいはい」「そうそう」等の短い日常会話・相槌は誤判定防止のため除外
+        if let longJp2xRegex = try? NSRegularExpression(pattern: "([^\\s、。，．!?！？]{6,30})(?:[\\s、。，．!?！？]+\\1)+", options: []) {
+            let range = NSRange(result.startIndex..., in: result)
+            result = longJp2xRegex.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: "$1")
             result = result.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
