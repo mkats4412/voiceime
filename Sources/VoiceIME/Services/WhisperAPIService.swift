@@ -79,6 +79,45 @@ public final class WhisperAPIService {
         }
     }
 
+    public struct TranscribeConfig: Equatable {
+        public let provider: APIProvider
+        public let baseURL: String
+        public let apiKey: String?
+        public let model: String
+
+        public init(provider: APIProvider, baseURL: String, apiKey: String?, model: String) {
+            self.provider = provider
+            self.baseURL = baseURL
+            self.apiKey = apiKey
+            self.model = model
+        }
+    }
+
+    /// 音声の長さ（秒数）とプロバイダ特性から、過剰待機（ハング）を即座に防ぐ最適な動的タイムアウトを算出
+    public static func dynamicTimeout(for durationSeconds: Double, provider: APIProvider = .groq) -> TimeInterval {
+        switch provider {
+        case .groq:
+            // Groq は通常0.3〜0.8秒で完了するため、短文は2.0秒、長文でも最大6.0秒でタイムアウト判定
+            return max(2.0, min(6.0, 1.4 + durationSeconds * 0.08))
+        case .openai:
+            // OpenAI は1.5〜3.0秒を要するため、短文は5.0秒、長文で最大12.0秒
+            return max(5.0, min(12.0, 3.5 + durationSeconds * 0.12))
+        default:
+            return max(4.0, min(15.0, 2.5 + durationSeconds * 0.10))
+        }
+    }
+
+    /// ヘッジド・リクエスト（時間差並行送信）において、プライマリが無応答の場合にバックアップを発射する動的猶予時間
+    public static func hedgedDelay(for durationSeconds: Double, primaryProvider: APIProvider = .groq) -> TimeInterval {
+        switch primaryProvider {
+        case .groq:
+            // 99.5%のリクエストが完了する時間を考慮し、短文は1.8秒、長文でも最大3.5秒でバックアップ発射
+            return max(1.8, min(3.5, 1.2 + durationSeconds * 0.05))
+        default:
+            return max(2.5, min(5.0, 2.0 + durationSeconds * 0.08))
+        }
+    }
+
     private init() {}
 
     /// 音声ファイルをOpenAI互換APIに送信してテキストに変換する
@@ -89,7 +128,8 @@ public final class WhisperAPIService {
         model: String,
         mode: SpeechAPIMode = .transcriptions,
         prompt: String? = nil,
-        language: String? = nil
+        language: String? = nil,
+        timeoutInterval: TimeInterval? = nil
     ) async throws -> String {
         guard let endpointURL = constructEndpointURL(from: baseURL, mode: mode) else {
             throw APIError.invalidURL(baseURL)
@@ -109,7 +149,7 @@ public final class WhisperAPIService {
         let boundary = "Boundary-\(UUID().uuidString)"
         var request = URLRequest(url: endpointURL)
         request.httpMethod = "POST"
-        request.timeoutInterval = 15.0
+        request.timeoutInterval = timeoutInterval ?? 15.0
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
         if let apiKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !apiKey.isEmpty {
@@ -178,6 +218,149 @@ public final class WhisperAPIService {
             return Self.sanitizeWhisperOutput(decoded.text)
         } catch {
             throw APIError.parsingError(error)
+        }
+    }
+
+    /// 音声の長さに応じた動的タイムアウトおよび時間差ヘッジド・リクエストにより、
+    /// プライマリ（Groq等）が応答詰まりやエラーを起こした際に即座にバックアップ（OpenAI等）へ自動フェイルオーバーする
+    public func transcribeWithFallback(
+        audioFileURL: URL,
+        audioDuration: Double,
+        primaryConfig: TranscribeConfig,
+        backupConfig: TranscribeConfig?,
+        mode: SpeechAPIMode = .transcriptions,
+        prompt: String? = nil,
+        language: String? = nil
+    ) async throws -> (text: String, effectiveProvider: APIProvider, fallbackRecord: FallbackRecord?) {
+        guard let backup = backupConfig,
+              let bKey = backup.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !bKey.isEmpty,
+              primaryConfig.provider != backup.provider else {
+            // バックアップ未設定またはプライマリと同一の場合はプライマリのみ（動的タイムアウト付き）で実行
+            let timeout = Self.dynamicTimeout(for: audioDuration, provider: primaryConfig.provider)
+            let text = try await transcribe(
+                audioFileURL: audioFileURL,
+                baseURL: primaryConfig.baseURL,
+                apiKey: primaryConfig.apiKey,
+                model: primaryConfig.model,
+                mode: mode,
+                prompt: prompt,
+                language: language,
+                timeoutInterval: timeout
+            )
+            return (text, primaryConfig.provider, nil)
+        }
+
+        let primaryTimeout = Self.dynamicTimeout(for: audioDuration, provider: primaryConfig.provider)
+        let backupTimeout = Self.dynamicTimeout(for: audioDuration, provider: backup.provider)
+        let delaySeconds = Self.hedgedDelay(for: audioDuration, primaryProvider: primaryConfig.provider)
+        let delayNanoseconds = UInt64(delaySeconds * 1_000_000_000)
+
+        enum TaskOutcome {
+            case primarySuccess(String)
+            case backupSuccess(String, String) // text, reasonSummary
+            case primaryFailure(Error)
+            case backupFailure(Error)
+        }
+
+        return try await withThrowingTaskGroup(of: TaskOutcome.self) { group in
+            // Task 1: プライマリ (Groq等)
+            group.addTask {
+                do {
+                    let text = try await self.transcribe(
+                        audioFileURL: audioFileURL,
+                        baseURL: primaryConfig.baseURL,
+                        apiKey: primaryConfig.apiKey,
+                        model: primaryConfig.model,
+                        mode: mode,
+                        prompt: prompt,
+                        language: language,
+                        timeoutInterval: primaryTimeout
+                    )
+                    return .primarySuccess(text)
+                } catch {
+                    return .primaryFailure(error)
+                }
+            }
+
+            // Task 2: バックアップ (OpenAI等) - delaySeconds 後に発火
+            group.addTask {
+                do {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                } catch {
+                    throw CancellationError()
+                }
+                do {
+                    let text = try await self.transcribe(
+                        audioFileURL: audioFileURL,
+                        baseURL: backup.baseURL,
+                        apiKey: backup.apiKey,
+                        model: backup.model,
+                        mode: mode,
+                        prompt: prompt,
+                        language: language,
+                        timeoutInterval: backupTimeout
+                    )
+                    return .backupSuccess(text, "応答遅延 (\(String(format: "%.1f", delaySeconds))秒超過)")
+                } catch {
+                    return .backupFailure(error)
+                }
+            }
+
+            var primaryError: Error?
+            var backupError: Error?
+
+            while let outcome = try await group.next() {
+                switch outcome {
+                case .primarySuccess(let text):
+                    group.cancelAll()
+                    return (text, primaryConfig.provider, nil)
+
+                case .backupSuccess(let text, let reason):
+                    group.cancelAll()
+                    let record = FallbackRecord(
+                        timestamp: Date(),
+                        primaryProvider: primaryConfig.provider,
+                        backupProvider: backup.provider,
+                        step: "音声認識",
+                        reasonSummary: primaryError != nil ? "通信エラー (\(primaryError!.localizedDescription))" : reason,
+                        detail: "メインプロバイダ(\(primaryConfig.provider.displayName))が無応答またはエラーのため、バックアップ(\(backup.provider.displayName))で即座に音声認識を実行しました。"
+                    )
+                    return (text, backup.provider, record)
+
+                case .primaryFailure(let err):
+                    primaryError = err
+                    // プライマリが即時失敗（429や接続切断等）した場合、Task 2 の sleep を待たずに即時バックアップを実行
+                    group.addTask {
+                        do {
+                            let text = try await self.transcribe(
+                                audioFileURL: audioFileURL,
+                                baseURL: backup.baseURL,
+                                apiKey: backup.apiKey,
+                                model: backup.model,
+                                mode: mode,
+                                prompt: prompt,
+                                language: language,
+                                timeoutInterval: backupTimeout
+                            )
+                            return .backupSuccess(text, "メイン失敗 (\(err.localizedDescription))")
+                        } catch {
+                            return .backupFailure(error)
+                        }
+                    }
+
+                case .backupFailure(let err):
+                    backupError = err
+                }
+            }
+
+            if let pErr = primaryError {
+                throw pErr
+            } else if let bErr = backupError {
+                throw bErr
+            } else {
+                throw APIError.invalidResponse
+            }
         }
     }
 

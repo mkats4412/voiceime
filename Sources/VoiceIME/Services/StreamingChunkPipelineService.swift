@@ -82,7 +82,12 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
     private var lastWhisperBaseText: String = ""
 
     // 設定
-    private var currentWhisperConfig: (baseURL: String, apiKey: String?, model: String)?
+    private var primaryWhisperConfig: WhisperAPIService.TranscribeConfig?
+    private var backupWhisperConfig: WhisperAPIService.TranscribeConfig?
+    private var currentWhisperConfig: (baseURL: String, apiKey: String?, model: String)? {
+        guard let p = primaryWhisperConfig else { return nil }
+        return (p.baseURL, p.apiKey, p.model)
+    }
     private var currentLLMConfig: (baseURL: String, apiKey: String?, model: String, isCustom: Bool)?
     private var refinementStyle: RefinementStyle = .casual
     private var isLLMEnabled: Bool = true
@@ -130,6 +135,8 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
     /// パイプラインの開始
     public func start(
         whisperConfig: (baseURL: String, apiKey: String?, model: String),
+        primaryProvider: APIProvider = .groq,
+        backupWhisperConfig: (provider: APIProvider, baseURL: String, apiKey: String?, model: String)? = nil,
         llmConfig: (baseURL: String, apiKey: String?, model: String, isCustom: Bool),
         style: RefinementStyle,
         isLLMEnabled: Bool = true,
@@ -137,7 +144,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         language: String? = "ja",
         speechThresholdDB: Float = -38.0
     ) {
-        PipelineLogger.shared.logDebug("🎭 StreamingChunkPipelineService.start() 呼び出し (baseURL: \(whisperConfig.baseURL), model: \(whisperConfig.model), hasKey: \(whisperConfig.apiKey != nil))")
+        PipelineLogger.shared.logDebug("🎭 StreamingChunkPipelineService.start() 呼び出し (baseURL: \(whisperConfig.baseURL), model: \(whisperConfig.model), hasKey: \(whisperConfig.apiKey != nil), backup: \(backupWhisperConfig?.provider.displayName ?? "なし"))")
         queue.async { [weak self] in
             guard let self = self else { return }
             if !self.hasPreStartedCapture {
@@ -167,7 +174,22 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                 self.lastTriggerHadPause = true
             }
             self.hasPreStartedCapture = false
-            self.currentWhisperConfig = whisperConfig
+            self.primaryWhisperConfig = WhisperAPIService.TranscribeConfig(
+                provider: primaryProvider,
+                baseURL: whisperConfig.baseURL,
+                apiKey: whisperConfig.apiKey,
+                model: whisperConfig.model
+            )
+            if let backup = backupWhisperConfig {
+                self.backupWhisperConfig = WhisperAPIService.TranscribeConfig(
+                    provider: backup.provider,
+                    baseURL: backup.baseURL,
+                    apiKey: backup.apiKey,
+                    model: backup.model
+                )
+            } else {
+                self.backupWhisperConfig = nil
+            }
             self.currentLLMConfig = llmConfig
             self.refinementStyle = style
             self.isLLMEnabled = isLLMEnabled
@@ -308,8 +330,8 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
 
     /// 0秒〜endSample までの累積音声を丸ごと送信し、紙芝居のように画面を上書き更新
     private func processCumulativePaperTheater(to endSample: Int, consumedSpeechFrames: Int = 0) {
-        guard let whisperConfig = currentWhisperConfig else {
-            PipelineLogger.shared.logDebug("⚠️ currentWhisperConfig が nil のためスキップ")
+        guard primaryWhisperConfig != nil else {
+            PipelineLogger.shared.logDebug("⚠️ primaryWhisperConfig が nil のためスキップ")
             return
         }
         guard !isTranscribing else {
@@ -372,16 +394,29 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             if Task.isCancelled { return }
 
             do {
-                // 1. Whisper API に 0秒からの全音声を送信
-                let transcribed = try await WhisperAPIService.shared.transcribe(
+                // 1. Whisper API に 0秒からの全音声を送信（動的タイムアウト & ヘッジド・フォールバック付き）
+                guard let primary = self?.primaryWhisperConfig else { return }
+                let (transcribed, effectiveProvider, fallbackRecord) = try await WhisperAPIService.shared.transcribeWithFallback(
                     audioFileURL: tempFile,
-                    baseURL: whisperConfig.baseURL,
-                    apiKey: whisperConfig.apiKey,
-                    model: whisperConfig.model,
+                    audioDuration: totalDuration,
+                    primaryConfig: primary,
+                    backupConfig: self?.backupWhisperConfig,
                     mode: .transcriptions,
                     prompt: whisperPrompt,
                     language: language
                 )
+
+                if let fallback = fallbackRecord {
+                    await MainActor.run {
+                        AppState.shared.lastFallbackRecord = fallback
+                        AppState.shared.lastUsedWhisperProvider = effectiveProvider
+                    }
+                    PipelineLogger.shared.logDebug("🔄 [バックアップSTT発動] \(fallback.displayNotice)")
+                } else {
+                    await MainActor.run {
+                        AppState.shared.lastUsedWhisperProvider = effectiveProvider
+                    }
+                }
 
                 // Whisper通信自体は完了したため、中間LLM推敲の待機中に次の発話トリガーがブロックされないよう解除
                 self?.queue.async {
@@ -639,7 +674,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             self.isCapturePaused = false
 
             let totalSamples = self.pcmDataBuffer.count / 2
-            guard totalSamples > 0, let whisperConfig = self.currentWhisperConfig else {
+            guard totalSamples > 0, self.primaryWhisperConfig != nil else {
                 completion(self.latestRefinedText)
                 return
             }
@@ -798,16 +833,29 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                 defer { try? FileManager.default.removeItem(at: tempFile) }
 
                 do {
-                    // Whisper API に全音声を送信し、最後の一つの完了を確実に待つ
-                    let transcribed = try await WhisperAPIService.shared.transcribe(
+                    // Whisper API に全音声を送信し、最後の一つの完了を確実に待つ（動的タイムアウト & ヘッジド・フォールバック付き）
+                    guard let primary = self.primaryWhisperConfig else { return }
+                    let (transcribed, effectiveProvider, fallbackRecord) = try await WhisperAPIService.shared.transcribeWithFallback(
                         audioFileURL: tempFile,
-                        baseURL: whisperConfig.baseURL,
-                        apiKey: whisperConfig.apiKey,
-                        model: whisperConfig.model,
+                        audioDuration: totalDuration,
+                        primaryConfig: primary,
+                        backupConfig: self.backupWhisperConfig,
                         mode: .transcriptions,
                         prompt: whisperPrompt,
                         language: language
                     )
+
+                    if let fallback = fallbackRecord {
+                        await MainActor.run {
+                            AppState.shared.lastFallbackRecord = fallback
+                            AppState.shared.lastUsedWhisperProvider = effectiveProvider
+                        }
+                        PipelineLogger.shared.logDebug("🔄 [最終バックアップSTT発動] \(fallback.displayNotice)")
+                    } else {
+                        await MainActor.run {
+                            AppState.shared.lastUsedWhisperProvider = effectiveProvider
+                        }
+                    }
                     let clean = transcribed.trimmingCharacters(in: .whitespacesAndNewlines)
 
                     // 1. 最終 Whisper 完了時の速報表示（前回の推敲文字列があれば差分連結して表示）
@@ -1051,6 +1099,8 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             self.lastAttemptedLLMInput = ""
             self.hasPendingRetry = false
             self.lastTriggerHadPause = true
+            self.primaryWhisperConfig = nil
+            self.backupWhisperConfig = nil
         }
     }
 

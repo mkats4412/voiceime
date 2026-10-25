@@ -118,6 +118,18 @@ struct TestRunner {
         let sanitizedNatural = WhisperAPIService.sanitizeWhisperOutput(naturalRepeats)
         assert(sanitizedNatural == naturalRepeats, "Should preserve natural Japanese repeats like はいはい, got '\(sanitizedNatural)'")
 
+        // 7D. 音声長に応じた動的タイムアウト (Dynamic Timeout) & ヘッジド遅延 (Hedged Delay) テスト
+        let timeoutShort = WhisperAPIService.dynamicTimeout(for: 3.0, provider: .groq)
+        assert(timeoutShort == 2.0, "Short audio (3s) on Groq should have min 2.0s timeout, got \(timeoutShort)")
+        let timeoutMid = WhisperAPIService.dynamicTimeout(for: 20.0, provider: .groq)
+        assert(abs(timeoutMid - 3.0) < 0.01, "Mid audio (20s) on Groq should have 3.0s timeout, got \(timeoutMid)")
+        let timeoutLong = WhisperAPIService.dynamicTimeout(for: 45.0, provider: .groq)
+        assert(abs(timeoutLong - 5.0) < 0.01, "Long audio (45s) on Groq should have 5.0s timeout, got \(timeoutLong)")
+        let delayShort = WhisperAPIService.hedgedDelay(for: 3.0, primaryProvider: .groq)
+        assert(delayShort == 1.8, "Short audio (3s) hedged delay should be 1.8s, got \(delayShort)")
+        let delayMid = WhisperAPIService.hedgedDelay(for: 20.0, primaryProvider: .groq)
+        assert(abs(delayMid - 2.2) < 0.01, "Mid audio (20s) hedged delay should be 2.2s, got \(delayMid)")
+
         // 8. PCM無音トリミング (VAD) テスト
         let sampleRate = 16000.0
         let silenceSampleCount = Int(sampleRate * 0.5) // 0.5秒の無音

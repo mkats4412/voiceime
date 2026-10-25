@@ -635,8 +635,20 @@ public final class AppState: ObservableObject {
         let apiKey = keychain.loadAPIKey(for: currentProvider)
         let effectiveLanguage = settings.language.isEmpty ? "ja" : settings.language
 
+        let backupProvider = settings.backupProvider
+        let backupKey = backupProvider != nil ? keychain.loadAPIKey(for: backupProvider!) : nil
+        let backupConfig = backupProvider != nil ? settings.config(for: backupProvider!) : nil
+        let backupWhisper: (provider: APIProvider, baseURL: String, apiKey: String?, model: String)?
+        if let bp = backupProvider, let bk = backupKey, let bc = backupConfig {
+            backupWhisper = (provider: bp, baseURL: bc.baseURL, apiKey: bk, model: bc.modelName)
+        } else {
+            backupWhisper = nil
+        }
+
         StreamingChunkPipelineService.shared.start(
             whisperConfig: (baseURL: currentConfig.baseURL, apiKey: apiKey, model: currentConfig.modelName),
+            primaryProvider: currentProvider,
+            backupWhisperConfig: backupWhisper,
             llmConfig: (baseURL: "", apiKey: nil, model: "", isCustom: false),
             style: .casual,
             isLLMEnabled: false,
@@ -930,6 +942,16 @@ public final class AppState: ObservableObject {
         let llmApiKey = keychain.loadAPIKey(for: resolvedLLMProvider)
         let apiKey = keychain.loadAPIKey(for: currentProvider)
 
+        let backupProvider = settings.backupProvider
+        let backupKey = backupProvider != nil ? keychain.loadAPIKey(for: backupProvider!) : nil
+        let backupConfig = backupProvider != nil ? settings.config(for: backupProvider!) : nil
+        let backupWhisper: (provider: APIProvider, baseURL: String, apiKey: String?, model: String)?
+        if let bp = backupProvider, let bk = backupKey, let bc = backupConfig {
+            backupWhisper = (provider: bp, baseURL: bc.baseURL, apiKey: bk, model: bc.modelName)
+        } else {
+            backupWhisper = nil
+        }
+
         let effectiveLanguage = settings.language.isEmpty ? "ja" : settings.language
         let isLLM = settings.isLLMRefinementActive
         let prompt: String?
@@ -944,6 +966,8 @@ public final class AppState: ObservableObject {
 
         StreamingChunkPipelineService.shared.start(
             whisperConfig: (baseURL: currentConfig.baseURL, apiKey: apiKey, model: currentConfig.modelName),
+            primaryProvider: currentProvider,
+            backupWhisperConfig: backupWhisper,
             llmConfig: (baseURL: currentLLMConfig.baseURL, apiKey: llmApiKey, model: currentLLMConfig.modelName, isCustom: currentLLMConfig.isCustom),
             style: settings.refinementStyle,
             isLLMEnabled: isLLM,
