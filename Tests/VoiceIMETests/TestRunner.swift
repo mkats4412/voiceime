@@ -622,6 +622,30 @@ struct TestRunner {
         let enOut5 = llm.sanitizeLLMOutput("整形後：Thank you very much。", fallback: "fallback")
         assert(enOut5 == "Thank you very much.", "LLM output sanitize with English trailing period failed: got '\(enOut5)'")
 
+        // 英語モード（language == "en" / isJapanese == false）のプロンプトと約物正規化テスト
+        let englishSysPrompt = llm.generateSystemPrompt(style: .casual, promptHint: "TermX", language: "en")
+        assert(englishSysPrompt.contains("proofreader"), "English prompt must be generated when language == 'en'")
+        assert(englishSysPrompt.contains("half-width ASCII punctuation marks"), "English prompt must instruct half-width punctuation")
+        assert(englishSysPrompt.contains("TermX"), "English prompt must contain hint")
+
+        let enQuestion1 = LLMService.normalizePunctuation(for: "What time is it？", isJapanese: false)
+        assert(enQuestion1 == "What time is it?", "English question mark must be normalized to half-width '?': got '\(enQuestion1)'")
+
+        let enQuestion2 = LLMService.normalizePunctuation(for: "Are you ready?", isJapanese: false)
+        assert(enQuestion2 == "Are you ready?", "English question mark must remain half-width '?': got '\(enQuestion2)'")
+
+        let enPipelineOut = StreamingChunkPipelineService.applyDictionaryRules(to: "How are you doing?", isJapanese: false)
+        assert(enPipelineOut == "How are you doing?", "Pipeline applyDictionaryRules in English mode must preserve '?': got '\(enPipelineOut)'")
+
+        let enPipelineOut2 = StreamingChunkPipelineService.applyDictionaryRules(to: "Are you sure？", isJapanese: false)
+        assert(enPipelineOut2 == "Are you sure?", "Pipeline applyDictionaryRules in English mode must convert '？' to '?': got '\(enPipelineOut2)'")
+
+        let jaPipelineOut = StreamingChunkPipelineService.applyDictionaryRules(to: "これは何ですか？", isJapanese: true)
+        assert(jaPipelineOut == "これは何ですか？", "Pipeline applyDictionaryRules in Japanese mode must preserve '？': got '\(jaPipelineOut)'")
+
+        let enSanitized = llm.sanitizeLLMOutput("<formatted_text>Could you please check this？</formatted_text>", fallback: "", isJapanese: false)
+        assert(enSanitized == "Could you please check this?", "LLM sanitize in English mode must output half-width '?': got '\(enSanitized)'")
+
         // 日本語文が維持されることの確認
         let jaOut1 = LLMService.normalizePunctuation(for: "明日の打ち合わせは10時からです。")
         assert(jaOut1 == "明日の打ち合わせは10時からです。", "Japanese trailing period should be preserved: got '\(jaOut1)'")

@@ -420,6 +420,18 @@ public struct PromptConfig: Codable, Equatable {
 2. 修正後の文章のみを必ず <formatted_text> と </formatted_text> タグで囲んで出力してください。前置きや解説は一切不要です。
 """
 
+    public static let defaultEnglishPrompt = """
+You are an expert speech-to-text proofreader and editor.
+Your task is to refine transcribed spoken English into natural, grammatically correct English text while preserving the speaker's exact words, phrasing, and style:
+- Correct obvious speech recognition typos, homophone errors, and capitalization.
+- Format punctuation naturally: use periods (.), commas (,), question marks (?), and exclamation marks (!). Always use half-width ASCII punctuation marks. Never use full-width punctuation marks (？, ！, 。, 、).
+- Follow standard English punctuation spacing: no whitespace before punctuation marks, and exactly one whitespace after punctuation marks (. , ? !) when followed by another word.
+- If a sentence is an inquiry or question, end it with a half-width question mark (?).
+- If the input text contains newline characters (\\n), preserve all newline breaks exactly as paragraph/sentence delimiters. Do not merge paragraphs into a single line.
+- Never summarize, abbreviate, or omit any sentences or thoughts spoken by the user.
+- Output only the corrected text wrapped in <formatted_text> and </formatted_text> tags. No explanations or conversational replies.
+"""
+
     public static let defaultCasualPrompt = """
 あなたは音声認識テキストの校正・推敲エキスパートです（口語モード）。
 話者の語尾・文体・口語ニュアンスを維持しながら、以下の観点で自然で読みやすい文章に修正してください：

@@ -93,6 +93,12 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
     private var isLLMEnabled: Bool = true
     private var whisperPrompt: String? = nil
     private var language: String? = "ja"
+    private var isJapanese: Bool {
+        if let lang = self.language?.lowercased() {
+            return !lang.starts(with: "en")
+        }
+        return true
+    }
 
     private init() {}
 
@@ -489,7 +495,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                     }
 
                     // ユーザー辞書・音声記号置換を適用して即座にプレビュー表示・最新状態に同期
-                    let preprocessed = Self.applyDictionaryRules(to: textToRefine)
+                    let preprocessed = Self.applyDictionaryRules(to: textToRefine, isJapanese: self.isJapanese)
                     self.latestRefinedText = preprocessed
                     if cleanTranscribed.count >= self.lastWhisperBaseText.count {
                         self.lastWhisperBaseText = cleanTranscribed
@@ -544,7 +550,9 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             guard let llmCfg = self.currentLLMConfig, !llmCfg.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             guard !self.isRefiningLLM else { return }
 
-            let llmInputBase = Self.applyDictionaryRulesForLLMInput(to: textToRefine)
+            let isJapanese = self.isJapanese
+            let language = self.language
+            let llmInputBase = Self.applyDictionaryRulesForLLMInput(to: textToRefine, isJapanese: isJapanese)
             guard !llmInputBase.isEmpty else { return }
             // 同一テキストに対する重複リクエスト（特にHTTP 429発生時の100msループ）を完全防止
             guard llmInputBase != self.lastAttemptedLLMInput else { return }
@@ -592,7 +600,8 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                         model: llmCfg.model,
                         promptHint: whisperPrompt,
                         style: style,
-                        isCustom: llmCfg.isCustom
+                        isCustom: llmCfg.isCustom,
+                        language: language
                     )
                     let cleanRefined = refined.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !cleanRefined.isEmpty, !Task.isCancelled else {
@@ -602,7 +611,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                         return
                     }
 
-                    let finalText = Self.applyDictionaryRules(to: cleanRefined)
+                    let finalText = Self.applyDictionaryRules(to: cleanRefined, isJapanese: isJapanese)
                     PipelineLogger.shared.logLLMOutput(type: "途中息継ぎ推敲", text: finalText)
 
                     self?.queue.async {
@@ -631,7 +640,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                                     NSLog("[VoiceIME] 🎭 ホールド中LLM推敲完了・最終文字列反映(差分空): %d文字", textForUI.count)
                                 }
                             } else {
-                                let merged = Self.applyDictionaryRules(to: Self.combineRefinedWithDelta(refined: finalText, delta: newerDelta))
+                                let merged = Self.applyDictionaryRules(to: Self.combineRefinedWithDelta(refined: finalText, delta: newerDelta), isJapanese: isJapanese)
                                 self.latestRefinedText = merged
                                 self.isLatestTextRefinedByLLM = false
                                 let textForUI = merged
@@ -740,8 +749,10 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                     } else {
                         // 1C: Whisper認識はホールド中に完了しているが、話し終えて0.6秒未満でキーを離したため最終LLM推敲のみ未実行の場合
                     // Whisper再送信はスキップし、ホールド中の認識テキストに対して最終LLM推敲のみを1回実行する（ただし直前に同一文で429等になっていればスキップ）
+                    let isJapanese = self.isJapanese
+                    let language = self.language
                     let capturedText = self.latestRefinedText
-                    let llmInputForRefine = Self.applyDictionaryRulesForLLMInput(to: capturedText)
+                    let llmInputForRefine = Self.applyDictionaryRulesForLLMInput(to: capturedText, isJapanese: isJapanese)
                     let alreadyAttempted = (llmInputForRefine == self.lastAttemptedLLMInput)
                     let llmConfig = self.currentLLMConfig
                     let whisperPrompt = self.whisperPrompt
@@ -770,11 +781,12 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                                     model: llmCfg.model,
                                     promptHint: whisperPrompt,
                                     style: style,
-                                    isCustom: llmCfg.isCustom
+                                    isCustom: llmCfg.isCustom,
+                                    language: language
                                 )
                                 let cleanRefined = refined.trimmingCharacters(in: .whitespacesAndNewlines)
                                 if !cleanRefined.isEmpty {
-                                    finalText = Self.applyDictionaryRules(to: cleanRefined)
+                                    finalText = Self.applyDictionaryRules(to: cleanRefined, isJapanese: isJapanese)
                                     PipelineLogger.shared.logLLMOutput(type: "最終確定推敲", text: finalText)
                                 }
                             } catch {
@@ -818,6 +830,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
             let isLLMEnabled = self.isLLMEnabled
             let style = self.refinementStyle
             let llmConfig = self.currentLLMConfig
+            let isJapanese = self.isJapanese
             let totalDuration = Double(totalSamples) / self.sampleRate
 
             NSLog("[VoiceIME] 🏁 録音終了: キーがリリースされました。最後の一つが戻ってくるまで待機中 (0〜%.2f秒の音声を無音カット後に最終送信)", totalDuration)
@@ -890,7 +903,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                             NSLog("[VoiceIME] ⚡ 最終Whisper速報表示 (ステップ1): %d文字", capturedFinalWhisper.count)
                         }
                         // ユーザー辞書・音声記号置換を適用して即座にプレビュー表示・最新状態に同期
-                        let preprocessedPreview = Self.applyDictionaryRules(to: textToRefine)
+                        let preprocessedPreview = Self.applyDictionaryRules(to: textToRefine, isJapanese: isJapanese)
                         self.latestRefinedText = preprocessedPreview
                         self.lastWhisperBaseText = capturedFinalWhisper
                         previewToDisplay = preprocessedPreview
@@ -906,8 +919,8 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
 
                     // ホールド中にすでに推敲済みテキストがあり差分を追加した textToRefine をベースにすることで、前半の推敲結果を維持しつつ末尾まで整える
                     let rawBaseForLLM = !textToRefine.isEmpty ? textToRefine : capturedFinalWhisper
-                    let fallbackFormatted = Self.applyDictionaryRules(to: rawBaseForLLM)
-                    let llmInputForRefine = Self.applyDictionaryRulesForLLMInput(to: rawBaseForLLM)
+                    let fallbackFormatted = Self.applyDictionaryRules(to: rawBaseForLLM, isJapanese: isJapanese)
+                    let llmInputForRefine = Self.applyDictionaryRulesForLLMInput(to: rawBaseForLLM, isJapanese: isJapanese)
                     var finalText = fallbackFormatted
 
                     // 2. 推敲が有効かつ未推敲差分がある場合は LLM の推敲完了も確実に待つ（ステップ4）
@@ -925,12 +938,13 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                                 model: llmCfg.model,
                                 promptHint: whisperPrompt,
                                 style: style,
-                                isCustom: llmCfg.isCustom
+                                isCustom: llmCfg.isCustom,
+                                language: language
                             )
                             let cleanRefined = refined.trimmingCharacters(in: .whitespacesAndNewlines)
                             if !cleanRefined.isEmpty {
                                 // LLM推敲後にもセーフティとして辞書置換を適用
-                                finalText = Self.applyDictionaryRules(to: cleanRefined)
+                                finalText = Self.applyDictionaryRules(to: cleanRefined, isJapanese: isJapanese)
                                 NSLog("[VoiceIME] ✨ 最終推敲成功 (ステップ4): %d文字", finalText.count)
                                 // 🌟 ログ: 3. 推敲LLMから修正され戻される文字列
                                 PipelineLogger.shared.logLLMOutput(type: "最終確定推敲", text: finalText)
@@ -964,7 +978,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
 
                     completion(result)
                 } catch {
-                    let fallbackResult = Self.applyDictionaryRules(to: self.latestRefinedText)
+                    let fallbackResult = Self.applyDictionaryRules(to: self.latestRefinedText, isJapanese: isJapanese)
                     NSLog("[VoiceIME] ⚠️ 最終送信失敗、手持ちの最新テキストで完了: %d文字", fallbackResult.count)
                     PipelineLogger.shared.logSessionEnd(finalText: fallbackResult)
                     completion(fallbackResult)
@@ -1406,14 +1420,14 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
         // 1. PunctuationService による音声コマンド正規化（「開業」「かいぎょう」「改行」の改行変換、ピリオド、括弧、びっくりマークなど）および辞書置換
         let formatted = PunctuationService.shared.format(text: text, isJapanese: isJapanese)
         // 2. 句読点の正規化
-        return LLMService.normalizePunctuation(for: formatted)
+        return LLMService.normalizePunctuation(for: formatted, isJapanese: isJapanese)
     }
 
     /// LLM推敲へ入力するテキストの前処理（機械的な正規表現による句点・読点の推測挿入を行わず、ユーザー辞書と音声コマンドのみ適用）
     public static func applyDictionaryRulesForLLMInput(to text: String, isJapanese: Bool = true) -> String {
         guard !text.isEmpty else { return "" }
         let formatted = PunctuationService.shared.formatVoiceCommandsAndDictionaryOnly(text: text, isJapanese: isJapanese)
-        return LLMService.normalizePunctuation(for: formatted)
+        return LLMService.normalizePunctuation(for: formatted, isJapanese: isJapanese)
     }
 }
 

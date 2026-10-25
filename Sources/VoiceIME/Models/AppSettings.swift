@@ -945,7 +945,9 @@ public final class AppSettings: ObservableObject {
             $0.pattern.contains("Close single quote") ||
             $0.pattern.contains("close single quote") ||
             $0.pattern.contains("[\"”]") ||
-            $0.pattern.contains("['’]")
+            $0.pattern.contains("['’]") ||
+            // 英語モードの半角?や!を全角化してしまう旧パターンを除去
+            ($0.pattern.contains("a-zA-Z0-9") && ($0.replacement == "？" || $0.replacement == "！"))
         }
 
         // 記号ルールの自動追加（未登録のものを順序正しく追加）
@@ -1055,8 +1057,6 @@ public final class AppSettings: ObservableObject {
             DictionaryRule(pattern: "((?:(?:[ひヒ][らラ][きキ]|開き|[と取ト][じちぢジ]|閉じ)[ 　]*)?(?:[シし][ンん][グぐ][ルる])[ 　]*(?:[クく][ォオぉお]ー?[トどド]|コー[トどド]|くぉーと|くおーと)(?:[ 　]*(?:[と取ト][じちぢジ]|閉じ))?|[Oo]pen single quote|[Cc]lose single quote|single quote)", replacement: "'", isRegex: true, isEnabled: true),
             DictionaryRule(pattern: "([と取ト][じちぢジ]|閉じ?)[ 　]*(?:(?:[ブぶ][ラら][ケけ][ッっ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|(?:(?:[ブぶ][ラら][ケけ][ッっ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose bracket", replacement: "]", isRegex: true, isEnabled: true),
             DictionaryRule(pattern: "(?:[ひヒ][らラ][きキ]|開き)[ 　]*(?:(?:[ブぶ][ラら][ケけ][ッっ]?[トと])|(?:[かカ][くク]|角)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ))|[Oo]pen bracket", replacement: "[", isRegex: true, isEnabled: true),
-            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥a-zA-Z0-9])[。、\\.,]*[ 　]*[!！]+[ 　]*[。、\\.,]*", replacement: "！", isRegex: true, isEnabled: true),
-            DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥a-zA-Z0-9])[。、\\.,]*[ 　]*[?？]+[ 　]*[。、\\.,]*", replacement: "？", isRegex: true, isEnabled: true),
             DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[ 　]*[!！]+[ 　]*[。、\\.,]*", replacement: "！", isRegex: true, isEnabled: true),
             DictionaryRule(pattern: "(?<=[あ-んア-ン一-龥])[。、\\.,]*[ 　]*[?？]+[ 　]*[。、\\.,]*", replacement: "？", isRegex: true, isEnabled: true),
             DictionaryRule(pattern: "[ 　]*(?:([と取ト][じちぢジ]|閉じ?)[ 　]*(?:[かカ][ぎギ]|鍵)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)|(?:[かカ][ぎギ]|鍵)[ 　]*(?:[かカ][っッ]?[こコ]|括弧|カッコ)[ 　]*([と取ト][じちぢジ]|閉じ?)|[Cc]lose quote)", replacement: "」", isRegex: true, isEnabled: true),

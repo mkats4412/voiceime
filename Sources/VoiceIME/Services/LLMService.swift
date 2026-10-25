@@ -85,7 +85,8 @@ public final class LLMService {
         promptHint: String? = nil,
         style: RefinementStyle = .casual,
         livePreviewText: String? = nil,
-        isCustom: Bool = false
+        isCustom: Bool = false,
+        language: String? = nil
     ) async throws -> String {
         let trimmedInput = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInput.isEmpty else { return "" }
@@ -101,23 +102,39 @@ public final class LLMService {
             }
         }
 
-        let systemPrompt = generateSystemPrompt(style: style, promptHint: promptHint, livePreviewText: livePreviewText)
+        let isEnglish = (language?.lowercased().starts(with: "en") == true) ||
+            (!Self.containsJapaneseCharacters(trimmedInput) && (language == nil || language?.isEmpty == true || language?.lowercased().starts(with: "en") == true))
 
-        let template = AppSettings.shared.userPromptTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? PromptConfig.defaultUserPromptTemplate
-            : AppSettings.shared.userPromptTemplate
-
+        let systemPrompt: String
         let userPrompt: String
-        if template.contains("{input}") {
-            userPrompt = template.replacingOccurrences(of: "{input}", with: trimmedInput)
-        } else {
+
+        if isEnglish {
+            systemPrompt = generateEnglishSystemPrompt(promptHint: promptHint)
             userPrompt = """
-            \(template)
+            Please proofread and format the following speech recognition text. Keep all newline breaks (\\n), format standard English punctuation (. , ? !), and wrap your result in <formatted_text> and </formatted_text> tags.
 
             <input>
             \(trimmedInput)
             </input>
             """
+        } else {
+            systemPrompt = generateSystemPrompt(style: style, promptHint: promptHint, livePreviewText: livePreviewText, language: language)
+
+            let template = AppSettings.shared.userPromptTemplate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? PromptConfig.defaultUserPromptTemplate
+                : AppSettings.shared.userPromptTemplate
+
+            if template.contains("{input}") {
+                userPrompt = template.replacingOccurrences(of: "{input}", with: trimmedInput)
+            } else {
+                userPrompt = """
+                \(template)
+
+                <input>
+                \(trimmedInput)
+                </input>
+                """
+            }
         }
 
         // Sarashina API (api.sarashina.ai) 等の厳格なスキーマ検証APIでは max_tokens が禁止 (disallowed) で max_completion_tokens を使用
@@ -194,7 +211,7 @@ public final class LLMService {
             do {
                 let decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
                 if let content = decoded.choices.first?.message.content {
-                    return sanitizeLLMOutput(content, originalInput: trimmedInput, fallback: trimmedInput)
+                    return sanitizeLLMOutput(content, originalInput: trimmedInput, fallback: trimmedInput, isJapanese: !isEnglish)
                 }
                 return trimmedInput
             } catch {
@@ -445,7 +462,13 @@ public final class LLMService {
     ///   - rawText: LLMの生の出力文字列
     ///   - originalInput: ユーザーの元の音声認識テキスト（指定時、AIによる勝手な語尾補完ハルシネーションを抑制）
     ///   - fallback: 解析失敗時等のフォールバック文字列
-    public func sanitizeLLMOutput(_ rawText: String, originalInput: String? = nil, fallback: String) -> String {
+    ///   - isJapanese: 日本語文脈か否か（falseの場合は英語向け約物正規化を実行）
+    public func sanitizeLLMOutput(
+        _ rawText: String,
+        originalInput: String? = nil,
+        fallback: String,
+        isJapanese: Bool = true
+    ) -> String {
         // 1. <formatted_text> タグがあれば内部テキストを最優先抽出（Amical構造化パース）
         var text = Self.extractFormattedText(rawText)
         guard !text.isEmpty else { return fallback }
@@ -471,7 +494,9 @@ public final class LLMService {
 
         // originalInput が渡されている場合、元の発話テキストに存在しない勝手な語尾補完（ハルシネーション）を抑制
         if let orig = originalInput, !orig.isEmpty {
-            text = Self.suppressHallucinatedEndings(output: text, originalInput: orig)
+            if isJapanese {
+                text = Self.suppressHallucinatedEndings(output: text, originalInput: orig)
+            }
 
             // 🌟 改行ガード: 入力テキストに改行（\n）が存在するのに、LLMが改行を削除・結合してしまった場合、改行位置を確実に復元
             if orig.contains("\n") && !text.contains("\n") {
@@ -479,15 +504,17 @@ public final class LLMService {
             }
         }
 
-        // LLMによるサ変動詞の不自然な重複（「表示するすることが」➔「表示することが」等）を除去
-        let stutterPattern = "([一-龥ァ-ヶー]{2,})するする(こと|ため|ので|から|には|よう|べき|必要|場合|とき|時|の|が|を|は)"
-        if let regexStutter = try? NSRegularExpression(pattern: stutterPattern, options: []) {
-            let range = NSRange(location: 0, length: (text as NSString).length)
-            text = regexStutter.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1する$2")
+        if isJapanese {
+            // LLMによるサ変動詞の不自然な重複（「表示するすることが」➔「表示することが」等）を除去
+            let stutterPattern = "([一-龥ァ-ヶー]{2,})するする(こと|ため|ので|から|には|よう|べき|必要|場合|とき|時|の|が|を|は)"
+            if let regexStutter = try? NSRegularExpression(pattern: stutterPattern, options: []) {
+                let range = NSRange(location: 0, length: (text as NSString).length)
+                text = regexStutter.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1する$2")
+            }
         }
 
         guard !text.isEmpty else { return fallback }
-        return Self.normalizePunctuation(for: text)
+        return Self.normalizePunctuation(for: text, isJapanese: isJapanese)
     }
 
     /// 日本語特有の文字（ひらがな、カタカナ、漢字）が含まれているかを判定
@@ -508,13 +535,14 @@ public final class LLMService {
     }
 
     /// 英文テキストや文末英文節における不自然な日本語句読点（。や、など）を英語の適切な約物（. や ,）に正規化
-    public static func normalizePunctuation(for text: String) -> String {
+    public static func normalizePunctuation(for text: String, isJapanese: Bool? = nil) -> String {
         var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !result.isEmpty else { return result }
 
+        let forceEnglish = (isJapanese == false)
         let hasJapanese = containsJapaneseCharacters(result)
-        if !hasJapanese {
-            // 日本語文字（かな・漢字）が一切含まれない純粋な英文・アルファベット主体のテキスト
+        if forceEnglish || !hasJapanese {
+            // 日本語文字（かな・漢字）が一切含まれない純粋な英文・アルファベット主体のテキスト、または英語明示モード
             result = result.replacingOccurrences(of: "、", with: ", ")
             result = result.replacingOccurrences(of: "，", with: ", ")
             result = result.replacingOccurrences(of: "。", with: ". ")
@@ -532,12 +560,12 @@ public final class LLMService {
             result = result.replacingOccurrences(of: " !", with: "!")
             result = result.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            // 末尾の句読点補正（。で終わっている場合は確実に.にする）
+            // 末尾の句読点補正（。で終わっている場合は確実に.にする。全角？や！は半角にする）
             if result.hasSuffix("。") {
                 result = String(result.dropLast()).trimmingCharacters(in: .whitespaces) + "."
-            } else if result.hasSuffix("？") {
+            } else if result.hasSuffix("？") || result.hasSuffix("?") {
                 result = String(result.dropLast()).trimmingCharacters(in: .whitespaces) + "?"
-            } else if result.hasSuffix("！") {
+            } else if result.hasSuffix("！") || result.hasSuffix("!") {
                 result = String(result.dropLast()).trimmingCharacters(in: .whitespaces) + "!"
             }
         } else {
@@ -604,12 +632,25 @@ public final class LLMService {
         return String(data: data, encoding: .utf8)
     }
 
+    /// 英語専用の推敲システムプロンプトを生成
+    public func generateEnglishSystemPrompt(promptHint: String?) -> String {
+        var prompt = PromptConfig.defaultEnglishPrompt
+        if let hint = promptHint?.trimmingCharacters(in: .whitespacesAndNewlines), !hint.isEmpty {
+            prompt += "\n\n[Context & Reference Terms]\n\(hint)"
+        }
+        return prompt
+    }
+
     /// 指定された推敲スタイル（口語モード / 文章モード）に応じたシステムプロンプトを生成
     public func generateSystemPrompt(
         style: RefinementStyle,
         promptHint: String?,
-        livePreviewText: String? = nil
+        livePreviewText: String? = nil,
+        language: String? = nil
     ) -> String {
+        if let lang = language?.lowercased(), lang.starts(with: "en") {
+            return generateEnglishSystemPrompt(promptHint: promptHint)
+        }
         let settings = AppSettings.shared
         let basePrompt: String
         switch style {

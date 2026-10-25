@@ -1234,11 +1234,11 @@ VoiceIME は、登録された APIキー（Groq / OpenAI / カスタムLLM）を
                 isJapanese: isJapanese
             )
         }
-        let normalizedText = LLMService.normalizePunctuation(for: alignedText)
-        let processedText = self.dictionary.apply(
-            text: normalizedText,
+        let dictProcessed = self.dictionary.apply(
+            text: alignedText,
             rules: self.settings.dictionaryRules
         )
+        let processedText = LLMService.normalizePunctuation(for: dictProcessed, isJapanese: isJapanese)
         self.lastProcessedText = processedText
 
         if self.settings.floatingPreviewEnabled {
