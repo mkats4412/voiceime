@@ -78,9 +78,9 @@ public final class SystemLogger: @unchecked Sendable {
 
             let url = self.currentLogFileURL()
             if let fileHandle = try? FileHandle(forWritingTo: url) {
+                defer { try? fileHandle.close() }
                 fileHandle.seekToEndOfFile()
                 fileHandle.write(data)
-                try? fileHandle.close()
             } else {
                 try? data.write(to: url, options: .atomic)
             }

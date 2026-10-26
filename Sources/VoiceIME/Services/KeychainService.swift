@@ -45,7 +45,7 @@ public final class KeychainService {
     private var localKeysFileURL: URL {
         let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".voiceime", isDirectory: true)
         if !FileManager.default.fileExists(atPath: dir.path) {
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         }
         return dir.appendingPathComponent("api_keys.json")
     }

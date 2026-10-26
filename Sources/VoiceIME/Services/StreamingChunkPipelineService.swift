@@ -936,7 +936,7 @@ public final class StreamingChunkPipelineService: @unchecked Sendable {
                                 if delta.isEmpty {
                                     textToRefine = self.latestRefinedText
                                     alreadyRefinedWithZeroDelta = self.isLatestTextRefinedByLLM
-                                    NSLog("[VoiceIME] ⚡ 最終Whisper差分なし (ホールド中の推敲済みテキストを維持): [%@]", self.latestRefinedText)
+                                    NSLog("[VoiceIME] ⚡ 最終Whisper差分なし (ホールド中の推敲済みテキストを維持): %d文字", self.latestRefinedText.count)
                                 } else {
                                     let combined = Self.combineRefinedWithDelta(refined: self.latestRefinedText, delta: delta)
                                     textToRefine = combined

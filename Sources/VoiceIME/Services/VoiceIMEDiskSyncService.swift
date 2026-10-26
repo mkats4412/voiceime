@@ -50,10 +50,14 @@ public final class VoiceIMEDiskSyncService {
         ensureDirectoryExists()
     }
 
+    deinit {
+        stopMonitoring()
+    }
+
     /// `~/.voiceime` ディレクトリを確実に作成
     public func ensureDirectoryExists() {
         if !fileManager.fileExists(atPath: baseDirectory.path) {
-            try? fileManager.createDirectory(at: baseDirectory, withIntermediateDirectories: true, attributes: nil)
+            try? fileManager.createDirectory(at: baseDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             NSLog("[VoiceIME] 📁 ~/.voiceime ディレクトリを作成しました")
         }
     }

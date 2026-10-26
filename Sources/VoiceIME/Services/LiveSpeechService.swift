@@ -48,6 +48,9 @@ public final class LiveSpeechService: ObservableObject {
         signal(SIGPIPE, SIG_IGN)
     }
 
+    // 本クラスは shared シングルトンとしてアプリ常駐するため deinit は呼ばれません。
+    // 停止は @MainActor の stopLiveRecognition() を明示的に呼び出します。
+
     /// 音声認識の権限をリクエスト
     public func requestAuthorizationIfNeeded() {
         if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
